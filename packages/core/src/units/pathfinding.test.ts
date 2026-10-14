@@ -11,13 +11,18 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import {
+  cellTraverseCost,
   findCellPath,
   findWorldPath,
   formationOffsets,
   formationTargets,
   FORMATION_MIN_SEPARATION,
   hasLineOfSight,
+  isObstructedCell,
+  isRockCell,
+  isTreeCell,
   isWalkable,
+  legCrossesObstruction,
   nearestWalkable,
   octileHeuristic,
   PATH_FORMATION_SPACING,
@@ -473,5 +478,87 @@ describe("steep slopes", () => {
         }
       }
     }
+  });
+});
+
+describe("rough-terrain costs", () => {
+  /** Flat dry grid with an optional feature word painted on cells. */
+  function woodedGrid(): PathGrid {
+    const w = 24;
+    const h = 12;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    // Tree block straddling the direct lane (rows 4–6, cols 8–15).
+    for (let z = 4; z <= 6; z++) {
+      for (let x = 8; x <= 15; x++) features[z * w + x] = 0;
+    }
+    // One rock + one metal cell for the classifier checks.
+    features[2 * w + 2] = 3;
+    features[2 * w + 3] = 5;
+    return { width: w, height: h, heights, seaLevel: 50, features };
+  }
+
+  it("classifies tree/rock cells, ignoring empty ground and missing features", () => {
+    const grid = woodedGrid();
+    expect(isTreeCell(grid, 10, 5)).toBe(true);
+    expect(isRockCell(grid, 10, 5)).toBe(false);
+    expect(isObstructedCell(grid, 10, 5)).toBe(true);
+    expect(isRockCell(grid, 2, 2)).toBe(true);
+    expect(isRockCell(grid, 3, 2)).toBe(true);
+    expect(isObstructedCell(grid, 2, 2)).toBe(true);
+    expect(isTreeCell(grid, 2, 2)).toBe(false);
+    expect(isObstructedCell(grid, 5, 5)).toBe(false);
+    // Feature-less grids read as open ground.
+    const bare = flatGrid();
+    expect(isTreeCell(bare, 5, 5)).toBe(false);
+    expect(isRockCell(bare, 5, 5)).toBe(false);
+    expect(cellTraverseCost(bare, 5, 5)).toBe(1);
+  });
+
+  it("prices open < slope < woods < rocks", () => {
+    const grid = woodedGrid();
+    const open = cellTraverseCost(grid, 5, 5);
+    expect(open).toBe(1);
+    expect(cellTraverseCost(grid, 10, 5)).toBeGreaterThan(open);
+    expect(cellTraverseCost(grid, 2, 2)).toBeGreaterThan(cellTraverseCost(grid, 10, 5));
+    // Slope tiers on feature-less ramps: steeper costs more, gentle stays 1.
+    const gentle = flatGrid();
+    expect(cellTraverseCost(gentle, 5, 5)).toBe(1);
+    const ramped: PathGrid = { width: 12, height: 12, heights: new Uint8Array(12 * 12), seaLevel: 0 };
+    for (let z = 0; z < 12; z++) {
+      for (let x = 0; x < 12; x++) ramped.heights[z * 12 + x] = 100 + x * 16;
+    }
+    expect(cellTraverseCost(ramped, 5, 5)).toBeGreaterThan(1);
+  });
+
+  it("detours around woods instead of marching through them", () => {
+    const grid = woodedGrid();
+    const path = findCellPath(grid, { cellX: 2, cellZ: 5 }, { cellX: 21, cellZ: 5 });
+    expect(path).not.toBeNull();
+    for (const c of path!) expect(isWalkable(grid, c.cellX, c.cellZ)).toBe(true);
+    // The direct lane is tree-filled: the cost-weighted search walks around
+    // it instead of through it (a cost-blind search would run straight).
+    for (const c of path!) expect(isTreeCell(grid, c.cellX, c.cellZ)).toBe(false);
+    expect(findCellPath(grid, { cellX: 2, cellZ: 5 }, { cellX: 21, cellZ: 5 })).toEqual(path);
+  });
+
+  it("keeps smoothing from pulling the wood detour back through the trees", () => {
+    const grid = woodedGrid();
+    const around = [
+      { cellX: 2, cellZ: 5 },
+      { cellX: 2, cellZ: 1 },
+      { cellX: 21, cellZ: 1 },
+      { cellX: 21, cellZ: 5 },
+    ];
+    // The straight shortcut crosses the tree block interior.
+    expect(legCrossesObstruction(grid, around[0]!, around[3]!)).toBe(true);
+    expect(hasLineOfSight(grid, around[0]!, around[3]!)).toBe(true);
+    const smoothed = smoothCellPath(grid, around);
+    expect(smoothed.length).toBeGreaterThanOrEqual(3);
+    expect(smoothed[0]).toEqual(around[0]);
+    expect(smoothed[smoothed.length - 1]).toEqual(around[3]);
+    // Same shape on open ground still collapses to its endpoints.
+    expect(legCrossesObstruction(flatGrid(), around[0]!, around[3]!)).toBe(false);
+    expect(smoothCellPath(flatGrid(), around)).toEqual([around[0], around[3]]);
   });
 });

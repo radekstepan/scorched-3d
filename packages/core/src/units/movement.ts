@@ -1,7 +1,7 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
-import { stepBlocked, type SeatField } from "./terrain.js";
+import { stepBlocked, terrainSpeedScale, type SeatField } from "./terrain.js";
 import type { UnitKind } from "./types.js";
 import type { UnitField } from "./place.js";
 
@@ -26,7 +26,8 @@ import type { UnitField } from "./place.js";
  *   grip (slow in turns) plus the spacing stop/slow instead of full
  *   avoidance — and now by the terrain clamp in `terrain.ts`: steps into
  *   unwalkable/too-steep ground hold position while the hull keeps turning,
- *   with patrol skipping its leg past `BLOCKED_SKIP_AFTER` — and by lateral
+ *   with patrol skipping its leg past `BLOCKED_SKIP_AFTER` — and by rough
+ *   ground bleeding speed (slope-scaled drag plus tree/rock drag) — and by lateral
  *   separation in `advanceMovers`: hulls the spacing stop pins mutually
  *   (both read scale 0) shove apart along their pair axes instead of
  *   deadlocking, the way retail re-requests paths for blocked movers rather
@@ -360,7 +361,14 @@ function driveToward(
   // Forward grip: full speed when lined up, down to 0.3 spun around — the
   // hull always faces travel, turrets aim independently while moving.
   const grip = Math.max(0.3, Math.cos(wrapAngle(desired - hull)));
-  const step = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * grip * dt;
+  // Rough-terrain drag: steep grades and trees/rocks bleed speed off the
+  // step (flat open ground scales by exactly 1). Probed to the full-stride
+  // candidate so the drag reads the ground the hull would actually cross;
+  // the hull still refuses unwalkable steps below, this only slows allowed
+  // ones.
+  const stride = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * grip * dt;
+  const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(hull) * stride, mover.z + Math.cos(hull) * stride) : 1;
+  const step = stride * rough;
   const nx = mover.x + Math.sin(hull) * step;
   const nz = mover.z + Math.cos(hull) * step;
   const base = {

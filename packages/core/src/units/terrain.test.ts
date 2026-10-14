@@ -7,11 +7,16 @@ import {
   HULL_FOOTPRINT,
   MAX_DRIVE_GRADE,
   MAX_HULL_TILT,
+  ROCK_DRAG,
+  ROUGH_SLOPE_FLOOR,
+  TREE_DRAG,
+  featureDrag,
   groundHeight,
   hullPitchRoll,
   sampleHeightBilinear,
   seatHull,
   stepBlocked,
+  terrainSpeedScale,
   type SeatField,
 } from "./terrain.js";
 
@@ -203,5 +208,64 @@ describe("stepBlocked", () => {
     const d = worldOf(gentle, 11, 10);
     expect(stepBlocked(gentle, c.x, c.z, d.x, d.z)).toBe(false);
     expect(MAX_DRIVE_GRADE).toBeCloseTo(24 / 16, 12);
+  });
+});
+
+describe("terrainSpeedScale", () => {
+  /** Flat field with a tree cell at (16,16) and a rock cell at (20,20). */
+  function woodedFlat(): SeatField {
+    const w = 32;
+    const h = 32;
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[16 * w + 16] = 1;
+    features[20 * w + 20] = 3;
+    return { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0, features };
+  }
+
+  it("runs at exactly 1 on flat open ground", () => {
+    const field = flatField();
+    expect(terrainSpeedScale(field, 0, 0, 10, 5)).toBe(1);
+    expect(terrainSpeedScale(field, 0, 0, 0, 0)).toBe(1);
+    expect(featureDrag(field, 0, 0)).toBe(1);
+    // Feature-less fields never drag, whatever the query point.
+    const bare = flatField();
+    expect(featureDrag(bare, 3.7, -11.2)).toBe(1);
+  });
+
+  it("bleeds speed on grades, steeper dragging harder down to the floor", () => {
+    // 8 raw per cell = grade 0.5 (a third of the gate): partial drag.
+    const gentle = rampField(8);
+    const a = worldOf(gentle, 10, 10);
+    const b = worldOf(gentle, 11, 10);
+    const soft = terrainSpeedScale(gentle, a.x, a.z, b.x, b.z);
+    expect(soft).toBeLessThan(1);
+    expect(soft).toBeGreaterThan(ROUGH_SLOPE_FLOOR);
+    // 20 raw per cell = grade 1.25 (near the gate): harder drag.
+    const rough = rampField(20);
+    const c = worldOf(rough, 10, 10);
+    const d = worldOf(rough, 11, 10);
+    const hard = terrainSpeedScale(rough, c.x, c.z, d.x, d.z);
+    expect(hard).toBeLessThan(soft);
+    expect(hard).toBeGreaterThanOrEqual(ROUGH_SLOPE_FLOOR);
+    // Uphill and downhill drag equally: the hull labours over the grade.
+    expect(terrainSpeedScale(rough, d.x, d.z, c.x, c.z)).toBeCloseTo(hard, 12);
+  });
+
+  it("drags through trees and harder through rocks, neighbours included", () => {
+    const field = woodedFlat();
+    const tree = worldOf(field, 16, 16);
+    const rock = worldOf(field, 20, 20);
+    const open = worldOf(field, 5, 5);
+    expect(featureDrag(field, tree.x, tree.z)).toBe(TREE_DRAG);
+    expect(featureDrag(field, rock.x, rock.z)).toBe(ROCK_DRAG);
+    expect(featureDrag(field, open.x, open.z)).toBe(1);
+    // Canopy overhang: the cell next to a tree still drags.
+    const nextToTree = worldOf(field, 17, 16);
+    expect(featureDrag(field, nextToTree.x, nextToTree.z)).toBe(TREE_DRAG);
+    // Rock outranks neighbouring trees.
+    expect(ROCK_DRAG).toBeLessThan(TREE_DRAG);
+    // The full step scale carries the feature drag on flat ground.
+    expect(terrainSpeedScale(field, open.x, open.z, tree.x, tree.z)).toBe(TREE_DRAG);
+    expect(terrainSpeedScale(field, open.x, open.z, rock.x, rock.z)).toBe(ROCK_DRAG);
   });
 });

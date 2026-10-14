@@ -9,10 +9,12 @@ import type { UnitField } from "./place.js";
  * (above `seaLevel + PATH_DRY_LIFT`) with a gentle slope (at most
  * `PATH_MAX_SLOPE`). Water and steep cells are blocked. Search is
  * 8-directional with corner-cut prevention (a diagonal step needs both
- * orthogonal neighbours walkable), octile-heuristic costs, and a fully
+ * orthogonal neighbours walkable), octile-heuristic costs weighted by a
+ * per-cell rough-terrain traverse cost (slope tiers plus tree/rock words), and a fully
  * deterministic tie-break (f, then h, then cell order), so the same order on
  * the same map always returns the same path. Raw A* routes are then
- * string-pulled (line-of-sight shortcuts) because the hulls steer at any
+ * string-pulled (line-of-sight shortcuts that refuse legs crossing
+ * tree/rock interiors) because the hulls steer at any
  * heading while the search only turns in eighths.
  *
  * Nanolathe parallels (adapted — retail runs fixed-point yard-map stamping
@@ -38,7 +40,15 @@ import type { UnitField } from "./place.js";
  */
 
 /** Minimal heightfield view a path search needs (TNTMap satisfies this). */
-export type PathGrid = Pick<UnitField, "width" | "height" | "heights" | "seaLevel">;
+export type PathGrid = Pick<UnitField, "width" | "height" | "heights" | "seaLevel"> & {
+  /**
+   * Optional attribute-grid feature words (TNTMap.features): 0–2 trees, 3–4
+   * rocks, 5 metal deposit, else empty/fringe/void. Absent (older
+   * synthetic-test grids) reads as open ground, so cost collapses to the
+   * slope tier alone.
+   */
+  features?: Uint16Array | readonly number[];
+};
 
 /** A path node in attribute-grid cells. */
 export interface PathCell {
@@ -83,6 +93,43 @@ function cellSlope(grid: PathGrid, x: number, z: number): number {
   const h10 = grid.heights[idx(grid, Math.min(grid.width - 1, x + 1), z)] ?? 0;
   const h01 = grid.heights[idx(grid, x, Math.min(grid.height - 1, z + 1))] ?? 0;
   return Math.max(h00, h10, h01) - Math.min(h00, h10, h01);
+}
+
+/** True when the cell holds a standing tree (feature words 0–2). */
+export function isTreeCell(grid: PathGrid, x: number, z: number): boolean {
+  if (!inBounds(grid, x, z) || !grid.features) return false;
+  const word = grid.features[z * grid.width + x] ?? 0xffff;
+  return word <= 2;
+}
+
+/** True when the cell holds rock or a metal deposit (words 3–5). */
+export function isRockCell(grid: PathGrid, x: number, z: number): boolean {
+  if (!inBounds(grid, x, z) || !grid.features) return false;
+  const word = grid.features[z * grid.width + x] ?? 0xffff;
+  return word >= 3 && word <= 5;
+}
+
+/** True when a cell slows hulls: standing trees, rocks, or metal deposits. */
+export function isObstructedCell(grid: PathGrid, x: number, z: number): boolean {
+  return isTreeCell(grid, x, z) || isRockCell(grid, x, z);
+}
+
+/**
+ * Extra A* step cost of entering a walkable cell, on top of the base 1 /
+ * √2 stride: gentle grades ride near 1 while rough grades, woods, and rocks
+ * cost more, so the search prefers open easy ground but still routes through
+ * the rough when it must. Blocked cells (water/steep) never reach here —
+ * `isWalkable` gates them out. Missing `features` reads as open ground.
+ */
+export function cellTraverseCost(grid: PathGrid, x: number, z: number): number {
+  const slope = cellSlope(grid, x, z);
+  let cost = 1;
+  if (slope > 20) cost += 3;
+  else if (slope > 14) cost += 1.5;
+  else if (slope > 8) cost += 0.5;
+  if (isRockCell(grid, x, z)) cost += 2;
+  else if (isTreeCell(grid, x, z)) cost += 1.25;
+  return cost;
 }
 
 /** True when a mover may stand on (and path through) a cell. */
@@ -223,7 +270,11 @@ export function findCellPath(grid: PathGrid, start: PathCell, goal: PathCell): P
       if (d.diag && (!isWalkable(grid, cx + d.dx, cz) || !isWalkable(grid, cx, cz + d.dz))) continue;
       const ni = idx(grid, nx, nz);
       if ((closed[ni] ?? 0) === 1) continue;
-      const ng = (g[cur] ?? Infinity) + (d.diag ? SQRT2 : 1);
+      // Rough-terrain weighting: the stride pays the destination cell's
+      // traverse cost, so woods/rocks/rough grades lose ties to open ground
+      // without ever becoming unwalkable. The octile heuristic stays
+      // admissible (minimum cell cost is 1).
+      const ng = (g[cur] ?? Infinity) + (d.diag ? SQRT2 : 1) * cellTraverseCost(grid, nx, nz);
       if (ng < (g[ni] ?? Infinity)) {
         g[ni] = ng;
         came[ni] = cur;
@@ -262,9 +313,34 @@ export function hasLineOfSight(grid: PathGrid, a: PathCell, b: PathCell): boolea
 }
 
 /**
+ * True when the straight leg a→b crosses a tree/rock cell interior: sampled
+ * at half-cell steps like line of sight. Used to keep string-pulling from
+ * undoing the rough-terrain detours A* paid for — a shortcut through woods
+ * would ride at vegetation drag while the searched route walks open ground.
+ * Endpoints are exempt (callers snap them onto walkable cells that may
+ * themselves hold a feature word).
+ */
+export function legCrossesObstruction(grid: PathGrid, a: PathCell, b: PathCell): boolean {
+  if (!grid.features) return false;
+  const dx = b.cellX - a.cellX;
+  const dz = b.cellZ - a.cellZ;
+  const dist = Math.hypot(dx, dz);
+  const steps = Math.max(1, Math.ceil(dist * 2));
+  for (let s = 1; s < steps; s++) {
+    const x = Math.round(a.cellX + dx * (s / steps));
+    const z = Math.round(a.cellZ + dz * (s / steps));
+    if (isObstructedCell(grid, x, z)) return true;
+  }
+  return false;
+}
+
+/**
  * Greedy string-pulling: from each kept waypoint, jump to the farthest
  * later waypoint with line of sight. Collapses open-ground zigzags to
- * straight legs while keeping the water/steep detours A* paid for.
+ * straight legs while keeping the water/steep detours A* paid for — and,
+ * new, the wood/rock detours: a shortcut crossing a tree/rock interior is
+ * refused so smoothing never pulls a route back through the rough the
+ * cost tiers walked around.
  */
 export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
   if (cells.length < 3) return [...cells];
@@ -273,7 +349,10 @@ export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
   while (anchor < cells.length - 1) {
     let jump = anchor + 1;
     for (let k = cells.length - 1; k > anchor + 1; k--) {
-      if (hasLineOfSight(grid, cells[anchor]!, cells[k]!)) {
+      if (
+        hasLineOfSight(grid, cells[anchor]!, cells[k]!) &&
+        !legCrossesObstruction(grid, cells[anchor]!, cells[k]!)
+      ) {
         jump = k;
         break;
       }

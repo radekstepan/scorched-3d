@@ -400,6 +400,29 @@ function walledField(): SeatField {
   return { width: w, height: h, heights, seaLevel: 0 };
 }
 
+/** Flat dry field with a tree belt across the middle rows. */
+function woodedField(): SeatField {
+  const w = 40;
+  const h = 24;
+  const heights = new Uint8Array(w * h).fill(100);
+  const features = new Uint16Array(w * h).fill(0xffff);
+  for (let z = 8; z <= 15; z++) {
+    for (let x = 5; x < w - 5; x++) features[z * w + x] = 0;
+  }
+  return { width: w, height: h, heights, seaLevel: 0, features };
+}
+
+/** Gentle eastward ramp (4 raw per cell): walkable, but dragging. */
+function rampField(): SeatField {
+  const w = 40;
+  const h = 24;
+  const heights = new Uint8Array(w * h);
+  for (let z = 0; z < h; z++) {
+    for (let x = 0; x < w; x++) heights[z * w + x] = 60 + x * 4;
+  }
+  return { width: w, height: h, heights, seaLevel: 0 };
+}
+
 function worldX(field: SeatField, cellX: number): number {
   return (cellX - (field.width - 1) / 2) * CELL_PIXELS;
 }
@@ -482,5 +505,62 @@ describe("steep-slope clamp", () => {
       0,
     );
     expect(travel).toBeGreaterThan(0);
+  });
+});
+
+describe("rough-terrain drag", () => {
+  it("matches terrain-less speed on flat open ground, bit for bit", () => {
+    const field = openField();
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+    const route = flatRoute();
+    const dt = 0.05;
+    const free = advanceMover("flash", mover, route, dt);
+    const seated = advanceMover("flash", mover, route, dt, 1, field);
+    expect(seated.x).toBe(free.x);
+    expect(seated.z).toBe(free.z);
+    expect(seated.hull).toBe(free.hull);
+  });
+
+  it("climbs grades slower than the flat, steeper slower still", () => {
+    const z = 0;
+    const drive = (field: SeatField, ticks: number): number => {
+      const startX = worldX(field, 5);
+      let mover: Mover = { x: startX, z, hull: Math.PI / 2, leg: 0 };
+      mover = orderMover(mover, [{ x: worldX(field, 30), z }]);
+      for (let n = 0; n < ticks; n++) {
+        mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
+      }
+      return mover.x - startX;
+    };
+    const ticks = 200;
+    const flat = drive(openField(), ticks);
+    const gentle = drive(rampField(), ticks);
+    expect(gentle).toBeLessThan(flat);
+    // Deterministic: the same drag replays exactly.
+    expect(drive(rampField(), ticks)).toBe(gentle);
+  });
+
+  it("pushes through tree belts slower, but still arrives", () => {
+    const field = woodedField();
+    // Lane through the middle of the tree belt (cell row 11).
+    const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
+    const drive = (belts: SeatField, ticks: number): Mover => {
+      let mover: Mover = { x: worldX(field, 10), z, hull: Math.PI / 2, leg: 0 };
+      mover = orderMover(mover, [{ x: worldX(field, 30), z }]);
+      for (let n = 0; n < ticks; n++) {
+        mover = advanceMover("flash", mover, [], 1 / 60, 1, belts);
+      }
+      return mover;
+    };
+    // Same lane with the belts cleared runs faster than through them
+    // (300 ticks: neither run has arrived yet, so positions compare pace).
+    const cleared: SeatField = { ...field, features: undefined };
+    const through = drive(field, 300);
+    const around = drive(cleared, 300);
+    expect(through.x).toBeLessThan(around.x);
+    expect(drive(field, 300).x).toBe(through.x);
+    // Rough slows but never traps: the order completes through the belts.
+    const arrived = drive(field, 3600);
+    expect(hasOrder(arrived)).toBe(false);
   });
 });

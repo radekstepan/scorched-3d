@@ -19,7 +19,8 @@ import type { UnitKind } from "./types.js";
  * - Drive gating (`stepBlocked`) works in raw height units so it agrees
  *   with the `isWalkable` slope gate pathfinding uses (same `PATH_MAX_SLOPE`
  *   over the same cells). A leg the pathfinder blessed must never read as
- *   blocked, and vice versa.
+ *   blocked, and vice versa. Drive *speed* (`terrainSpeedScale`) degrades
+ *   below the gate instead: slope-scaled drag plus tree/rock drag.
  * - Posing (`hullPitchRoll` / `seatHull`) works in rendered (exaggerated)
  *   heights because the tilt has to match the mesh the player sees.
  *
@@ -37,7 +38,14 @@ import type { UnitKind } from "./types.js";
  */
 
 /** Minimal heightfield view seating/probing needs (TNTMap satisfies this). */
-export type SeatField = Pick<UnitField, "width" | "height" | "heights" | "seaLevel">;
+export type SeatField = Pick<UnitField, "width" | "height" | "heights" | "seaLevel"> & {
+  /**
+   * Optional attribute-grid feature words (TNTMap.features): 0–2 trees, 3–4
+   * rocks, 5 metal deposit. Absent (older synthetic-test fields) reads as
+   * open ground, so drag collapses to the slope term alone.
+   */
+  features?: Uint16Array | readonly number[];
+};
 
 /** Hull footprint half-extents per kind, in world units (nose/tail, flank). */
 export const HULL_FOOTPRINT: Record<UnitKind, { halfLen: number; halfWid: number }> = {
@@ -61,6 +69,15 @@ export const MAX_HULL_TILT = 0.5;
  * this hold position instead of clipping into the hillside.
  */
 export const MAX_DRIVE_GRADE = PATH_MAX_SLOPE / CELL_PIXELS;
+/**
+ * Slowest slope drag: a hull climbing the steepest still-walkable grade
+ * keeps this fraction of its speed. Linear between flat (1) and here.
+ */
+export const ROUGH_SLOPE_FLOOR = 0.45;
+/** Speed fraction while pushing through standing trees (cell or neighbour). */
+export const TREE_DRAG = 0.6;
+/** Speed fraction while picking through rocks or metal deposits. */
+export const ROCK_DRAG = 0.5;
 
 /** Seated pose for one hull: surface height plus hull-frame tilt. */
 export interface HullSeat {
@@ -195,4 +212,56 @@ export function stepBlocked(
   if (!isWalkable(field, cellX, cellZ)) return true;
   const grade = Math.abs(sampleHeightBilinear(field, toX, toZ) - sampleHeightBilinear(field, fromX, fromZ)) / dist;
   return grade > MAX_DRIVE_GRADE;
+}
+
+/** Feature word at a cell, or 0xffff (empty) when out of bounds / unknown. */
+function featureWord(field: SeatField, cellX: number, cellZ: number): number {
+  if (!field.features) return 0xffff;
+  if (cellX < 0 || cellZ < 0 || cellX >= field.width || cellZ >= field.height) return 0xffff;
+  return field.features[cellZ * field.width + cellX] ?? 0xffff;
+}
+
+/**
+ * Vegetation/rock drag at world (x, z): the destination cell plus its 8
+ * neighbours are probed, so a hull threading between trunks still labours
+ * under the canopy overhang. Any rock/metal nearby reads `ROCK_DRAG`, else
+ * any tree reads `TREE_DRAG`, else 1. Feature-less fields return 1 exactly,
+ * keeping terrain-less history byte-identical.
+ */
+export function featureDrag(field: SeatField, x: number, z: number): number {
+  if (!field.features) return 1;
+  const cx = Math.round(x / CELL_PIXELS + (field.width - 1) / 2);
+  const cz = Math.round(z / CELL_PIXELS + (field.height - 1) / 2);
+  let trees = false;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const word = featureWord(field, cx + dx, cz + dz);
+      if (word >= 3 && word <= 5) return ROCK_DRAG;
+      if (word <= 2) trees = true;
+    }
+  }
+  return trees ? TREE_DRAG : 1;
+}
+
+/**
+ * Speed fraction for a drive step: slope drag (linear from 1 on the flat to
+ * `ROUGH_SLOPE_FLOOR` at the steepest still-walkable grade, from the
+ * bilinear rise over the step) times the destination's `featureDrag`.
+ * Returns exactly 1 on flat open ground, so flat-field behavior matches
+ * terrain-less stepping bit for bit. Uphill and downhill drag equally —
+ * the hull labours over the grade either way.
+ */
+export function terrainSpeedScale(
+  field: SeatField,
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+): number {
+  const dist = Math.hypot(toX - fromX, toZ - fromZ);
+  if (!(dist > 0)) return 1;
+  const grade =
+    Math.abs(sampleHeightBilinear(field, toX, toZ) - sampleHeightBilinear(field, fromX, fromZ)) / dist;
+  const ratio = Math.min(Math.max(grade / MAX_DRIVE_GRADE, 0), 1);
+  return (1 - (1 - ROUGH_SLOPE_FLOOR) * ratio) * featureDrag(field, toX, toZ);
 }
