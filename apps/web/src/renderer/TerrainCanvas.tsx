@@ -59,6 +59,14 @@ import {
   normalizeRect,
   pickNearest,
 } from "./selection";
+import {
+  SELECTION_CORE,
+  buildSelectionMarker,
+  disposeSelectionAssets,
+  markerVisibility,
+  setBodyHighlight,
+  updateSelectionMarker,
+} from "./selectionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { createFpsSampler, formatFps } from "./fps";
 
@@ -257,30 +265,30 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     }, map);
     combat.setExternalHull(true);
 
-    // RTS selection: an amber ring rides under each selected body (a child of
-    // the body group, so it follows patrol/order motion for free). Shared
-    // geometry, one material — visibility toggles only.
-    const ringGeo = new THREE.RingGeometry(16, 20, 48);
-    ringGeo.rotateX(-Math.PI / 2);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xfbbf24,
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
-    });
+    // RTS selection: a white-halo + cyan-core double ground ring plus a
+    // spinning/bobbing chevron beacon above the hull, with a subtle hull
+    // emissive lift (see selectionFx for the contrast policy: the old amber
+    // ring was hue-camouflaged among amber fire on ember-brown scorch, went
+    // edge-on at glancing angles, and hid under smoke/toppled trunks). The
+    // marker is a child of the body group so it rides motion and
+    // exaggeration re-snaps for free; rings/beacon ignore depth and composite
+    // above the scorch layer. Shared geometries/materials, one set per
+    // canvas — the tick only mutates transforms of visible markers.
+    const markers: THREE.Group[] = [];
     units.children.forEach((child) => {
-      const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.name = "select-ring";
-      ring.position.y = 1.5;
-      ring.visible = false;
-      child.add(ring);
+      const marker = buildSelectionMarker();
+      child.add(marker);
+      markers.push(marker);
     });
     let selection: number[] = [];
+    let selTime = 0;
     const applySelection = (next: number[]): void => {
       selection = next;
+      const vis = markerVisibility(units.children.length, next);
       units.children.forEach((child, i) => {
-        const ring = child.getObjectByName("select-ring");
-        if (ring) ring.visible = next.includes(i);
+        const marker = child.getObjectByName("select-marker");
+        if (marker) marker.visible = vis[i] ?? false;
+        setBodyHighlight(child, vis[i] ?? false);
       });
       selectionRef.current?.([...next]);
     };
@@ -290,7 +298,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     pingGeo.rotateX(-Math.PI / 2);
     const pings: { mesh: THREE.Mesh; t: number }[] = [];
     const pingBase = new THREE.MeshBasicMaterial({
-      color: 0xfbbf24,
+      color: SELECTION_CORE,
       transparent: true,
       opacity: 0.9,
       depthWrite: false,
@@ -313,8 +321,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // hover probe and orbit keep working underneath).
     const boxEl = document.createElement("div");
     boxEl.style.cssText =
-      "position:absolute;display:none;border:1px solid rgba(251,191,36,0.9);" +
-      "background:rgba(251,191,36,0.12);pointer-events:none;z-index:5;";
+      "position:absolute;display:none;border:1px solid rgba(34,211,238,0.9);" +
+      "background:rgba(34,211,238,0.12);pointer-events:none;z-index:5;";
     wrap.appendChild(boxEl);
 
     const raycaster = new THREE.Raycaster();
@@ -576,6 +584,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       for (const r of dmgEv.resolved) poseTree(r.index);
       fire.update(damage, allTrees, groundY, t);
 
+      // Selection pulse: advance the shared clock and mutate only visible
+      // markers (ring scale, chevron bob/spin — no allocations).
+      selTime += dt;
+      for (const i of selection) {
+        const marker = markers[i];
+        if (marker) updateSelectionMarker(marker, selTime, true);
+      }
+
       // Order-ping decay (0.8 s expanding rings) and the ~4 Hz live-position
       // broadcast that feeds the minimap overlay.
       for (let i = pings.length - 1; i >= 0; i--) {
@@ -629,8 +645,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();
       renderer.dispose();
-      ringGeo.dispose();
-      ringMat.dispose();
+      disposeSelectionAssets();
       pingGeo.dispose();
       pingBase.dispose();
       for (const ping of pings) {

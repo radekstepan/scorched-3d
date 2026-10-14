@@ -13,6 +13,10 @@ import {
   type ViewOptions,
 } from "@scorched-3d/core";
 import TerrainCanvas from "./renderer/TerrainCanvas";
+import {
+  MINIMAP_SELECTED_GLOW,
+  MINIMAP_SELECTED_OUTLINE,
+} from "./renderer/selectionFx";
 import { cn } from "./utils/cn";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera"];
@@ -129,16 +133,15 @@ export default function App() {
               return (
                 <span
                   key={i}
-                  className={cn(
-                    "absolute -translate-x-1/2 -translate-y-1/2 rounded-[1px] border border-black/70",
-                    isSel && "outline outline-1 outline-amber-300",
-                  )}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-[1px] border border-black/70"
                   style={{
                     left: `${(p.x / worldW + 0.5) * 100}%`,
                     top: `${(p.z / worldD + 0.5) * 100}%`,
                     width: 5,
                     height: 5,
                     background: color,
+                    outline: isSel ? MINIMAP_SELECTED_OUTLINE : undefined,
+                    boxShadow: isSel ? MINIMAP_SELECTED_GLOW : undefined,
                   }}
                 />
               );
@@ -213,7 +216,9 @@ export default function App() {
             })}
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-            Patrolling TA roster, re-routed on every regen.
+            Patrolling TA roster, re-routed on every regen. Dark-brown patches
+            are blast scorch — old impact scars, not mud. Selected units carry
+            a white/cyan ring + beacon.
             {selected.length > 0 ? (
               <span className="text-amber-200">
                 {" "}

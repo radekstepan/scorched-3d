@@ -32,6 +32,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `apps/web/src/renderer/fireFx.ts` | Transient instanced flame/smoke views over the damage field. |
 | `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers. |
 | `apps/web/src/renderer/selection.ts` | Click/box picking helpers for RTS selection. |
+| `apps/web/src/renderer/selectionFx.ts` | Selection visuals: white/cyan double ring + chevron beacon, contrast policy, hull highlight, minimap dot style. |
 | `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options, placed units. |
 | `packages/core/src/terrain/generate.ts` | Seeded heightfield sampling, feature stamping, tile painting, minimap, unit placement. |
 | `packages/core/src/terrain/noise.ts` | Value-noise and FBM helpers. |
