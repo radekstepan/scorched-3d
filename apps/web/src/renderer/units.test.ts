@@ -129,6 +129,60 @@ describe("barrel elevation", () => {
   });
 });
 
+describe("hull orientation", () => {
+  /** Bounding box of the hull-level meshes (turret subgroup excluded). */
+  function hullBox(body: THREE.Group): THREE.Box3 {
+    const box = new THREE.Box3();
+    const tmp = new THREE.Box3();
+    for (const child of body.children) {
+      if (child.type !== "Mesh") continue;
+      tmp.setFromObject(child);
+      box.union(tmp);
+    }
+    return box;
+  }
+
+  it("builds tank hulls longer than wide along the +Z travel axis", () => {
+    const group = buildUnits(fakeMap(), 1);
+    // Measure in the model frame (yaw 0): world depth then reads along the
+    // hull's own +Z travel axis instead of the rotated placement yaw.
+    for (const child of group.children) (child as THREE.Group).rotation.set(0, 0, 0);
+    group.updateMatrixWorld(true);
+    const kinds = ["commander", "stump", "flash", "hammer"] as const;
+    group.children.forEach((child, i) => {
+      const kind = kinds[i]!;
+      const size = hullBox(child as THREE.Group).getSize(new THREE.Vector3());
+      if (kind === "commander") {
+        // Biped: shoulder-wide torso across X reads correctly facing +Z.
+        expect(size.x).toBeGreaterThan(size.z);
+      } else {
+        // Tanks drive nose-first: depth (+Z) must exceed width, or the hull
+        // reads as driving sideways even with the yaw facing travel.
+        expect(size.z).toBeGreaterThan(size.x);
+      }
+    });
+  });
+
+  it("throws muzzles ahead of the lengthened hull nose", () => {
+    const group = buildUnits(fakeMap(), 1);
+    group.children.forEach((child) => {
+      const body = child as THREE.Group;
+      // Measure in the model frame (yaw 0, forward +Z) so the world-axis
+      // comparison reads along the hull's own travel axis.
+      body.rotation.set(0, 0, 0);
+    });
+    group.updateMatrixWorld(true);
+    group.children.forEach((child) => {
+      const body = child as THREE.Group;
+      const live = muzzleWorld(body);
+      expect(live).not.toBeNull();
+      // Tip ahead of the hull nose: the barrel overhangs the lengthened
+      // (+Z) hull instead of poking out of its flank.
+      expect(live!.position.z).toBeGreaterThan(hullBox(body).max.z);
+    });
+  });
+});
+
 describe("grade seating", () => {
   function rampMap(): TNTMap {
     // Eastward ramp: 4 raw units per cell toward +x (gentle, walkable).

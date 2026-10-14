@@ -92,17 +92,19 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
   parent.add(turret);
   parent.userData.turret = turret;
   if (kind === "flash") {
-    box(parent, 18, 6, 13, 0, 4, 0, def.color);
-    box(turret, 9, 5, 8, 0, 9.5, -1, def.color);
-    box(turret, 9.5, 1.5, 8.5, 0, 7, -1, def.accent);
+    // Hull longer than wide along +Z (direction of travel): a tank wider
+    // than long reads as driving sideways.
+    box(parent, 13, 6, 18, 0, 4, 0, def.color);
+    box(turret, 8, 5, 9, 0, 9.5, -1, def.color);
+    box(turret, 8.5, 1.5, 9.5, 0, 7, -1, def.accent);
     barrel(turret, 1.2, 14, 0, 9.5, 3, 0.03, def.accent);
   } else if (kind === "stump") {
-    box(parent, 26, 8, 18, 0, 5, 0, def.color);
-    box(parent, 27, 2.5, 19, 0, 2, 0, def.accent);
-    box(turret, 14, 7, 12, 0, 12.5, -2, def.color);
+    box(parent, 18, 8, 26, 0, 5, 0, def.color);
+    box(parent, 19, 2.5, 27, 0, 2, 0, def.accent);
+    box(turret, 12, 7, 14, 0, 12.5, -2, def.color);
     barrel(turret, 1.6, 22, 0, 12.5, 4, 0.05, def.accent);
   } else if (kind === "hammer") {
-    box(parent, 24, 8, 16, 0, 5, 0, def.color);
+    box(parent, 16, 8, 24, 0, 5, 0, def.color);
     box(turret, 10, 6, 10, 0, 11, -2, def.accent);
     barrel(turret, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
   } else {

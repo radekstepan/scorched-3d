@@ -160,6 +160,19 @@ describe("seatHull", () => {
   });
 });
 
+describe("HULL_FOOTPRINT", () => {
+  it("runs long along travel for tanks, so grade seating leans nose/tail", () => {
+    // The seating taps ±halfLen along the hull yaw (nose/tail) and ±halfWid
+    // across it. Tanks drive nose-first (+Z), so halfLen must exceed halfWid
+    // — a wider-than-long footprint pitches across the hull and reads as
+    // driving sideways on grades.
+    for (const kind of ["flash", "stump", "hammer"] as const) {
+      const fp = HULL_FOOTPRINT[kind];
+      expect(fp.halfLen).toBeGreaterThan(fp.halfWid);
+    }
+  });
+});
+
 describe("stepBlocked", () => {
   it("lets flat steps through and ignores zero-length checks", () => {
     const field = flatField();

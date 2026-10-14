@@ -41,10 +41,12 @@ export type SeatField = Pick<UnitField, "width" | "height" | "heights" | "seaLev
 
 /** Hull footprint half-extents per kind, in world units (nose/tail, flank). */
 export const HULL_FOOTPRINT: Record<UnitKind, { halfLen: number; halfWid: number }> = {
-  // Hull boxes are ~13–18 deep; the nose overhangs, so bias long.
-  flash: { halfLen: 8, halfWid: 10 },
-  stump: { halfLen: 10, halfWid: 14 },
-  hammer: { halfLen: 9, halfWid: 13 },
+  // Hull boxes are longer (nose/tail, +Z travel) than wide; the nose
+  // overhangs, so bias long. halfLen must exceed halfWid for tanks or the
+  // grade seating leans across the hull instead of along it.
+  flash: { halfLen: 10, halfWid: 8 },
+  stump: { halfLen: 14, halfWid: 10 },
+  hammer: { halfLen: 13, halfWid: 9 },
   // Biped: legs spread ±4, torso above — a modest pad reads as planted.
   commander: { halfLen: 8, halfWid: 7 },
 };
