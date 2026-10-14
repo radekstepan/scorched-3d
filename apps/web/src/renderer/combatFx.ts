@@ -2,10 +2,14 @@ import * as THREE from "three";
 import {
   addScorchMark,
   aimStep,
+  ballisticPosition,
+  ballisticVelocity,
   BLAST_RADIUS,
   canFire,
+  clampElevation,
   clampTurret,
-  flightDuration,
+  GRAVITY,
+  inRange,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
   MAX_SHOTS,
@@ -14,8 +18,8 @@ import {
   muzzleYaw,
   nextShotDelay,
   pickSkirmishPair,
-  projectilePosition,
   scorchForKind,
+  solveShot,
   stepAngle,
   TURRET_SLEW_RATE,
   wrapAngle,
@@ -25,7 +29,7 @@ import {
   type ScorchMark,
   type UnitKind,
 } from "@scorched-3d/core";
-import { setUnitAim } from "./units";
+import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -45,8 +49,14 @@ import { setUnitAim } from "./units";
  *   + projectile always leave down the turret line. Shots only fire once
  *   aimed; otherwise the pair keeps traversing and the scheduler retries.
  * - The retail weapon catalog (spec 06 §2: velocity/range/reload/burst)
- *   becomes per-kind `WEAPON_PROFILES` in core (speed/arc/color) plus a
- *   single interval scheduler standing in for per-slot reload timers.
+ *   becomes per-kind `WEAPON_PROFILES` in core (muzzle velocity/color) plus
+ *   a single interval scheduler standing in for per-slot reload timers.
+ *   Retail splits direct fire (`T = D / V`, spec 06 §3.2) from ballistic
+ *   fire (muzzle velocity plus gravity through the §3.3 solver): bolts fly
+ *   straight at muzzle velocity, shells integrate under `GRAVITY` along the
+ *   low-angle firing solution, and the barrel pitches to that solution
+ *   before the shot leaves the exact barrel-tip muzzle. Out-of-range pairs
+ *   hold fire like the retail admission range test.
  * - Explosions pair an expanding flash sphere with gravity-driven spark
  *   particles and a short-lived pooled light, echoing nanolathe's
  *   explosion-sprite + art-light pairing. Every impact also scars the
@@ -58,10 +68,10 @@ import { setUnitAim } from "./units";
 interface Shot {
   mesh: THREE.Mesh;
   start: THREE.Vector3;
-  end: THREE.Vector3;
-  t: number;
+  vel: THREE.Vector3;
+  gravity: number;
+  age: number;
   dur: number;
-  arc: number;
   kind: UnitKind;
 }
 
@@ -391,12 +401,41 @@ export class CombatFx {
     const profile = WEAPON_PROFILES[kind];
 
     const gunYaw = muzzleYaw(pose.hull, pose.turret);
-    const muzzle = muzzlePoint(attacker.position, gunYaw, kind);
+    // Seed muzzle from the flat math, then aim the barrel at the firing
+    // solution and re-read the exact live muzzle (barrel-tip world matrix,
+    // so turret yaw + barrel pitch + hull grade pose all contribute).
+    const approx = muzzlePoint(attacker.position, gunYaw, kind);
     const impact = impactPoint(target.position, this.rng);
-    const start = new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z);
-    const end = new THREE.Vector3(impact.x, impact.y, impact.z);
-    if (start.distanceTo(end) < 1) return true;
-    const dur = flightDuration(start.distanceTo(end), profile.speed);
+    const approxDist = Math.hypot(
+      impact.x - approx.x,
+      impact.y - approx.y,
+      impact.z - approx.z,
+    );
+    // Range admission (cf. retail spec 06 §3.3): too close to depress onto
+    // or ballistically unreachable — keep traversing, retry on a new pair.
+    if (!inRange(kind, approxDist)) return false;
+    const seed = solveShot(kind, approx, impact);
+    if (!seed) return false;
+    setBarrelElevation(attacker, clampElevation(seed.elevation));
+    attacker.updateMatrixWorld(true);
+    const live = muzzleWorld(attacker);
+    const start = live
+      ? new THREE.Vector3(live.position.x, live.position.y, live.position.z)
+      : new THREE.Vector3(approx.x, approx.y, approx.z);
+    const sol = solveShot(
+      kind,
+      { x: start.x, y: start.y, z: start.z },
+      impact,
+    );
+    // Shells at max ballistic range fly ~5.3s; anything longer is rejected.
+    if (!sol || sol.duration <= 0 || sol.duration > 6) return false;
+    const barrelDir = live
+      ? new THREE.Vector3(live.direction.x, live.direction.y, live.direction.z)
+      : new THREE.Vector3(
+          Math.sin(gunYaw) * Math.cos(sol.elevation),
+          Math.sin(sol.elevation),
+          Math.cos(gunYaw) * Math.cos(sol.elevation),
+        );
 
     const geo = profile.shot === "bolt" ? this.boltGeo : this.shellGeo;
     const mesh = new THREE.Mesh(
@@ -406,18 +445,30 @@ export class CombatFx {
     mesh.position.copy(start);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    this.shots.push({ mesh, start, end, t: 0, dur, arc: profile.arc, kind });
+    this.shots.push({
+      mesh,
+      start,
+      vel: new THREE.Vector3(sol.velocity.x, sol.velocity.y, sol.velocity.z),
+      gravity: profile.shot === "shell" ? GRAVITY : 0,
+      age: 0,
+      dur: sol.duration,
+      kind,
+    });
     this.fired += 1;
 
     this.spawnFlash(start, profile.color, profile.flashTime);
     this.kickLight(start, profile.color);
-    this.kickRecoil(pair.attacker, attacker, gunYaw);
+    this.kickRecoil(pair.attacker, attacker, barrelDir);
     return true;
   }
 
-  private kickRecoil(index: number, body: THREE.Group, gunYaw: number): void {
+  private kickRecoil(index: number, body: THREE.Group, barrelDir: THREE.Vector3): void {
     if (this.recoils.has(index)) return;
-    const dir = new THREE.Vector3(Math.sin(gunYaw), 0, Math.cos(gunYaw));
+    // Recoil opposes the barrel: horizontal projection, normalized. A
+    // high-lobbed shell still kicks the hull straight back, not downward.
+    const dir = new THREE.Vector3(barrelDir.x, 0, barrelDir.z);
+    if (dir.lengthSq() < 1e-6) dir.set(Math.sin(body.rotation.y), 0, Math.cos(body.rotation.y));
+    dir.normalize();
     this.recoils.set(index, { base: body.position.clone(), dir, t: 1 });
   }
 
@@ -552,31 +603,40 @@ export class CombatFx {
 
   private advanceShots(dt: number): void {
     const done: Shot[] = [];
+    const vel = new THREE.Vector3();
     for (const shot of this.shots) {
-      shot.t += dt / shot.dur;
-      const t = Math.min(shot.t, 1);
-      const prev = shot.mesh.position.clone();
-      const p = projectilePosition(
+      shot.age += dt;
+      const t = Math.min(shot.age, shot.dur);
+      // Analytic ballistic flight: exact and frame-rate independent for any
+      // dt sequence — the muzzle solution lands on the impact at t = dur.
+      const p = ballisticPosition(
         { x: shot.start.x, y: shot.start.y, z: shot.start.z },
-        { x: shot.end.x, y: shot.end.y, z: shot.end.z },
+        { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
         t,
-        shot.arc,
+        shot.gravity,
       );
       shot.mesh.position.set(p.x, p.y, p.z);
-      // Orient bolts head→tail along travel (nanolathe beam-stroke analog).
-      const vel = shot.mesh.position.clone().sub(prev);
+      // Orient bolts head→tail along travel (nanolathe beam-stroke analog);
+      // shells are spheres, so orienting them is harmless and free.
+      const v = ballisticVelocity(
+        { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
+        t,
+        shot.gravity,
+      );
+      vel.set(v.x, v.y, v.z);
       if (vel.lengthSq() > 1e-6) {
         shot.mesh.lookAt(shot.mesh.position.clone().add(vel));
       }
-      if (shot.t >= 1) done.push(shot);
+      if (shot.age >= shot.dur) done.push(shot);
     }
     for (const shot of done) {
+      const at = shot.mesh.position.clone();
       const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
       this.scene.remove(shot.mesh);
       (shot.mesh.material as THREE.Material).dispose();
       this.shots.splice(this.shots.indexOf(shot), 1);
-      this.explode(shot.end, color, shot.kind);
-      this.spawnFlash(shot.end, color, FLASH_MAX_AGE * 0.6);
+      this.explode(at, color, shot.kind);
+      this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
     }
   }
 

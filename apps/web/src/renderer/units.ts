@@ -45,14 +45,41 @@ function barrel(
   elevation: number,
   color: number,
 ): void {
-  // CylinderGeometry runs along +Y; rotate to lie along +Z, then elevate.
+  // Elevating pivot at the trunnion: the tube lies straight along +Z inside
+  // it so combat FX can aim barrel pitch by setting pivot.rotation.x, and a
+  // "tip" marker at the muzzle gives the exact barrel-tip world position
+  // (including hull grade pitch/roll and turret yaw) for muzzle solutions.
+  const pivot = new THREE.Group();
+  pivot.name = "barrel";
+  pivot.position.set(x, y, z);
+  pivot.rotation.x = -elevation;
   const mesh = new THREE.Mesh(
     new THREE.CylinderGeometry(radius, radius * 1.25, length, 8),
     new THREE.MeshLambertMaterial({ color }),
   );
-  mesh.rotation.x = Math.PI / 2 - elevation;
-  mesh.position.set(x, y + (Math.sin(elevation) * length) / 2, z + (Math.cos(elevation) * length) / 2);
-  parent.add(mesh);
+  // CylinderGeometry runs along +Y; rotate to lie along +Z.
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.set(0, 0, length / 2);
+  pivot.add(mesh);
+  const tip = new THREE.Object3D();
+  tip.name = "tip";
+  tip.position.set(0, 0, length);
+  pivot.add(tip);
+  parent.add(pivot);
+}
+
+/** Rest barrel elevation per tank kind, radians (matches the build poses). */
+export function restBarrelElevation(kind: UnitKind): number {
+  switch (kind) {
+    case "flash":
+      return 0.03;
+    case "stump":
+      return 0.05;
+    case "hammer":
+      return Math.PI / 4.5;
+    case "commander":
+      return 0;
+  }
 }
 
 function buildBody(kind: UnitKind, parent: THREE.Group): void {
@@ -92,12 +119,71 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     );
     antenna.position.set(3, 40, -2);
     turret.add(antenna);
+    // No gun tube: the bolt leaves from a chest-height muzzle marker so the
+    // muzzle solution reads live world state like every other kind.
+    const tip = new THREE.Object3D();
+    tip.name = "tip";
+    tip.position.set(0, 30, 6);
+    turret.add(tip);
   }
 }
 
 /** Turret/torso subgroup of a unit body, or null when absent. */
 export function getTurret(body: THREE.Group): THREE.Group | null {
   return (body.userData.turret as THREE.Group | undefined) ?? null;
+}
+
+/** Elevating barrel pivot of a unit body, or null (commander, plain groups). */
+export function getBarrel(body: THREE.Group): THREE.Group | null {
+  const turret = getTurret(body);
+  const barrel = turret?.getObjectByName("barrel");
+  return (barrel as THREE.Group | undefined) ?? null;
+}
+
+/** Muzzle-tip marker of a unit body, or null for plain test groups. */
+export function getMuzzleTip(body: THREE.Group): THREE.Object3D | null {
+  const turret = getTurret(body);
+  return turret?.getObjectByName("tip") ?? null;
+}
+
+/**
+ * Aim the barrel at `elevation` radians above horizontal. No-op when the
+ * body has no elevating pivot (commander ASMs its bolt from the chest
+ * marker; plain test groups keep the math fallback in combatFx).
+ */
+export function setBarrelElevation(body: THREE.Group, elevation: number): void {
+  const pivot = getBarrel(body);
+  if (pivot) pivot.rotation.x = -elevation;
+}
+
+/** Current barrel elevation of a body, radians above horizontal. */
+export function barrelElevation(body: THREE.Group): number {
+  const pivot = getBarrel(body);
+  return pivot ? -pivot.rotation.x : 0;
+}
+
+const _tipPos = new THREE.Vector3();
+const _tipDir = new THREE.Vector3();
+const _tipQuat = new THREE.Quaternion();
+
+/**
+ * Live muzzle state: barrel-tip world position plus the barrel direction
+ * (+Z of the tip, so hull grade pitch/roll, turret yaw, and barrel
+ * elevation all contribute). Returns null when the body has no tip marker
+ * (plain test groups) — callers fall back to the flat `muzzlePoint` math.
+ */
+export function muzzleWorld(
+  body: THREE.Group,
+): { position: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } } | null {
+  const tip = getMuzzleTip(body);
+  if (!tip) return null;
+  tip.getWorldPosition(_tipPos);
+  tip.getWorldQuaternion(_tipQuat);
+  _tipDir.set(0, 0, 1).applyQuaternion(_tipQuat);
+  return {
+    position: { x: _tipPos.x, y: _tipPos.y, z: _tipPos.z },
+    direction: { x: _tipDir.x, y: _tipDir.y, z: _tipDir.z },
+  };
 }
 
 /**

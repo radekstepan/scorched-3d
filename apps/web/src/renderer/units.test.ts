@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import type { TNTMap } from "@scorched-3d/core";
-import { buildUnits, getTurret, placeUnitsGroup, setUnitAim } from "./units";
+import {
+  barrelElevation,
+  buildUnits,
+  getBarrel,
+  getMuzzleTip,
+  getTurret,
+  muzzleWorld,
+  placeUnitsGroup,
+  restBarrelElevation,
+  setBarrelElevation,
+  setUnitAim,
+} from "./units";
 
 function fakeMap(): TNTMap {
   const width = 32;
@@ -68,6 +79,53 @@ describe("buildUnits turrets", () => {
     // Re-snapping moves origins only; aim pose is preserved.
     expect(body.rotation.y).toBeCloseTo(2.1);
     expect(getTurret(body)!.rotation.y).toBeCloseTo(-0.4);
+  });
+});
+
+describe("barrel elevation", () => {
+  it("gives tanks an elevating pivot with a muzzle tip, commander a tip only", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const kinds = ["commander", "stump", "flash", "hammer"] as const;
+    group.children.forEach((child, i) => {
+      const body = child as THREE.Group;
+      // Every kind exposes a muzzle tip for the live muzzle solution.
+      expect(getMuzzleTip(body)).not.toBeNull();
+      if (kinds[i] === "commander") {
+        expect(getBarrel(body)).toBeNull();
+      } else {
+        expect(getBarrel(body)).not.toBeNull();
+        // Rest pose matches the per-kind mesh elevation.
+        expect(barrelElevation(body)).toBeCloseTo(restBarrelElevation(kinds[i]!), 12);
+      }
+    });
+  });
+
+  it("pitches the barrel and moves the tip, surviving hull aim", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[3] as THREE.Group; // hammer
+    const before = muzzleWorld(body)!;
+    // Rest 40°: the tip sits well above the trunnion and ahead of the hull.
+    expect(before.position.y).toBeGreaterThan(body.position.y + 20);
+    setUnitAim(body, 0.8, 0.2);
+    setBarrelElevation(body, 0.1);
+    expect(barrelElevation(body)).toBeCloseTo(0.1);
+    const after = muzzleWorld(body)!;
+    // Depressing the barrel drops the tip and throws it further forward.
+    expect(after.position.y).toBeLessThan(before.position.y);
+    const flat = (p: { x: number; z: number }) => Math.hypot(p.x - body.position.x, p.z - body.position.z);
+    expect(flat(after.position)).toBeGreaterThan(flat(before.position));
+    // Direction follows yaw + elevation: mostly forward, slightly up.
+    expect(after.direction.y).toBeCloseTo(Math.sin(0.1), 2);
+    expect(Math.hypot(after.direction.x, after.direction.z)).toBeCloseTo(Math.cos(0.1), 2);
+  });
+
+  it("returns null muzzle state for plain groups (math fallback applies)", () => {
+    expect(muzzleWorld(new THREE.Group())).toBeNull();
+    expect(getMuzzleTip(new THREE.Group())).toBeNull();
+    expect(getBarrel(new THREE.Group())).toBeNull();
+    // No-ops, never throws — headless combat tests use bare groups.
+    setBarrelElevation(new THREE.Group(), 0.5);
+    expect(barrelElevation(new THREE.Group())).toBe(0);
   });
 });
 

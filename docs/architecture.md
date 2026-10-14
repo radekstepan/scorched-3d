@@ -17,7 +17,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | --- | --- |
 | `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with unit markers, unit legend, probe readout. |
 | `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, hover picking. |
-| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) and exaggeration re-snapping. |
+| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, and exaggeration re-snapping. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
@@ -26,7 +26,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/units/terrain.ts` | Bilinear seating, hull pitch/roll, and step blocking for movers. |
 | `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
-| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and projectile math. |
+| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission). |
 | `packages/core/src/units/destruction.ts` | Blast scorch + tree/rock felling queries. |
 | `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers. |
 | `apps/web/src/renderer/selection.ts` | Click/box picking helpers for RTS selection. |

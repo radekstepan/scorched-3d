@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { MAX_SCORCH_MARKS, mulberry32, TURRET_LIMIT, type UnitKind } from "@scorched-3d/core";
+import {
+  MAX_SCORCH_MARKS,
+  mulberry32,
+  TURRET_LIMIT,
+  type TNTMap,
+  type UnitKind,
+} from "@scorched-3d/core";
 import { CombatFx, impactPoint, muzzlePoint } from "./combatFx";
-import { getTurret } from "./units";
+import { barrelElevation, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
 
 function makeUnits(): THREE.Group {
   const group = new THREE.Group();
@@ -196,6 +202,68 @@ describe("CombatFx", () => {
     }
     // Turrets still slewed onto targets independently and fired on the move.
     expect(fx.totalFired).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("holds fire when the pair is ballistically out of range", () => {
+    // Two hammers ~2500 units apart: past the V²/g ≈ 1931 max range, so the
+    // solver returns no solution (retail's admission sentinel) and the guns
+    // stay silent no matter how long they traverse.
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "hammer", cellX: 1, cellZ: 1, rotation: 0 },
+      { kind: "hammer", cellX: 2, cellZ: 2, rotation: Math.PI },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(2500, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const fx = new CombatFx(scene, group, mulberry32(21));
+    for (let n = 0; n < 1200; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBe(0);
+    expect(fx.activeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("aims the barrel at the firing solution on built units", () => {
+    // Real buildUnits bodies (barrel pivots + muzzle tips): the first shot
+    // must leave a tank barrel posed away from its rest elevation.
+    const width = 32;
+    const height = 32;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "stump", cellX: 8, cellZ: 8, rotation: 0 },
+        { kind: "hammer", cellX: 20, cellZ: 20, rotation: 0 },
+        { kind: "flash", cellX: 12, cellZ: 20, rotation: 0 },
+      ],
+    } as unknown as TNTMap;
+    const scene = new THREE.Scene();
+    const units = buildUnits(map, 1);
+    const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 3000 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    // At least one tank barrel was pitched to its solution (commanders and
+    // unfired units keep their rest pose).
+    const posed = (units.children as THREE.Group[]).some((body, i) => {
+      if (!getBarrel(body)) return false;
+      return Math.abs(barrelElevation(body) - restBarrelElevation(kinds[i]!)) > 1e-6;
+    });
+    expect(posed).toBe(true);
     fx.dispose();
   });
 
