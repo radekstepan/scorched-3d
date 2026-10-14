@@ -1,17 +1,22 @@
 import * as THREE from "three";
 import {
+  aimStep,
+  canFire,
   flightDuration,
   MAX_EXPLOSIONS,
   MAX_SHOTS,
   muzzleForward,
   muzzleHeight,
+  muzzleYaw,
   nextShotDelay,
   pickSkirmishPair,
   projectilePosition,
+  yawToTarget,
   WEAPON_PROFILES,
   type PlacedUnit,
   type UnitKind,
 } from "@scorched-3d/core";
+import { setUnitAim } from "./units";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -24,6 +29,12 @@ import {
  *   bodies but plasma bolts/beams as head→tail oriented strokes with a
  *   dynamic light riding the bolt — mirrored here by orienting bolt meshes
  *   along their velocity and pooling point lights for muzzle/explosion pops.
+ * - Retail turret aim is yaw-relative-to-heading from the AimFrom piece
+ *   (spec 06 §3.3), traversed by the COB script within its limits: hulls
+ *   turn to face the target at a limited rate while the turret/barrel
+ *   subgroup slews the remainder inside a clamped traverse, and the muzzle
+ *   + projectile always leave down the turret line. Shots only fire once
+ *   aimed; otherwise the pair keeps traversing and the scheduler retries.
  * - The retail weapon catalog (spec 06 §2: velocity/range/reload/burst)
  *   becomes per-kind `WEAPON_PROFILES` in core (speed/arc/color) plus a
  *   single interval scheduler standing in for per-slot reload timers.
@@ -108,6 +119,11 @@ export class CombatFx {
   private explosions: Explosion[] = [];
   private recoils = new Map<number, Recoil>();
   private lights: THREE.PointLight[] = [];
+  private fired = 0;
+  /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
+  private aim: { hull: number; turret: number }[] = [];
+  /** Attacker → target traverse goals, slewed every frame until aimed. */
+  private pending = new Map<number, number>();
   private boltGeo = new THREE.BoxGeometry(3, 3, 18);
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
@@ -135,12 +151,29 @@ export class CombatFx {
     return this.shots.length;
   }
 
+  /** Total shots fired since construction (gated by aim, for tests/HUD). */
+  get totalFired(): number {
+    return this.fired;
+  }
+
+  /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
+  aimState(index: number): { hull: number; turret: number } | null {
+    return this.aim[index] ? { ...this.aim[index]! } : null;
+  }
+
   update(dt: number): void {
     if (this.disposed || dt <= 0) return;
+    this.ensureAim();
+    this.slewPending(dt);
     this.timer -= dt;
     if (this.timer <= 0) {
-      this.timer = nextShotDelay(this.rng);
-      this.tryFire();
+      if (this.tryFire()) {
+        this.timer = nextShotDelay(this.rng);
+      } else {
+        // Still traversing (or capped): retry soon so aimed pairs fire
+        // without waiting out a full ambient interval.
+        this.timer = 0.12 + this.rng() * 0.1;
+      }
     }
     this.advanceShots(dt);
     this.advanceFlashes(dt);
@@ -167,6 +200,7 @@ export class CombatFx {
       if (child) child.position.copy(recoil.base);
     }
     this.recoils.clear();
+    this.pending.clear();
     for (const light of this.lights) light.intensity = 0;
   }
 
@@ -187,22 +221,76 @@ export class CombatFx {
     return placed?.[index]?.kind ?? null;
   }
 
-  private tryFire(): void {
+  /** Size the aim pose array to the unit roster, seeding from live yaws. */
+  private ensureAim(): void {
+    const bodies = this.units.children as THREE.Group[];
+    while (this.aim.length < bodies.length) {
+      const i = this.aim.length;
+      this.aim.push({ hull: bodies[i]?.rotation.y ?? 0, turret: 0 });
+    }
+    if (this.aim.length > bodies.length) this.aim.length = bodies.length;
+  }
+
+  /** Bearing from one unit body to another on the X/Z plane. */
+  private bearing(from: number, to: number): number | null {
+    const a = this.units.children[from] as THREE.Group | undefined;
+    const b = this.units.children[to] as THREE.Group | undefined;
+    if (!a || !b) return null;
+    return yawToTarget({ x: a.position.x, z: a.position.z }, { x: b.position.x, z: b.position.z });
+  }
+
+  /**
+   * Slew every pending attacker toward its target at limited hull/turret
+   * rates and apply the pose. Hulls do the gross turn, turrets the clamped
+   * refine — so traverse motion is visible even before any shot fires.
+   */
+  private slewPending(dt: number): void {
+    for (const [attacker, target] of this.pending) {
+      const body = this.units.children[attacker] as THREE.Group | undefined;
+      const kind = this.unitKind(attacker);
+      const want = this.bearing(attacker, target);
+      if (!body || !kind || want === null) {
+        this.pending.delete(attacker);
+        continue;
+      }
+      const pose = this.aim[attacker];
+      if (!pose) continue;
+      const next = aimStep(kind, pose.hull, pose.turret, want, dt);
+      pose.hull = next.hull;
+      pose.turret = next.turret;
+      setUnitAim(body, next.hull, next.turret);
+    }
+  }
+
+  /**
+   * Pick a skirmish pair and fire only when the attacker is aimed: hull
+   * faced at the target, turret inside its traverse, muzzle down the turret
+   * line. Returns true when a shot left (or the roster/caps made firing
+   * impossible, to keep the ambient schedule); false defers while the
+   * attacker is still traversing.
+   */
+  private tryFire(): boolean {
     const count = this.units.children.length;
-    if (count < 2 || this.shots.length >= MAX_SHOTS) return;
+    if (count < 2) return true;
+    if (this.shots.length >= MAX_SHOTS) return true;
     const pair = pickSkirmishPair(count, this.rng);
-    if (!pair) return;
+    if (!pair) return true;
     const attacker = this.units.children[pair.attacker] as THREE.Group | undefined;
     const target = this.units.children[pair.target] as THREE.Group | undefined;
     const kind = this.unitKind(pair.attacker);
-    if (!attacker || !target || !kind) return;
+    const pose = this.aim[pair.attacker];
+    if (!attacker || !target || !kind || !pose) return true;
+    this.pending.set(pair.attacker, pair.target);
+    const want = this.bearing(pair.attacker, pair.target);
+    if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
     const profile = WEAPON_PROFILES[kind];
 
-    const muzzle = muzzlePoint(attacker.position, attacker.rotation.y, kind);
+    const gunYaw = muzzleYaw(pose.hull, pose.turret);
+    const muzzle = muzzlePoint(attacker.position, gunYaw, kind);
     const impact = impactPoint(target.position, this.rng);
     const start = new THREE.Vector3(muzzle.x, muzzle.y, muzzle.z);
     const end = new THREE.Vector3(impact.x, impact.y, impact.z);
-    if (start.distanceTo(end) < 1) return;
+    if (start.distanceTo(end) < 1) return true;
     const dur = flightDuration(start.distanceTo(end), profile.speed);
 
     const geo = profile.shot === "bolt" ? this.boltGeo : this.shellGeo;
@@ -214,15 +302,17 @@ export class CombatFx {
     mesh.frustumCulled = false;
     this.scene.add(mesh);
     this.shots.push({ mesh, start, end, t: 0, dur, arc: profile.arc });
+    this.fired += 1;
 
     this.spawnFlash(start, profile.color, profile.flashTime);
     this.kickLight(start, profile.color);
-    this.kickRecoil(pair.attacker, attacker);
+    this.kickRecoil(pair.attacker, attacker, gunYaw);
+    return true;
   }
 
-  private kickRecoil(index: number, body: THREE.Group): void {
+  private kickRecoil(index: number, body: THREE.Group, gunYaw: number): void {
     if (this.recoils.has(index)) return;
-    const dir = new THREE.Vector3(Math.sin(body.rotation.y), 0, Math.cos(body.rotation.y));
+    const dir = new THREE.Vector3(Math.sin(gunYaw), 0, Math.cos(gunYaw));
     this.recoils.set(index, { base: body.position.clone(), dir, t: 1 });
   }
 

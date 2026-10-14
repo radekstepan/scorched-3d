@@ -56,35 +56,57 @@ function barrel(
 
 function buildBody(kind: UnitKind, parent: THREE.Group): void {
   const def = UNIT_DEFS[kind];
+  // Traverse-limited turret subgroup: tanks carry the turret box + barrel
+  // here, the commander its whole upper torso. Combat FX yaws the body
+  // (hull) and this group (relative) separately.
+  const turret = new THREE.Group();
+  turret.name = "turret";
+  parent.add(turret);
+  parent.userData.turret = turret;
   if (kind === "flash") {
     box(parent, 18, 6, 13, 0, 4, 0, def.color);
-    box(parent, 9, 5, 8, 0, 9.5, -1, def.color);
-    box(parent, 9.5, 1.5, 8.5, 0, 7, -1, def.accent);
-    barrel(parent, 1.2, 14, 0, 9.5, 3, 0.03, def.accent);
+    box(turret, 9, 5, 8, 0, 9.5, -1, def.color);
+    box(turret, 9.5, 1.5, 8.5, 0, 7, -1, def.accent);
+    barrel(turret, 1.2, 14, 0, 9.5, 3, 0.03, def.accent);
   } else if (kind === "stump") {
     box(parent, 26, 8, 18, 0, 5, 0, def.color);
     box(parent, 27, 2.5, 19, 0, 2, 0, def.accent);
-    box(parent, 14, 7, 12, 0, 12.5, -2, def.color);
-    barrel(parent, 1.6, 22, 0, 12.5, 4, 0.05, def.accent);
+    box(turret, 14, 7, 12, 0, 12.5, -2, def.color);
+    barrel(turret, 1.6, 22, 0, 12.5, 4, 0.05, def.accent);
   } else if (kind === "hammer") {
     box(parent, 24, 8, 16, 0, 5, 0, def.color);
-    box(parent, 10, 6, 10, 0, 11, -2, def.accent);
-    barrel(parent, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
+    box(turret, 10, 6, 10, 0, 11, -2, def.accent);
+    barrel(turret, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
   } else {
     // commander: biped construction kbot, the tallest silhouette on the field.
     box(parent, 5, 14, 6, -4, 7, 0, def.color);
     box(parent, 5, 14, 6, 4, 7, 0, def.color);
-    box(parent, 15, 15, 11, 0, 21.5, 0, def.color);
-    box(parent, 16, 3, 12, 0, 26, 0, def.accent);
-    box(parent, 7, 6, 7, 0, 32, 0, def.color);
-    box(parent, 2, 3, 2, 0, 32, 4, def.accent);
+    box(turret, 15, 15, 11, 0, 21.5, 0, def.color);
+    box(turret, 16, 3, 12, 0, 26, 0, def.accent);
+    box(turret, 7, 6, 7, 0, 32, 0, def.color);
+    box(turret, 2, 3, 2, 0, 32, 4, def.accent);
     const antenna = new THREE.Mesh(
       new THREE.CylinderGeometry(0.6, 0.6, 14, 6),
       new THREE.MeshLambertMaterial({ color: def.accent }),
     );
     antenna.position.set(3, 40, -2);
-    parent.add(antenna);
+    turret.add(antenna);
   }
+}
+
+/** Turret/torso subgroup of a unit body, or null when absent. */
+export function getTurret(body: THREE.Group): THREE.Group | null {
+  return (body.userData.turret as THREE.Group | undefined) ?? null;
+}
+
+/**
+ * Aim a unit body: yaw the hull (body group) and the turret subgroup
+ * relative to it. Traverse clamping lives in core (`clampTurret` /
+ * `aimStep`); this only applies the pose.
+ */
+export function setUnitAim(body: THREE.Group, hullYaw: number, turretRel: number): void {
+  body.rotation.y = hullYaw;
+  getTurret(body)?.rotation.set(0, turretRel, 0);
 }
 
 export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {
