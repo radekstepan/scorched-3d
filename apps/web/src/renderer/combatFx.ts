@@ -2,12 +2,14 @@ import * as THREE from "three";
 import {
   addScorchMark,
   aimStep,
+  applyBlastToUnits,
   ballisticPosition,
   ballisticVelocity,
   BLAST_RADIUS,
   canFire,
   clampElevation,
   clampTurret,
+  createUnitDamage,
   GRAVITY,
   inRange,
   MAX_EXPLOSIONS,
@@ -30,6 +32,7 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
+import { applyUnitDamageTint, UnitDamageFx } from "./unitDamageFx";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -62,7 +65,9 @@ import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
  *   explosion-sprite + art-light pairing. Every impact also scars the
  *   ground with a persistent scorch decal (capped separately in core) and
  *   damages nearby trees/rocks through the CombatEnv blast hook (blast
- *   core flattens, fringe ignites and chips; units themselves are untouched).
+ *   core flattens, fringe ignites and chips) and splashes nearby hulls with
+ *   accumulating visual damage (charring hull tint, damage smoke, heavy-hit
+ *   embers — hulls never move or die from it).
  */
 
 interface Shot {
@@ -176,6 +181,12 @@ export class CombatFx {
   private scorchMarks: ScorchMark[] = [];
   private scorchDummy = new THREE.Object3D();
   private scorchTint = new THREE.Color();
+  /** Per-unit accumulated damage 0..1 (core state; char/smoke are views). */
+  private damage: number[] = [];
+  /** Instanced damage smoke + embers over the hulls (transient view). */
+  private damageFx: UnitDamageFx;
+  /** Deterministic clock for damage smoke/ember phase (no rng per frame). */
+  private elapsed = 0;
   private env: CombatEnv | null;
   private disposed = false;
   /**
@@ -203,6 +214,7 @@ export class CombatFx {
     this.scorchMesh.frustumCulled = false;
     this.scorchMesh.renderOrder = 2;
     this.scene.add(this.scorchMesh);
+    this.damageFx = new UnitDamageFx(scene);
     for (let i = 0; i < LIGHT_COUNT; i++) {
       const light = new THREE.PointLight(0xffb36b, 0, 650, 1.8);
       this.scene.add(light);
@@ -232,6 +244,21 @@ export class CombatFx {
   /** Persistent scorch decal count (bounded by MAX_SCORCH_MARKS). */
   get scorchCount(): number {
     return this.scorchMarks.length;
+  }
+
+  /** Accumulated damage fraction of a unit (0 pristine .. 1 fully charred). */
+  unitDamageAt(index: number): number {
+    return this.damage[index] ?? 0;
+  }
+
+  /** Visible damage-smoke puff count (one per smoking hull, capped). */
+  get unitSmokeCount(): number {
+    return this.damageFx.smokeCount;
+  }
+
+  /** Visible damage-ember count (one per heavily-damaged hull, capped). */
+  get unitEmberCount(): number {
+    return this.damageFx.emberCount;
   }
 
   /** Drive hulls externally (patrol movement) or let combat turn them. */
@@ -267,6 +294,8 @@ export class CombatFx {
   update(dt: number): void {
     if (this.disposed || dt <= 0) return;
     this.ensureAim();
+    this.ensureDamage();
+    this.elapsed += dt;
     this.slewPending(dt);
     this.timer -= dt;
     if (this.timer <= 0) {
@@ -282,6 +311,7 @@ export class CombatFx {
     this.advanceFlashes(dt);
     this.advanceExplosions(dt);
     this.advanceRecoil(dt);
+    this.damageFx.update(this.damage, this.units.children, this.elapsed);
   }
 
   /** Drop in-flight shots, flashes, and explosions (e.g. on exaggeration re-snap). */
@@ -323,6 +353,7 @@ export class CombatFx {
     this.clearTransients();
     this.scene.remove(this.scorchMesh);
     this.scorchMarks = [];
+    this.damageFx.dispose();
     for (const light of this.lights) this.scene.remove(light);
     this.lights = [];
     this.boltGeo.dispose();
@@ -338,6 +369,37 @@ export class CombatFx {
     return placed?.[index]?.kind ?? null;
   }
 
+  /** Size the per-unit damage array to the roster (persistent, never reset). */
+  private ensureDamage(): void {
+    const count = this.units.children.length;
+    if (this.damage.length < count) {
+      const fresh = createUnitDamage(count - this.damage.length);
+      this.damage.push(...fresh);
+    } else if (this.damage.length > count) {
+      this.damage.length = count;
+    }
+  }
+
+  /**
+   * Splash a blast onto nearby hulls: accumulate core damage with linear
+   * falloff and char the touched bodies in place. Visual only — hulls are
+   * never moved (only recoil touches them) and never die.
+   */
+  private damageUnits(at: THREE.Vector3, kind: UnitKind): void {
+    if (this.damage.length === 0) return;
+    const bodies = this.units.children as THREE.Group[];
+    const touched = applyBlastToUnits(
+      this.damage,
+      bodies.map((b) => ({ x: b.position.x, z: b.position.z })),
+      at.x,
+      at.z,
+      kind,
+    );
+    for (const i of touched) {
+      const body = bodies[i];
+      if (body) applyUnitDamageTint(body, this.damage[i]!);
+    }
+  }
   /** Size the aim pose array to the unit roster, seeding from live yaws. */
   private ensureAim(): void {
     const bodies = this.units.children as THREE.Group[];
@@ -571,14 +633,16 @@ export class CombatFx {
     });
     this.kickLight(at, 0xff8a3c);
     this.scarGround(at, kind);
+    this.damageUnits(at, kind);
   }
 
   /**
    * Persistent ground scar + graduated blast damage for an impact. Decals
    * reuse one shared instanced disc (no per-mark geometry/material); only
    * instance matrices/colors are rewritten, and only on impact — never per
-   * frame. Units are never touched: a tree flattened under a unit leaves the
-   * unit where it stands.
+   * frame. Hulls are splashed with accumulating (visual-only) damage by the
+   * caller; a tree flattened under a unit still leaves the unit where it
+   * stands.
    */
   private scarGround(at: THREE.Vector3, kind: UnitKind): void {
     const shape = scorchForKind(kind);

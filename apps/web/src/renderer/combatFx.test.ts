@@ -298,6 +298,69 @@ describe("CombatFx", () => {
   });
 });
 
+describe("CombatFx unit damage", () => {
+  function lambertHexes(body: THREE.Object3D): number[] {
+    const out: number[] = [];
+    body.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
+      if (mat && "emissive" in mat) out.push((mat.color as THREE.Color).getHex());
+    });
+    return out;
+  }
+
+  it("splashes hulls near impacts and smokes the battered ones", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    expect(fx.unitDamageAt(0)).toBe(0);
+    // ~30 simulated seconds: dozens of aimed shots land beside hulls.
+    for (let n = 0; n < 600; n++) fx.update(0.05);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    const worst = Math.max(fx.unitDamageAt(0), fx.unitDamageAt(1), fx.unitDamageAt(2));
+    expect(worst).toBeGreaterThan(0);
+    // Repeated hits push past the smoke threshold: battered hulls puff.
+    expect(worst).toBeGreaterThanOrEqual(0.2);
+    expect(fx.unitSmokeCount).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("chars built hull meshes and keeps damage through clearTransients", () => {
+    const width = 32;
+    const height = 32;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "stump", cellX: 8, cellZ: 8, rotation: 0 },
+        { kind: "hammer", cellX: 20, cellZ: 20, rotation: 0 },
+        { kind: "flash", cellX: 12, cellZ: 20, rotation: 0 },
+      ],
+    } as unknown as TNTMap;
+    const scene = new THREE.Scene();
+    const units = buildUnits(map, 1);
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    const before = (units.children as THREE.Group[]).map(lambertHexes);
+    for (let n = 0; n < 600; n++) fx.update(0.05);
+    const damaged = [0, 1, 2].filter((i) => fx.unitDamageAt(i) > 0);
+    expect(damaged.length).toBeGreaterThan(0);
+    // Charring rewrote at least one battered hull's palette in place.
+    const charred = damaged.some(
+      (i) => JSON.stringify(lambertHexes(units.children[i] as THREE.Group)) !== JSON.stringify(before[i]),
+    );
+    expect(charred).toBe(true);
+    // Damage is persistent session state like scorch: transients drop, hulls
+    // stay battered (and still smoke) after the clear.
+    const kept = damaged.map((i) => fx.unitDamageAt(i));
+    fx.clearTransients();
+    expect(damaged.map((i) => fx.unitDamageAt(i))).toEqual(kept);
+    fx.update(0.05);
+    expect(fx.unitSmokeCount).toBeGreaterThan(0);
+    fx.dispose();
+  });
+});
+
 describe("CombatFx destruction", () => {
   function makeEnv() {
     const calls: { x: number; z: number; radius: number }[] = [];
