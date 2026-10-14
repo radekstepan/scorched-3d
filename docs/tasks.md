@@ -16,10 +16,12 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Unit need to face each other, fire only from one direction. A tank can fae one way, turret can still move, but not completely freely.
+sometimes the models clip into terrain as they move to a higher/lower elevation. They should not be moving "flat", but based on a terrain up or down. Some areas will be too steep for them. Make sure this is considered in the pathfinding.
 
-Add destruction to the environment from fire/explosions.
+Sometimes 2 units next to each other appear stuck and won't move. Is it because they are in a brown "hole" caused by explosions?
 
-Add movement to the units, each one will have a "route" it will follow.
+Make sure the physics of a cannon barel shooting a projectile "makes sense".
 
-Be able to select a unit or multiple units and make them go to an area. Pathfinding needs to be top notch.
+The damage to terrain seems "odd". Shouldn't there be collateal damage where the trees are on fire, smouldering, partially destroyed, on their side etc?
+
+When I select a unit somehow it's in this "brown mud" which I am not suer what is, but it's hard to see the "outline" when I click on the unit.
