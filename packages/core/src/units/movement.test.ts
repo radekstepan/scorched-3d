@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { CELL_PIXELS } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
 import { HULL_TURN_RATE } from "./facing.js";
 import {
   advanceMover,
   advanceMovers,
   ARRIVE_RADIUS,
+  BLOCKED_SKIP_AFTER,
   cellFromWorld,
+  hasOrder,
   initMover,
   MOVE_SPEED,
+  orderMover,
   planRoutes,
   ROUTE_WAYPOINTS,
   sampleGround,
@@ -17,6 +21,8 @@ import {
   type Mover,
   type RoutePoint,
 } from "./movement.js";
+import { isWalkable } from "./pathfinding.js";
+import type { SeatField } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera"] as const;
@@ -229,5 +235,101 @@ describe("world/cell helpers", () => {
     expect(m.z).toBe(route[0]!.z);
     expect(m.hull).toBe(1.2);
     expect(m.leg).toBe(1);
+  });
+});
+
+/** Synthetic field: flat 100 plateau, steep 40/cell ramp wall east of x=16. */
+function walledField(): SeatField {
+  const w = 40;
+  const h = 24;
+  const heights = new Uint8Array(w * h).fill(100);
+  for (let z = 0; z < h; z++) {
+    for (let x = 17; x < w; x++) heights[z * w + x] = 100 + (x - 16) * 40;
+  }
+  return { width: w, height: h, heights, seaLevel: 0 };
+}
+
+function worldX(field: SeatField, cellX: number): number {
+  return (cellX - (field.width - 1) / 2) * CELL_PIXELS;
+}
+
+describe("steep-slope clamp", () => {
+  it("holds position (turning in place) instead of climbing a wall", () => {
+    const field = walledField();
+    const z = 0;
+    // Ordered due east into the wall: hull faces the target, X/Z pin.
+    let mover: Mover = { x: worldX(field, 10), z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, [{ x: worldX(field, 35), z }]);
+    const pinned = { x: mover.x, z: mover.z };
+    for (let n = 0; n < 300; n++) {
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
+    }
+    // Never entered the wall: still west of it, order still live.
+    expect(mover.x).toBeLessThan(worldX(field, 16));
+    expect(mover.z).toBeCloseTo(pinned.z, 9);
+    expect(hasOrder(mover)).toBe(true);
+    // Hull kept turning toward the target instead of freezing.
+    expect(mover.hull).toBeCloseTo(Math.PI / 2, 6);
+    // Same order without terrain knowledge drives straight through.
+    let free: Mover = { x: worldX(field, 10), z, hull: Math.PI / 2, leg: 0 };
+    free = orderMover(free, [{ x: worldX(field, 35), z }]);
+    for (let n = 0; n < 300; n++) {
+      free = advanceMover("flash", free, [], 1 / 60);
+    }
+    expect(free.x).toBeGreaterThan(worldX(field, 16));
+  });
+
+  it("lets patrol skip a leg pinned against steep ground", () => {
+    const field = walledField();
+    const z = 0;
+    // Patrol leg straight into the wall from nearby walkable ground.
+    const route: RoutePoint[] = [
+      { x: worldX(field, 14), z },
+      { x: worldX(field, 35), z },
+    ];
+    let mover: Mover = { x: worldX(field, 14), z, hull: Math.PI / 2, leg: 1 };
+    const dt = 1 / 60;
+    const ticks = Math.ceil(BLOCKED_SKIP_AFTER / dt) + 300;
+    let skipped = false;
+    for (let n = 0; n < ticks; n++) {
+      mover = advanceMover("stump", mover, route, dt, 1, field);
+      // The hull never clips into the wall while pinned or skipping.
+      const { cellX } = cellFromWorld(field, mover.x, mover.z);
+      expect(cellX).toBeLessThan(16);
+      if (mover.leg === 0) skipped = true;
+    }
+    expect(skipped).toBe(true);
+  });
+
+  it("keeps patrols on walkable ground on a real map", () => {
+    // Real-map case (not synthetic flat): patrol legs cut straight across
+    // whatever the waypoints straddle, so the clamp + skip must hold on
+    // generated terrain with real slopes and shorelines.
+    const map = generateMap("greenreach", 7);
+    const routes = planRoutes(map, map.units, 7);
+    const kinds = map.units.map((u) => u.kind);
+    // Seed on filtered (walkable) waypoints, steering at the next leg.
+    let movers: Mover[] = routes.map((route) => {
+      const wp = route[1] ?? route[0]!;
+      expect(
+        isWalkable(map, cellFromWorld(map, wp.x, wp.z).cellX, cellFromWorld(map, wp.x, wp.z).cellZ),
+      ).toBe(true);
+      return { x: wp.x, z: wp.z, hull: 0, leg: 2 % route.length };
+    });
+    const start = movers.map((m) => ({ ...m }));
+    const dt = 1 / 60;
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers(kinds, movers, routes, dt, map);
+      for (const m of movers) {
+        const { cellX, cellZ } = cellFromWorld(map, m.x, m.z);
+        expect(isWalkable(map, cellX, cellZ)).toBe(true);
+      }
+    }
+    // The column actually travelled instead of grinding in place.
+    const travel = movers.reduce(
+      (sum, m, i) => sum + Math.hypot(m.x - start[i]!.x, m.z - start[i]!.z),
+      0,
+    );
+    expect(travel).toBeGreaterThan(0);
   });
 });

@@ -6,17 +6,21 @@ import {
   hasOrder,
   initMover,
   orderMover,
+  type HullSeat,
   type Mover,
   type PlacedUnit,
   type RoutePoint,
-  type UnitField,
+  type SeatField,
   type UnitKind,
 } from "@scorched-3d/core";
 
 /**
  * Thin three.js patrol driver: each unit body follows its core looping route
- * (positions + hull yaw from `advanceMovers`), re-seated on the terrain
- * surface every tick so height-exaggeration changes only need a re-seat.
+ * (positions + hull yaw from `advanceMovers`), seated on the terrain surface
+ * every tick via the `seat` pose (continuous height + hull pitch/roll to the
+ * local grade, so hulls ride slopes instead of clipping through them) with a
+ * `groundY + 0.5` flat fallback when no seat is provided. Height-exaggeration
+ * changes only need a re-seat.
  * The turret/torso subgroup rotation is never touched here — combat aim
  * (external-hull mode) owns it, so turrets track targets independently
  * while hulls face the direction of travel. Owns no scene objects, so
@@ -25,6 +29,12 @@ import {
 export interface MovementEnv {
   /** Terrain surface height at world (x, z), tracking live exaggeration. */
   groundY: (x: number, z: number) => number;
+  /**
+   * Full seated pose (surface height + hull pitch/roll) at world (x, z) for
+   * a hull on the given yaw. Optional so headless tests can drive on flat
+   * `groundY` alone; live play always provides it.
+   */
+  seat?: (x: number, z: number, hull: number, kind: UnitKind) => HullSeat;
   /**
    * Fired for every moved unit per tick so recoil anchors in combat FX can
    * follow (otherwise the kick restore would snap the hull backward).
@@ -38,14 +48,14 @@ export class UnitMovement {
   private kinds: UnitKind[];
   private movers: Mover[];
   private env: MovementEnv;
-  private field: UnitField | null;
+  private field: SeatField | null;
   private disposed = false;
 
   constructor(
     units: THREE.Group,
     routes: RoutePoint[][],
     env: MovementEnv,
-    field?: UnitField | null,
+    field?: SeatField | null,
   ) {
     this.units = units;
     this.routes = routes;
@@ -113,7 +123,7 @@ export class UnitMovement {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
-    const next = advanceMovers(this.kinds, this.movers, this.routes, dt);
+    const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field);
     next.forEach((mover, i) => {
       const body = this.units.children[i] as THREE.Group | undefined;
       const prev = this.movers[i];
@@ -121,8 +131,7 @@ export class UnitMovement {
       const dx = mover.x - prev.x;
       const dz = mover.z - prev.z;
       if (dx !== 0 || dz !== 0) this.env.onShift?.(i, dx, dz);
-      body.position.set(mover.x, this.env.groundY(mover.x, mover.z) + 0.5, mover.z);
-      body.rotation.y = mover.hull;
+      this.pose(body, mover, this.kinds[i] ?? "flash");
     });
     this.movers = next;
   }
@@ -133,9 +142,22 @@ export class UnitMovement {
     this.movers.forEach((mover, i) => {
       const body = this.units.children[i] as THREE.Group | undefined;
       if (!body) return;
-      body.position.set(mover.x, this.env.groundY(mover.x, mover.z) + 0.5, mover.z);
-      body.rotation.y = mover.hull;
+      this.pose(body, mover, this.kinds[i] ?? "flash");
     });
+  }
+
+  /**
+   * Seat one body: live X/Z, surface height + hull pitch/roll from the seat
+   * (flat `groundY + 0.5` fallback), yaw from the mover. `YXZ` order so the
+   * pitch/roll apply in the hull frame after yawing — nose up uphill.
+   */
+  private pose(body: THREE.Group, mover: Mover, kind: UnitKind): void {
+    const seat = this.env.seat?.(mover.x, mover.z, mover.hull, kind);
+    body.position.set(mover.x, seat?.y ?? this.env.groundY(mover.x, mover.z) + 0.5, mover.z);
+    body.rotation.order = "YXZ";
+    body.rotation.y = mover.hull;
+    body.rotation.x = seat?.pitch ?? 0;
+    body.rotation.z = seat?.roll ?? 0;
   }
 
   dispose(): void {

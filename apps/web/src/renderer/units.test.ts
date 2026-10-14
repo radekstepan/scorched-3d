@@ -70,3 +70,57 @@ describe("buildUnits turrets", () => {
     expect(getTurret(body)!.rotation.y).toBeCloseTo(-0.4);
   });
 });
+
+describe("grade seating", () => {
+  function rampMap(): TNTMap {
+    // Eastward ramp: 4 raw units per cell toward +x (gentle, walkable).
+    const width = 32;
+    const height = 32;
+    const heights = new Uint8Array(width * height);
+    for (let z = 0; z < height; z++) {
+      for (let x = 0; x < width; x++) heights[z * width + x] = 100 + x * 4;
+    }
+    return {
+      width,
+      height,
+      heights,
+      units: [
+        { kind: "stump", cellX: 8, cellZ: 8, rotation: Math.PI / 2 },
+        { kind: "flash", cellX: 16, cellZ: 16, rotation: 0 },
+      ],
+    } as unknown as TNTMap;
+  }
+
+  it("tilts hulls to the grade on build and re-snap, preserving aim yaw", () => {
+    const map = rampMap();
+    const group = buildUnits(map, 1);
+    expect(group.children.length).toBe(2);
+    for (const child of group.children) {
+      expect((child as THREE.Group).rotation.order).toBe("YXZ");
+    }
+    // Hull 0 faces +x (uphill): nose up = negative X rotation.
+    const uphill = group.children[0] as THREE.Group;
+    expect(uphill.rotation.x).toBeLessThan(-0.01);
+    // Hull 1 faces +z (across the fall line): rolls, barely pitches.
+    const across = group.children[1] as THREE.Group;
+    expect(Math.abs(across.rotation.z)).toBeGreaterThan(0.01);
+    // Re-snapping at a higher exaggeration steepens the tilt, keeps yaws.
+    placeUnitsGroup(group, map, 3);
+    expect(uphill.rotation.y).toBeCloseTo(Math.PI / 2, 10);
+    expect(across.rotation.y).toBeCloseTo(0, 10);
+    const rebuilt = buildUnits(map, 1);
+    expect(Math.abs(uphill.rotation.x)).toBeGreaterThan(
+      Math.abs((rebuilt.children[0] as THREE.Group).rotation.x),
+    );
+  });
+
+  it("seats flat-map units level, as before", () => {
+    const map = fakeMap();
+    const group = buildUnits(map, 2);
+    for (const child of group.children) {
+      const body = child as THREE.Group;
+      expect(body.rotation.x).toBeCloseTo(0, 12);
+      expect(body.rotation.z).toBeCloseTo(0, 12);
+    }
+  });
+});

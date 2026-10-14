@@ -1,6 +1,7 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
+import { stepBlocked, type SeatField } from "./terrain.js";
 import type { UnitKind } from "./types.js";
 import type { UnitField } from "./place.js";
 
@@ -23,7 +24,9 @@ import type { UnitField } from "./place.js";
  *   mirrored by the dry + gentle waypoint acceptance; a blocked mover "keeps
  *   turning, speed capped at half MaxVelocity", mirrored by the alignment
  *   grip (slow in turns) plus the spacing stop/slow instead of full
- *   avoidance.
+ *   avoidance — and now by the terrain clamp in `terrain.ts`: steps into
+ *   unwalkable/too-steep ground hold position while the hull keeps turning,
+ *   with patrol skipping its leg past `BLOCKED_SKIP_AFTER`.
  * - `internal/content/compile_unit.go` unit-record fields (`MaxVelocity`,
  *   `TurnRate`) become per-kind `MOVE_SPEED` plus the shared hull turn-rate
  *   caps, instead of fixed-point yard-map stamping.
@@ -49,6 +52,14 @@ export const STOP_RADIUS = 30;
 export const SLOW_RADIUS = 72;
 /** Speed multiplier while inside SLOW_RADIUS of another mover. */
 export const SLOW_SCALE = 0.35;
+/**
+ * Blocked-drive patience, seconds: a patrolling hull pinned against too-steep
+ * ground (a patrol leg can cut across a slope its waypoints straddle) skips
+ * to its next waypoint after this long instead of grinding in place forever.
+ * Ordered hulls never skip — a player-sent destination holds even at a steep
+ * edge, which reads as "can't climb that" instead of wandering off.
+ */
+export const BLOCKED_SKIP_AFTER = 2.5;
 /** Waypoints need dry land this far above the sea, matching placement. */
 const ROUTE_DRY_LIFT = 4;
 /** Waypoints tolerate relaxed-grade slopes, matching relaxed placement. */
@@ -71,6 +82,11 @@ export interface Mover {
   hull: number;
   /** Index of the waypoint currently being steered toward. */
   leg: number;
+  /**
+   * Accumulated seconds spent blocked against too-steep ground. Patrol
+   * skips its leg past `BLOCKED_SKIP_AFTER`; orders ignore it (they hold).
+   */
+  stuck?: number;
   /**
    * Player-issued move order: a smoothed world-space waypoint list with a
    * cursor. Present while the unit drives to an ordered destination;
@@ -237,8 +253,12 @@ export function spacingScale(
  * leg advances as before. Either way the hull turns toward its target at
  * the kind's turn rate, then drives forward along the hull — never
  * sideways — at per-kind speed scaled by alignment grip (slow in turns,
- * like retail's capped blocked-mover speed) and the spacing factor. Pure:
- * returns a new mover.
+ * like retail's capped blocked-mover speed) and the spacing factor. When
+ * `terrain` is provided, steps into unwalkable/too-steep ground are refused:
+ * the hull holds position and keeps turning (retail's blocked-mover
+ * behavior) instead of clipping into the hillside; a patrolling hull that
+ * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint. Pure:
+ * returns a new mover. Terrain-less stepping is byte-identical to before.
  */
 export function advanceMover(
   kind: UnitKind,
@@ -246,6 +266,7 @@ export function advanceMover(
   route: RoutePoint[],
   dt: number,
   spacing = 1,
+  terrain?: SeatField | null,
 ): Mover {
   if (!(dt > 0)) return mover;
   const order = mover.order;
@@ -259,7 +280,7 @@ export function advanceMover(
       if (at >= order.points.length) return { ...mover, order: undefined, hold: true };
       target = order.points[at]!;
     }
-    return driveToward(kind, mover, target, dt, spacing, { ...order, at });
+    return driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }).mover;
   }
   if (mover.hold) return mover;
   if (route.length < 2) return mover;
@@ -271,8 +292,11 @@ export function advanceMover(
     leg = (leg + 1) % route.length;
     target = route[leg]!;
   }
-  const next = driveToward(kind, mover, target, dt, spacing);
-  return { ...next, leg };
+  const driven = driveToward(kind, mover, target, dt, spacing, terrain);
+  if (driven.skipped) {
+    return { ...driven.mover, leg: (leg + 1) % route.length, stuck: 0 };
+  }
+  return { ...driven.mover, leg };
 }
 
 /** Turn the hull toward `target` and drive forward along it. */
@@ -282,8 +306,9 @@ function driveToward(
   target: RoutePoint,
   dt: number,
   spacing: number,
+  terrain?: SeatField | null,
   order?: MoveOrder,
-): Mover {
+): { mover: Mover; skipped: boolean } {
   const desired = yawToTarget(mover, target);
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const hull = stepAngle(mover.hull, desired, rate * dt);
@@ -291,14 +316,28 @@ function driveToward(
   // hull always faces travel, turrets aim independently while moving.
   const grip = Math.max(0.3, Math.cos(wrapAngle(desired - hull)));
   const step = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * grip * dt;
-  return {
-    x: mover.x + Math.sin(hull) * step,
-    z: mover.z + Math.cos(hull) * step,
+  const nx = mover.x + Math.sin(hull) * step;
+  const nz = mover.z + Math.cos(hull) * step;
+  const base = {
     hull,
     leg: mover.leg,
     ...(order ? { order } : {}),
     ...(mover.hold ? { hold: true as const } : {}),
   };
+  if (terrain && stepBlocked(terrain, mover.x, mover.z, nx, nz)) {
+    // Pinned: turn in place, never enter the slope. Patrol legs (no live
+    // order) skip ahead once patience runs out; orders hold their ground.
+    const stuck = (mover.stuck ?? 0) + dt;
+    if (!order && stuck >= BLOCKED_SKIP_AFTER) return { mover: { ...mover, ...base }, skipped: true };
+    return { mover: { ...mover, ...base, stuck }, skipped: false };
+  }
+  // A successful step clears accumulated blocked time — but keep the key
+  // absent (not zero) when it was never set, so terrain-less history and
+  // old snapshots compare equal.
+  if (mover.stuck === undefined) {
+    return { mover: { x: nx, z: nz, ...base }, skipped: false };
+  }
+  return { mover: { x: nx, z: nz, ...base, stuck: 0 }, skipped: false };
 }
 
 /** Advance every mover one step, with pairwise spacing from live positions. */
@@ -307,7 +346,10 @@ export function advanceMovers(
   movers: readonly Mover[],
   routes: readonly RoutePoint[][],
   dt: number,
+  terrain?: SeatField | null,
 ): Mover[] {
   const scales = movers.map((_, i) => spacingScale(i, movers));
-  return movers.map((m, i) => advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1));
+  return movers.map((m, i) =>
+    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain),
+  );
 }

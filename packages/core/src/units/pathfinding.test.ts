@@ -309,3 +309,87 @@ describe("move orders in advanceMover", () => {
     expect(next.z).toBeGreaterThan(0);
   });
 });
+
+/** Field with a steep (not wet) ridge at column `x0` below `gapEnd`. */
+function ridgedGrid(w = 24, h = 24, x0 = 12, gapEnd = 3): PathGrid {
+  const heights = new Uint8Array(w * h).fill(100);
+  for (let z = gapEnd; z < h; z++) heights[z * w + x0] = 200;
+  return { width: w, height: h, heights, seaLevel: 50 };
+}
+
+describe("steep slopes", () => {
+  it("treats steep cells as unwalkable, like water", () => {
+    const grid = ridgedGrid();
+    // The ridge column reads steep through the slope probe; its dry
+    // neighbours read steep too where they touch it (same shoreline parity
+    // as water in `place.ts`).
+    expect(isWalkable(grid, 12, 10)).toBe(false);
+    expect(isWalkable(grid, 11, 10)).toBe(false);
+    expect(isWalkable(grid, 10, 10)).toBe(true);
+    // The dry gap above the ridge stays passable.
+    expect(isWalkable(grid, 12, 1)).toBe(true);
+  });
+
+  it("detours around a steep ridge instead of climbing it", () => {
+    // Gap at the top only: the path must climb around the ridge end, the
+    // same shape as the water detour but gated on slope, not depth.
+    const grid = ridgedGrid(24, 24, 12);
+    const path = findCellPath(grid, { cellX: 4, cellZ: 20 }, { cellX: 20, cellZ: 20 });
+    expect(path).not.toBeNull();
+    for (const c of path!) {
+      expect(isWalkable(grid, c.cellX, c.cellZ)).toBe(true);
+    }
+    expect(path!.length).toBeGreaterThan(17);
+  });
+
+  it("keeps the steep detour through smoothing", () => {
+    const grid = ridgedGrid(24, 24, 12);
+    const around = [
+      { cellX: 4, cellZ: 10 },
+      { cellX: 4, cellZ: 1 },
+      { cellX: 20, cellZ: 1 },
+      { cellX: 20, cellZ: 10 },
+    ];
+    expect(hasLineOfSight(grid, around[0]!, around[3]!)).toBe(false);
+    const smoothed = smoothCellPath(grid, around);
+    expect(smoothed.length).toBeGreaterThanOrEqual(3);
+    for (const c of smoothed) expect(isWalkable(grid, c.cellX, c.cellZ)).toBe(true);
+  });
+
+  it("keeps smoothed legs off steep ground on real maps", () => {
+    // Real-map case: string-pulling must not cut back through steep cells
+    // the search paid to go around — so sample every smoothed leg densely,
+    // not just its waypoints.
+    for (const preset of ["greenreach", "archipelago", "highpass", "caldera"] as const) {
+      const map = generateMap(preset, 11);
+      const walkables: { x: number; z: number }[] = [];
+      for (let z = 8; z < map.height - 8 && walkables.length < 2; z += 3) {
+        for (let x = 8; x < map.width - 8 && walkables.length < 2; x += 3) {
+          if (!isWalkable(map, x, z)) continue;
+          const first = walkables[0];
+          if (first && Math.hypot(x - first.x, z - first.z) < 60) continue;
+          walkables.push({ x, z });
+        }
+      }
+      expect(walkables).toHaveLength(2);
+      const toWorld = (c: { x: number; z: number }): { x: number; z: number } => ({
+        x: (c.x - (map.width - 1) / 2) * 16,
+        z: (c.z - (map.height - 1) / 2) * 16,
+      });
+      const path = findWorldPath(map, toWorld(walkables[0]!), toWorld(walkables[1]!));
+      expect(path.length).toBeGreaterThan(0);
+      for (let i = 0; i < path.length - 1; i++) {
+        const a = path[i]!;
+        const b = path[i + 1]!;
+        const dist = Math.hypot(b.x - a.x, b.z - a.z);
+        const steps = Math.max(1, Math.ceil(dist / 8));
+        for (let s = 0; s <= steps; s++) {
+          const t = s / steps;
+          const cx = Math.round((a.x + (b.x - a.x) * t) / 16 + (map.width - 1) / 2);
+          const cz = Math.round((a.z + (b.z - a.z) * t) / 16 + (map.height - 1) / 2);
+          expect(isWalkable(map, cx, cz)).toBe(true);
+        }
+      }
+    }
+  });
+});

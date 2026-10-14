@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   UNIT_DEFS,
+  seatHull,
   unitAnchor,
   type PlacedUnit,
   type TNTMap,
@@ -105,6 +106,9 @@ export function getTurret(body: THREE.Group): THREE.Group | null {
  * `aimStep`); this only applies the pose.
  */
 export function setUnitAim(body: THREE.Group, hullYaw: number, turretRel: number): void {
+  // Keep the YXZ order buildUnits sets (yaw, then hull-frame pitch/roll) so
+  // aiming never flattens a grade-posed hull.
+  body.rotation.order = "YXZ";
   body.rotation.y = hullYaw;
   getTurret(body)?.rotation.set(0, turretRel, 0);
 }
@@ -116,21 +120,42 @@ export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {
   for (const unit of map.units) {
     const body = new THREE.Group();
     buildBody(unit.kind, body);
+    // YXZ so hull pitch/roll pose in the hull frame after yawing.
+    body.rotation.order = "YXZ";
     body.rotation.y = unit.rotation;
     const anchor = unitAnchor(map, unit, exaggeration);
     body.position.set(anchor.x, anchor.y + 0.5, anchor.z);
+    seatBody(body, map, unit.kind, unit.rotation, exaggeration);
     group.add(body);
   }
   return group;
+}
+
+/**
+ * Seat one body on the surface: max footprint-tap height plus grade
+ * pitch/roll for its hull yaw. Reads X/Z already on the body, writes Y and
+ * the X/Z tilt only — aim yaw is never touched.
+ */
+function seatBody(
+  body: THREE.Group,
+  map: TNTMap,
+  kind: UnitKind,
+  hull: number,
+  exaggeration: number,
+): void {
+  const seat = seatHull(map, kind, body.position.x, body.position.z, hull, exaggeration);
+  body.position.y = seat.y;
+  body.rotation.x = seat.pitch;
+  body.rotation.z = seat.roll;
 }
 
 /** Re-snap every unit to the terrain surface after the exaggeration changes. */
 export function placeUnitsGroup(group: THREE.Group, map: TNTMap, exaggeration: number): void {
   const units = group.userData.units as PlacedUnit[];
   units.forEach((unit, i) => {
-    const child = group.children[i];
+    const child = group.children[i] as THREE.Group | undefined;
     if (!child) return;
-    const anchor = unitAnchor(map, unit, exaggeration);
-    child.position.set(anchor.x, anchor.y + 0.5, anchor.z);
+    // Re-snap moves origins and grade tilt only; aim yaw is preserved.
+    seatBody(child, map, unit.kind, child.rotation.y, exaggeration);
   });
 }

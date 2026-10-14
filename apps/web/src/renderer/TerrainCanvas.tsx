@@ -10,9 +10,12 @@ import {
   featureName,
   indicesInBlast,
   planRoutes,
+  sampleHeightBilinear,
+  seatHull,
   worldSize,
   type HoverInfo,
   type TNTMap,
+  type UnitKind,
   type ViewOptions,
 } from "@scorched-3d/core";
 import {
@@ -187,12 +190,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // Impacts scar the ground (persistent capped scorch decals, re-seated on
     // exaggeration change) and fell nearby trees/rocks into stumps/rubble;
     // units themselves are never moved by blasts.
-    const groundY = (x: number, z: number): number => {
-      const ex = optsRef.current.exaggeration;
-      const cx = clampInt(Math.round(x / CELL_PIXELS + (map.width - 1) / 2), 0, map.width - 1);
-      const cz = clampInt(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0, map.height - 1);
-      return (map.heights[cz * map.width + cx] ?? 0) * ex;
-    };
+    // Bilinear surface sampling (continuous across cell edges, so hulls,
+    // scorch, and probes never pop by whole height steps mid-cell) tracking
+    // the live exaggeration slider.
+    const groundY = (x: number, z: number): number =>
+      sampleHeightBilinear(map, x, z) * optsRef.current.exaggeration;
+    const seat = (x: number, z: number, hull: number, kind: UnitKind) =>
+      seatHull(map, kind, x, z, hull, optsRef.current.exaggeration);
     const fellFeatures = (x: number, z: number, radius: number): void => {
       const dummy = new THREE.Object3D();
       const felledTrees = trees.userData.felled as Set<number>;
@@ -219,6 +223,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // hulls so the kick restore never snaps a driving unit backward.
     const movement = new UnitMovement(units, planRoutes(map, map.units, map.seed), {
       groundY,
+      seat,
       onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
     }, map);
     combat.setExternalHull(true);
