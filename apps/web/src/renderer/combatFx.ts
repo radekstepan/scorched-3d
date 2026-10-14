@@ -61,8 +61,8 @@ import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
  *   particles and a short-lived pooled light, echoing nanolathe's
  *   explosion-sprite + art-light pairing. Every impact also scars the
  *   ground with a persistent scorch decal (capped separately in core) and
- *   fells nearby trees/rocks into stumps/rubble via the CombatEnv hooks —
- *   units themselves are untouched.
+ *   damages nearby trees/rocks through the CombatEnv blast hook (blast
+ *   core flattens, fringe ignites and chips; units themselves are untouched).
  */
 
 interface Shot {
@@ -132,12 +132,15 @@ export function impactPoint(
   };
 }
 
-/** Environment hooks for persistent destruction: scorch seating + felling. */
+/** Environment hooks for persistent destruction: scorch seating + blasts. */
 export interface CombatEnv {
   /** Terrain surface height at world (x, z), for seating scorch decals. */
   groundY: (x: number, z: number) => number;
-  /** Fell trees/rocks within `radius` of world (x, z). Units are untouched. */
-  fellFeatures: (x: number, z: number, radius: number) => void;
+  /**
+   * Graduated blast damage to trees/rocks within `radius` of world (x, z):
+   * core flattens, fringe ignites/chips. Units are untouched.
+   */
+  blastFeatures: (x: number, z: number, radius: number) => void;
 }
 
 export class CombatFx {
@@ -243,6 +246,22 @@ export class CombatFx {
       recoil.base.x += dx;
       recoil.base.z += dz;
     }
+  }
+
+  /**
+   * Kick the dimmest pooled light (shared with muzzle/explosion pops): fire
+   * ignition glows reuse the pool instead of owning lights, so the 2-light
+   * budget holds no matter how many trees burn.
+   */
+  glowAt(at: { x: number; y: number; z: number }, color: number, peak = 1400): void {
+    let light = this.lights[0];
+    if (!light) return;
+    for (const candidate of this.lights) {
+      if (candidate.intensity < light.intensity) light = candidate;
+    }
+    light.color.setHex(color);
+    light.position.set(at.x, at.y, at.z);
+    light.intensity = Math.max(light.intensity, peak);
   }
 
   update(dt: number): void {
@@ -555,10 +574,10 @@ export class CombatFx {
   }
 
   /**
-   * Persistent ground scar + nearby feature felling for an impact. Decals
+   * Persistent ground scar + graduated blast damage for an impact. Decals
    * reuse one shared instanced disc (no per-mark geometry/material); only
    * instance matrices/colors are rewritten, and only on impact — never per
-   * frame. Units are never touched: a tree felled under a unit leaves the
+   * frame. Units are never touched: a tree flattened under a unit leaves the
    * unit where it stands.
    */
   private scarGround(at: THREE.Vector3, kind: UnitKind): void {
@@ -570,7 +589,7 @@ export class CombatFx {
       intensity: shape.intensity,
     });
     this.syncScorch(at.y);
-    this.env?.fellFeatures(at.x, at.z, BLAST_RADIUS[kind]);
+    this.env?.blastFeatures(at.x, at.z, BLAST_RADIUS[kind]);
   }
 
   /** Rewrite scorch instance matrices/colors from the mark list. */
@@ -584,9 +603,10 @@ export class CombatFx {
       dummy.scale.setScalar(Math.max(mark.radius, 0.5));
       dummy.updateMatrix();
       this.scorchMesh.setMatrixAt(i, dummy.matrix);
-      // Darker with intensity: char-black core lightening toward ash.
-      const tone = 0.16 - mark.intensity * 0.12;
-      this.scorchTint.setRGB(tone, tone * 0.82, tone * 0.68);
+      // Char-black core warming toward ember brown (burnt ground, not mud:
+      // red > green > blue keeps the disc reading as scorch at demo scale).
+      const tone = 0.17 - mark.intensity * 0.12;
+      this.scorchTint.setRGB(tone, tone * 0.72, tone * 0.58);
       this.scorchMesh.setColorAt(i, this.scorchTint);
     }
     this.scorchMesh.count = this.scorchMarks.length;

@@ -54,6 +54,244 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
 }
 
 /**
+ * Graduated collateral damage: trees burn through timed states instead of
+ * popping straight to stumps, and rocks chip through damage levels.
+ *
+ * Tree pipeline: intact → burning (flame + smoke, timed) → smouldering
+ * (smoke only, charred crown, timed) → terminal: toppled (knocked on its
+ * side), stump (blast-shorn), or snag (charred standing trunk). Terminal
+ * states persist for the session like scorch marks. A blast flattens trees
+ * near its core (topple/stump/snag immediately) and ignites the fringe;
+ * fringe fires can spread a short distance to intact neighbours before they
+ * burn out, so damage reads as a graduated burn scar, not a binary hole.
+ *
+ * Rock pipeline: intact(0) → chipped(1) → cracked/displaced(2) →
+ * buried rubble(3). Blasts near the core deal two levels, the fringe one.
+ *
+ * All state lives in a caller-owned DamageField indexed by feature id, so
+ * exaggeration re-snaps (which only re-seat Y poses) trivially preserve it.
+ * Flame/smoke meshes are transient views derived from the field each frame;
+ * the field itself is never cleared by clearTransients — only by regen.
+ */
+
+/** Tree damage state; terminal states (toppled/stump/snag) persist. */
+export type TreeDamage = "intact" | "burning" | "smouldering" | "toppled" | "stump" | "snag";
+
+/** Rock damage level: intact → chipped → cracked/displaced → buried. */
+export type RockDamage = 0 | 1 | 2 | 3;
+
+/** Seconds a tree burns with open flame before collapsing to smoulder. */
+export const BURN_DURATION = 6;
+/** Seconds a tree smoulders before resolving to a terminal state. */
+export const SMOULDER_DURATION = 8;
+/** Perf cap: concurrent burning trees (flame instances + light kicks). */
+export const MAX_FIRES = 24;
+/** Perf cap: concurrent smoke puffs (burning + smouldering, view only). */
+export const MAX_SMOKE = 48;
+/** Fringe fires spread only to intact neighbours within this world distance. */
+export const FIRE_SPREAD_RADIUS = 70;
+/** Per-second ignition probability per eligible burning→intact pair. */
+export const SPREAD_RATE = 0.15;
+/** Blast fraction inside which trees flatten instantly instead of igniting. */
+export const TOPPLE_FRACTION = 0.45;
+/** A burning tree must age this long before it can spread fire. */
+export const SPREAD_MIN_AGE = 2;
+
+/** Caller-owned graduated damage state, indexed by feature id. */
+export interface DamageField {
+  trees: TreeDamage[];
+  /** Seconds spent in the current timed state (burning/smouldering). */
+  treeAge: number[];
+  rocks: RockDamage[];
+}
+
+/** Fresh all-intact damage state for `treeCount` trees and `rockCount` rocks. */
+export function createDamageField(treeCount: number, rockCount: number): DamageField {
+  return {
+    trees: Array<TreeDamage>(Math.max(treeCount, 0)).fill("intact"),
+    treeAge: new Array<number>(Math.max(treeCount, 0)).fill(0),
+    rocks: Array<RockDamage>(Math.max(rockCount, 0)).fill(0),
+  };
+}
+
+/** Currently burning tree count (bounded by MAX_FIRES via igniteTree). */
+export function burningCount(field: DamageField): number {
+  let n = 0;
+  for (const s of field.trees) if (s === "burning") n++;
+  return n;
+}
+
+/** Terminal tree states persist: never transitioned by ticks or blasts. */
+export function isTerminalTree(state: TreeDamage): boolean {
+  return state === "toppled" || state === "stump" || state === "snag";
+}
+
+/** Roll a terminal successor: blast-flattened or burnt-out. */
+export function resolveTerminal(rng: () => number): "toppled" | "stump" | "snag" {
+  const r = rng();
+  if (r < 0.4) return "toppled";
+  if (r < 0.75) return "stump";
+  return "snag";
+}
+
+/**
+ * Ignite an intact tree. When at the MAX_FIRES cap the oldest burning tree
+ * is fast-forwarded to smouldering (eviction) so new fringe ignitions still
+ * read while the flame-instance budget holds. Returns true when lit.
+ */
+export function igniteTree(field: DamageField, index: number): boolean {
+  if (index < 0 || index >= field.trees.length) return false;
+  if (field.trees[index] !== "intact") return false;
+  if (burningCount(field) >= MAX_FIRES) {
+    // Evict the longest-burning tree into smoulder; state (not visuals).
+    let oldest = -1;
+    let oldestAge = -1;
+    for (let i = 0; i < field.trees.length; i++) {
+      if (field.trees[i] === "burning" && field.treeAge[i]! > oldestAge) {
+        oldestAge = field.treeAge[i]!;
+        oldest = i;
+      }
+    }
+    if (oldest < 0) return false;
+    field.trees[oldest] = "smouldering";
+    field.treeAge[oldest] = 0;
+  }
+  field.trees[index] = "burning";
+  field.treeAge[index] = 0;
+  return true;
+}
+
+export interface TreeBlastResult {
+  /** Indices flattened instantly (terminal states). */
+  flattened: number[];
+  /** Indices newly ignited (fringe + spread seeds). */
+  ignited: number[];
+}
+
+/**
+ * Apply a blast to trees: inside TOPPLE_FRACTION of the radius trees
+ * flatten immediately to a terminal state; the fringe ignites (cap-aware).
+ * Terminal trees are never re-touched. Mutates `field` in place; the
+ * renderer re-poses only the returned indices (no full-buffer rewrite).
+ */
+export function applyBlastToTrees(
+  field: DamageField,
+  points: readonly BlastPoint[],
+  cx: number,
+  cz: number,
+  radius: number,
+  rng: () => number,
+  cap: number = MAX_FELLED_PER_BLAST,
+): TreeBlastResult {
+  const result: TreeBlastResult = { flattened: [], ignited: [] };
+  for (const i of indicesInBlast(points, cx, cz, radius, cap)) {
+    if (i >= field.trees.length) continue;
+    if (field.trees[i] !== "intact" && field.trees[i] !== "burning") continue;
+    const p = points[i]!;
+    const dist = Math.hypot(p.x - cx, p.z - cz);
+    if (dist <= radius * TOPPLE_FRACTION) {
+      field.trees[i] = resolveTerminal(rng);
+      field.treeAge[i] = 0;
+      result.flattened.push(i);
+    } else if (field.trees[i] === "intact") {
+      if (igniteTree(field, i)) result.ignited.push(i);
+    }
+  }
+  return result;
+}
+
+/**
+ * Apply a blast to rocks: the inner half-radius deals two damage levels
+ * (chip → buried), the fringe one. Clamped at buried(3). Mutates in place.
+ */
+export function applyBlastToRocks(
+  field: DamageField,
+  points: readonly BlastPoint[],
+  cx: number,
+  cz: number,
+  radius: number,
+  cap: number = MAX_FELLED_PER_BLAST,
+): number[] {
+  const changed: number[] = [];
+  for (const i of indicesInBlast(points, cx, cz, radius, cap)) {
+    if (i >= field.rocks.length) continue;
+    const level = field.rocks[i]!;
+    if (level >= 3) continue;
+    const p = points[i]!;
+    const dist = Math.hypot(p.x - cx, p.z - cz);
+    const next = Math.min(3, level + (dist <= radius * 0.5 ? 2 : 1)) as RockDamage;
+    if (next !== level) {
+      field.rocks[i] = next;
+      changed.push(i);
+    }
+  }
+  return changed;
+}
+
+export interface DamageEvents {
+  /** Newly ignited by spread this tick (blast ignitions return separately). */
+  ignited: number[];
+  /** Burning → smouldering transitions. */
+  enteredSmoulder: number[];
+  /** Smouldering → terminal resolutions. */
+  resolved: { index: number; terminal: "toppled" | "stump" | "snag" }[];
+}
+
+/**
+ * Advance timed damage states by `dt` seconds. Burning trees age into
+ * smoulder; smouldering trees resolve to a rolled terminal state; burning
+ * trees older than SPREAD_MIN_AGE may ignite intact neighbours inside
+ * FIRE_SPREAD_RADIUS at SPREAD_RATE per pair per second (cap-aware, so
+ * spread never exceeds the flame budget). Mutates `field` in place.
+ */
+export function tickDamage(
+  field: DamageField,
+  treePoints: readonly BlastPoint[],
+  dt: number,
+  rng: () => number,
+): DamageEvents {
+  const events: DamageEvents = { ignited: [], enteredSmoulder: [], resolved: [] };
+  if (!(dt > 0)) return events;
+  for (let i = 0; i < field.trees.length; i++) {
+    const state = field.trees[i]!;
+    if (state === "burning") {
+      field.treeAge[i] = field.treeAge[i]! + dt;
+      if (field.treeAge[i]! >= BURN_DURATION) {
+        field.trees[i] = "smouldering";
+        field.treeAge[i] = 0;
+        events.enteredSmoulder.push(i);
+      }
+    } else if (state === "smouldering") {
+      field.treeAge[i] = field.treeAge[i]! + dt;
+      if (field.treeAge[i]! >= SMOULDER_DURATION) {
+        const terminal = resolveTerminal(rng);
+        field.trees[i] = terminal;
+        field.treeAge[i] = 0;
+        events.resolved.push({ index: i, terminal });
+      }
+    }
+  }
+  // Fringe spread: old-enough fires seed intact neighbours. Distance first
+  // (cheap reject), rng only on candidates, so quiet ticks cost no entropy.
+  const r2 = FIRE_SPREAD_RADIUS * FIRE_SPREAD_RADIUS;
+  const p = Math.min(SPREAD_RATE * dt, 1);
+  for (let i = 0; i < field.trees.length; i++) {
+    if (field.trees[i] !== "burning" || field.treeAge[i]! < SPREAD_MIN_AGE) continue;
+    const src = treePoints[i];
+    if (!src) continue;
+    for (let j = 0; j < field.trees.length; j++) {
+      if (field.trees[j] !== "intact") continue;
+      const dst = treePoints[j];
+      if (!dst) continue;
+      const dx = dst.x - src.x;
+      const dz = dst.z - src.z;
+      if (dx * dx + dz * dz > r2) continue;
+      if (rng() < p && igniteTree(field, j)) events.ignited.push(j);
+    }
+  }
+  return events;
+}
+/**
  * Append a scorch mark, evicting the oldest when at cap. Pure: returns a new
  * array, never mutates the input. Marks persist for the session (no decay).
  */

@@ -309,7 +309,7 @@ describe("CombatFx destruction", () => {
       },
       env: {
         groundY: () => height,
-        fellFeatures: (x: number, z: number, radius: number) => {
+        blastFeatures: (x: number, z: number, radius: number) => {
           calls.push({ x, z, radius });
         },
       },
@@ -329,7 +329,7 @@ describe("CombatFx destruction", () => {
     return scene.children.some((c) => (c as THREE.InstancedMesh).isInstancedMesh);
   }
 
-  it("scars the ground and fells features on impact", () => {
+  it("scars the ground and damages features on impact", () => {
     const scene = new THREE.Scene();
     const units = makeUnits();
     const { calls, env } = makeEnv();
@@ -355,6 +355,19 @@ describe("CombatFx destruction", () => {
     fx.clearTransients();
     expect(fx.scorchCount).toBe(kept);
     expect(fx.activeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("kicks the shared light pool for fire glow without adding lights", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const { env } = makeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), env);
+    const before = scene.children.length;
+    fx.glowAt({ x: 10, y: 120, z: 30 }, 0xff7a22);
+    // Same 2 pooled lights, one now lit; no new objects for fire glow.
+    expect(scene.children.length).toBe(before);
+    fx.update(0.05);
     fx.dispose();
   });
 

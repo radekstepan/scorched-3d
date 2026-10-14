@@ -27,7 +27,9 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
 | `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission). |
-| `packages/core/src/units/destruction.ts` | Blast scorch + tree/rock felling queries. |
+| `packages/core/src/units/destruction.ts` | Blast scorch + graduated collateral damage (tree burn states, rock levels, spread). |
+| `apps/web/src/renderer/features.ts` | Tree/rock instanced posing per damage state, re-snap preserving. |
+| `apps/web/src/renderer/fireFx.ts` | Transient instanced flame/smoke views over the damage field. |
 | `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers. |
 | `apps/web/src/renderer/selection.ts` | Click/box picking helpers for RTS selection. |
 | `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options, placed units. |
