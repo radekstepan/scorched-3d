@@ -16,12 +16,14 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-sometimes the models clip into terrain as they move to a higher/lower elevation. They should not be moving "flat", but based on a terrain up or down. Some areas will be too steep for them. Make sure this is considered in the pathfinding.
+Tanks are driving sideaways...
 
-Sometimes 2 units next to each other appear stuck and won't move. Is it because they are in a brown "hole" caused by explosions?
+It should be harder driving through rough terrain, trees etc.
 
-Make sure the physics of a cannon barel shooting a projectile "makes sense".
+Show damage to models, like charring, smoke here and there etc.
 
-The damage to terrain seems "odd". Shouldn't there be collateal damage where the trees are on fire, smouldering, partially destroyed, on their side etc?
+Improve the trees on fire, the fire looks like little cones...
 
-When I select a unit somehow it's in this "brown mud" which I am not suer what is, but it's hard to see the "outline" when I click on the unit.
+The brown blotches on the ground are weird. Is that from projectiles exploding? Make them more "believable. And you can "flatten the terrain a tiny bit. Right now it looks like mud.
+
+Some of the units are scaling too high of a terrain, make the physics look more believable. And start with a smaller height scale.
