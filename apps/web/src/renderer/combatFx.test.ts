@@ -149,7 +149,8 @@ describe("CombatFx", () => {
     fx.dispose();
   });
 
-  it("keeps turrets inside their traverse and turns hulls to face targets", () => {    const scene = new THREE.Scene();
+  it("keeps turrets inside their traverse and turns hulls to face targets", () => {
+    const scene = new THREE.Scene();
     const units = makeUnits();
     const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
     const fx = new CombatFx(scene, units, mulberry32(7));
@@ -172,6 +173,59 @@ describe("CombatFx", () => {
       (i) => Math.abs(fx.aimState(i)!.hull - initial[i]!) > 1e-6,
     );
     expect(moved).toBe(true);
+    fx.dispose();
+  });
+
+  it("leaves hulls to patrol movement in external-hull mode while turrets fire", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.setExternalHull(true);
+    const hulls = units.children.map((c) => (c as THREE.Group).rotation.y);
+    for (let n = 0; n < 600; n++) {
+      fx.update(1 / 60);
+      units.children.forEach((child, i) => {
+        const body = child as THREE.Group;
+        // Patrol owns the hull: combat must never yaw it.
+        expect(body.rotation.y).toBeCloseTo(hulls[i]!, 10);
+        const turret = getTurret(body);
+        const limit = TURRET_LIMIT[kinds[i]!]!;
+        if (turret) expect(Math.abs(turret.rotation.y)).toBeLessThanOrEqual(limit + 1e-9);
+      });
+    }
+    // Turrets still slewed onto targets independently and fired on the move.
+    expect(fx.totalFired).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("shifts recoil anchors so movement never fights the kick", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const anchors = units.children.map((c) => (c as THREE.Group).position.clone());
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    // Step to the first aimed shot (a single active recoil kick).
+    let fired = false;
+    for (let n = 0; n < 2000 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    // Patrol drives every hull 10 units east; anchors follow.
+    for (let i = 0; i < units.children.length; i++) fx.shiftRecoilBase(i, 10, 0);
+    fx.clearTransients();
+    let shifted = 0;
+    units.children.forEach((child, i) => {
+      const body = child as THREE.Group;
+      const dx = body.position.x - anchors[i]!.x;
+      expect(dx === 0 || Math.abs(dx - 10) < 1e-9).toBe(true);
+      expect(body.position.y).toBeCloseTo(anchors[i]!.y, 9);
+      expect(body.position.z).toBeCloseTo(anchors[i]!.z, 9);
+      if (Math.abs(dx - 10) < 1e-9) shifted += 1;
+    });
+    // Exactly the firing hull rode the shifted anchor home.
+    expect(shifted).toBe(1);
     fx.dispose();
   });
 });

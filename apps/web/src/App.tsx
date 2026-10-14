@@ -187,7 +187,7 @@ export default function App() {
             })}
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-            Static TA roster, re-placed on every regen.
+            Patrolling TA roster, re-routed on every regen.
           </p>
         </div>
       </aside>

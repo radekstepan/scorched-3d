@@ -9,6 +9,7 @@ import {
   composeHeight,
   featureName,
   indicesInBlast,
+  planRoutes,
   worldSize,
   type HoverInfo,
   type TNTMap,
@@ -22,8 +23,9 @@ import {
   waterFragment,
   waterVertex,
 } from "./shaders";
-import { buildUnits, placeUnitsGroup } from "./units";
+import { buildUnits } from "./units";
 import { CombatFx } from "./combatFx";
+import { UnitMovement } from "./movement";
 import {
   PAN_SPEED_FACTOR,
   applyPan,
@@ -195,6 +197,15 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
       }
     };
     const combat = new CombatFx(scene, units, Math.random, { groundY, fellFeatures });
+    // Patrol movement: each unit loops seeded dry/gentle waypoints at
+    // per-kind speed with the hull facing travel; combat keeps the turrets
+    // (external hulls) so units fire on the move. Recoil anchors follow the
+    // hulls so the kick restore never snaps a driving unit backward.
+    const movement = new UnitMovement(units, planRoutes(map, map.units, map.seed), {
+      groundY,
+      onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
+    });
+    combat.setExternalHull(true);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -269,10 +280,12 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         geometry.computeVertexNormals();
         water.position.y = map.seaLevel * lastExag + 0.6;
         placeFeatures(trees, rocks, map, lastExag);
-        placeUnitsGroup(units, map, lastExag);
         // In-flight endpoints were sampled at the old heights; drop them so
-        // tracers never chase stale air. Scorch persists — just re-seat it.
+        // tracers never chase stale air, then re-seat the patrol hulls (live
+        // X/Z, fresh Y) so recoil restores can't snap them back. Scorch
+        // persists — just re-seat it.
         combat.clearTransients();
+        movement.resnap();
         combat.reseatScorch();
       }
 
@@ -304,6 +317,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
       controls.update();
 
+      movement.update(dt);
       combat.update(dt);
 
       if (hovering) {
@@ -323,6 +337,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      movement.dispose();
       combat.dispose();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);

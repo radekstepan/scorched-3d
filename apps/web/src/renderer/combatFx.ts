@@ -4,6 +4,7 @@ import {
   aimStep,
   BLAST_RADIUS,
   canFire,
+  clampTurret,
   flightDuration,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
@@ -15,6 +16,9 @@ import {
   pickSkirmishPair,
   projectilePosition,
   scorchForKind,
+  stepAngle,
+  TURRET_SLEW_RATE,
+  wrapAngle,
   yawToTarget,
   WEAPON_PROFILES,
   type PlacedUnit,
@@ -161,6 +165,13 @@ export class CombatFx {
   private scorchTint = new THREE.Color();
   private env: CombatEnv | null;
   private disposed = false;
+  /**
+   * When true, hulls are driven externally (patrol movement faces travel) and
+   * combat only slews turrets relative to the live hull — firing on the move
+   * once the turret line is aimed. When false (default, headless tests), the
+   * hull does the gross turn via core `aimStep` as before.
+   */
+  private externalHull = false;
 
   constructor(
     scene: THREE.Scene,
@@ -208,6 +219,20 @@ export class CombatFx {
   /** Persistent scorch decal count (bounded by MAX_SCORCH_MARKS). */
   get scorchCount(): number {
     return this.scorchMarks.length;
+  }
+
+  /** Drive hulls externally (patrol movement) or let combat turn them. */
+  setExternalHull(driven: boolean): void {
+    this.externalHull = driven;
+  }
+
+  /** Nudge a stored recoil anchor so patrol motion never fights the kick. */
+  shiftRecoilBase(index: number, dx: number, dz: number): void {
+    const recoil = this.recoils.get(index);
+    if (recoil) {
+      recoil.base.x += dx;
+      recoil.base.z += dz;
+    }
   }
 
   update(dt: number): void {
@@ -292,6 +317,14 @@ export class CombatFx {
       this.aim.push({ hull: bodies[i]?.rotation.y ?? 0, turret: 0 });
     }
     if (this.aim.length > bodies.length) this.aim.length = bodies.length;
+    if (this.externalHull) {
+      // Hulls face travel (patrol-owned): re-sync every frame so the turret
+      // always slews relative to the live hull, never a stale traverse pose.
+      for (let i = 0; i < bodies.length; i++) {
+        const pose = this.aim[i];
+        if (pose) pose.hull = bodies[i]?.rotation.y ?? pose.hull;
+      }
+    }
   }
 
   /** Bearing from one unit body to another on the X/Z plane. */
@@ -305,7 +338,9 @@ export class CombatFx {
   /**
    * Slew every pending attacker toward its target at limited hull/turret
    * rates and apply the pose. Hulls do the gross turn, turrets the clamped
-   * refine — so traverse motion is visible even before any shot fires.
+   * refine — so traverse motion is visible even before any shot fires. In
+   * external-hull mode (patrol movement) the hull stays on its travel
+   * heading and only the turret slews the clamped remainder.
    */
   private slewPending(dt: number): void {
     for (const [attacker, target] of this.pending) {
@@ -318,19 +353,26 @@ export class CombatFx {
       }
       const pose = this.aim[attacker];
       if (!pose) continue;
-      const next = aimStep(kind, pose.hull, pose.turret, want, dt);
-      pose.hull = next.hull;
-      pose.turret = next.turret;
-      setUnitAim(body, next.hull, next.turret);
+      if (this.externalHull) {
+        const slewRate = TURRET_SLEW_RATE[kind] ?? 2.4;
+        const wantRel = clampTurret(kind, wrapAngle(want - pose.hull));
+        pose.turret = stepAngle(pose.turret, wantRel, slewRate * dt);
+      } else {
+        const next = aimStep(kind, pose.hull, pose.turret, want, dt);
+        pose.hull = next.hull;
+        pose.turret = next.turret;
+      }
+      setUnitAim(body, pose.hull, pose.turret);
     }
   }
 
   /**
    * Pick a skirmish pair and fire only when the attacker is aimed: hull
-   * faced at the target, turret inside its traverse, muzzle down the turret
-   * line. Returns true when a shot left (or the roster/caps made firing
-   * impossible, to keep the ambient schedule); false defers while the
-   * attacker is still traversing.
+   * faced at the target (or, in external-hull mode, on its patrol heading
+   * with the turret slewed onto the target), turret inside its traverse,
+   * muzzle down the turret line. Returns true when a shot left (or the
+   * roster/caps made firing impossible, to keep the ambient schedule); false
+   * defers while the attacker is still traversing.
    */
   private tryFire(): boolean {
     const count = this.units.children.length;
