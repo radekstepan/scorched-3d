@@ -1,5 +1,7 @@
 /** TNT-shaped terrain (Total Annihilation map format) used by the Scorched 3D map pipeline. */
 
+import type { PlacedUnit } from "../units/types.js";
+
 export const TNT_VERSION = 0x2000;
 export const CELL_PIXELS = 16;
 export const TILE_PIXELS = 32;
@@ -75,6 +77,8 @@ export interface TNTMap {
   tileKinds: TileKind[];
   featureTable: FeatureRecord[];
   palette: Uint8Array;
+  /** Static demo units, re-placed deterministically on every generation. */
+  units: PlacedUnit[];
   minimap: {
     width: number;
     height: number;

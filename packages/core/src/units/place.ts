@@ -1,0 +1,137 @@
+import { CELL_PIXELS, FEATURE_EMPTY } from "../terrain/types.js";
+import { mulberry32 } from "../terrain/noise.js";
+import { UNIT_KINDS, type PlacedUnit, type UnitKind } from "./types.js";
+
+/** Demo roster size: a couple of units per side, two sides. */
+export const UNIT_COUNT = 6;
+/** Keep units away from the map edge so they never clip the skirt. */
+const MARGIN = 8;
+/** Strict placement wants open, flat, unoccupied ground. */
+const STRICT_SLOPE = 12;
+const STRICT_SEPARATION = 18;
+/** Relaxed pass still guarantees dry land, but tolerates rougher ground. */
+const RELAXED_SLOPE = 24;
+const RELAXED_SEPARATION = 10;
+
+/** Minimal heightfield view shared by generateMap and the tests. */
+export interface UnitField {
+  heights: Uint8Array;
+  features: Uint16Array;
+  width: number;
+  height: number;
+  seaLevel: number;
+}
+
+/**
+ * Deterministically place `count` units on dry land. The first four slots
+ * cover every unit kind (shuffled), the rest are drawn at random, so every
+ * regen shows a readable mix. A strict pass searches for flat, separated,
+ * unoccupied cells; a relaxed pass loosens slope/separation; a scoring
+ * fallback always returns a cell so the roster is never short.
+ */
+export function placeUnits(field: UnitField, seed: number, count = UNIT_COUNT): PlacedUnit[] {
+  const rng = mulberry32((seed ^ 0x9e37) >>> 0);
+  const roster = buildRoster(rng, count);
+  const placed: PlacedUnit[] = [];
+  for (const kind of roster) {
+    placed.push(dropUnit(field, rng, kind, placed));
+  }
+  return placed;
+}
+
+function buildRoster(rng: () => number, count: number): UnitKind[] {
+  const shuffled = [...UNIT_KINDS];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  const roster: UnitKind[] = shuffled.slice(0, Math.min(count, shuffled.length));
+  while (roster.length < count) {
+    roster.push(shuffled[Math.floor(rng() * shuffled.length)] ?? "flash");
+  }
+  return roster;
+}
+
+function dropUnit(
+  field: UnitField,
+  rng: () => number,
+  kind: UnitKind,
+  placed: PlacedUnit[],
+): PlacedUnit {
+  const strict = tryDrop(field, rng, kind, placed, 220, STRICT_SLOPE, STRICT_SEPARATION, true);
+  if (strict) return strict;
+  const relaxed = tryDrop(field, rng, kind, placed, 220, RELAXED_SLOPE, RELAXED_SEPARATION, false);
+  if (relaxed) return relaxed;
+  return fallbackDrop(field, rng, kind);
+}
+
+function tryDrop(
+  field: UnitField,
+  rng: () => number,
+  kind: UnitKind,
+  placed: PlacedUnit[],
+  attempts: number,
+  maxSlope: number,
+  minSeparation: number,
+  requireEmpty: boolean,
+): PlacedUnit | null {
+  for (let n = 0; n < attempts; n++) {
+    const cellX = MARGIN + Math.floor(rng() * (field.width - MARGIN * 2));
+    const cellZ = MARGIN + Math.floor(rng() * (field.height - MARGIN * 2));
+    if (!isDry(field, cellX, cellZ)) continue;
+    if (cellSlope(field, cellX, cellZ) > maxSlope) continue;
+    if (requireEmpty && field.features[cellZ * field.width + cellX] !== FEATURE_EMPTY) continue;
+    if (!isSeparated(cellX, cellZ, placed, minSeparation)) continue;
+    return { kind, cellX, cellZ, rotation: rng() * Math.PI * 2 };
+  }
+  return null;
+}
+
+/** Last resort: the highest dry cell sampled, preferring unoccupied ground. */
+function fallbackDrop(field: UnitField, rng: () => number, kind: UnitKind): PlacedUnit {
+  let best = { cellX: field.width >> 1, cellZ: field.height >> 1, score: -Infinity };
+  for (let n = 0; n < 300; n++) {
+    const cellX = MARGIN + Math.floor(rng() * (field.width - MARGIN * 2));
+    const cellZ = MARGIN + Math.floor(rng() * (field.height - MARGIN * 2));
+    const h = field.heights[cellZ * field.width + cellX] ?? 0;
+    if (h <= field.seaLevel) continue;
+    const empty = field.features[cellZ * field.width + cellX] === FEATURE_EMPTY;
+    const score = h - cellSlope(field, cellX, cellZ) * 2 + (empty ? 1000 : 0);
+    if (score > best.score) best = { cellX, cellZ, score };
+  }
+  return { kind, cellX: best.cellX, cellZ: best.cellZ, rotation: rng() * Math.PI * 2 };
+}
+
+function isDry(field: UnitField, x: number, z: number): boolean {
+  return (field.heights[z * field.width + x] ?? 0) > field.seaLevel + 4;
+}
+
+function isSeparated(x: number, z: number, placed: PlacedUnit[], min: number): boolean {
+  return placed.every((u) => Math.hypot(u.cellX - x, u.cellZ - z) >= min);
+}
+
+function cellSlope(field: UnitField, x: number, z: number): number {
+  const h00 = field.heights[z * field.width + x] ?? 0;
+  const h10 = field.heights[z * field.width + Math.min(field.width - 1, x + 1)] ?? 0;
+  const h01 = field.heights[Math.min(field.height - 1, z + 1) * field.width + x] ?? 0;
+  return Math.max(h00, h10, h01) - Math.min(h00, h10, h01);
+}
+
+export interface WorldAnchor {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * World-space anchor for a unit: grid-to-world mapping from the terrain mesh
+ * (Y-up, +Z south), with Y snapped to the corner height times the current
+ * height exaggeration. The renderer re-evaluates this when the slider moves.
+ */
+export function unitAnchor(field: UnitField, unit: PlacedUnit, exaggeration: number): WorldAnchor {
+  return {
+    x: (unit.cellX - (field.width - 1) / 2) * CELL_PIXELS,
+    y: (field.heights[unit.cellZ * field.width + unit.cellX] ?? 0) * exaggeration,
+    z: (unit.cellZ - (field.height - 1) / 2) * CELL_PIXELS,
+  };
+}

@@ -21,6 +21,7 @@ import {
   waterFragment,
   waterVertex,
 } from "./shaders";
+import { buildUnits, placeUnitsGroup } from "./units";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -143,7 +144,8 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
     const trees = buildTrees(map, options.exaggeration);
     const rocks = buildRocks(map, options.exaggeration);
-    scene.add(trees, rocks);
+    const units = buildUnits(map, options.exaggeration);
+    scene.add(trees, rocks, units);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -188,6 +190,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         geometry.computeVertexNormals();
         water.position.y = map.seaLevel * lastExag + 0.6;
         placeFeatures(trees, rocks, map, lastExag);
+        placeUnitsGroup(units, map, lastExag);
       }
 
       terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
@@ -237,6 +240,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
       heightTex.dispose();
       disposeObject(trees);
       disposeObject(rocks);
+      disposeObject(units);
       sky.geometry.dispose();
       (sky.material as THREE.Material).dispose();
       wrap.removeChild(renderer.domElement);

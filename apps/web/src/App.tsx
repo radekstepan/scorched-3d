@@ -4,6 +4,8 @@ import {
   CELL_PIXELS,
   PRESET_META,
   TILE_PIXELS,
+  UNIT_DEFS,
+  UNIT_KINDS,
   composeMinimap,
   generateMap,
   type HoverInfo,
@@ -34,7 +36,16 @@ export default function App() {
     const canvas = document.createElement("canvas");
     canvas.width = img.width;
     canvas.height = img.height;
-    canvas.getContext("2d")!.putImageData(img, 0, 0);
+    const ctx = canvas.getContext("2d")!;
+    ctx.putImageData(img, 0, 0);
+    for (const u of map.units) {
+      const px = (u.cellX / (map.width - 1)) * img.width;
+      const py = (u.cellZ / (map.height - 1)) * img.height;
+      ctx.fillStyle = "#0b0f14";
+      ctx.fillRect(Math.round(px) - 3, Math.round(py) - 3, 7, 7);
+      ctx.fillStyle = `#${UNIT_DEFS[u.kind].color.toString(16).padStart(6, "0")}`;
+      ctx.fillRect(Math.round(px) - 2, Math.round(py) - 2, 5, 5);
+    }
     return canvas.toDataURL();
   }, [map]);
 
@@ -153,6 +164,31 @@ export default function App() {
           ) : (
             <p className="mt-2 text-[11px] text-slate-500">Hover the mesh to sample a plot cell.</p>
           )}
+        </div>
+
+        <div className="hud-panel mt-3 p-3">
+          <Label>Units</Label>
+          <div className="mt-2 space-y-1.5">
+            {UNIT_KINDS.map((k) => {
+              const def = UNIT_DEFS[k];
+              const count = map.units.filter((u) => u.kind === k).length;
+              return (
+                <div key={k} className="flex items-center gap-2 text-[11px]">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-[2px] border border-black/60"
+                    style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
+                  />
+                  <span className="text-slate-200">{def.name}</span>
+                  <span className="ml-auto font-mono text-[10px] text-slate-400">
+                    {def.unitName} ×{count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+            Static TA roster, re-placed on every regen.
+          </p>
         </div>
       </aside>
 

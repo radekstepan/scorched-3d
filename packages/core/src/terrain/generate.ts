@@ -1,5 +1,6 @@
 import { buildPalette, TILE_RAMPS } from "./palette";
 import { clamp, fbm, hash2, lerp, mulberry32, ridged, smoothstep, warpFbm } from "./noise";
+import { placeUnits } from "../units/place.js";
 import {
   CELL_PIXELS,
   FEATURE_EMPTY,
@@ -63,6 +64,7 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
   }
 
   const minimap = buildMinimap(heights, tileMap, tiles, width, height, seaLevel);
+  const units = placeUnits({ heights, features, width, height, seaLevel }, seed);
 
   return {
     name: PRESET_META[preset].name,
@@ -81,6 +83,7 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
     featureTable: FEATURE_TABLE,
     palette,
     minimap,
+    units,
   };
 }
 

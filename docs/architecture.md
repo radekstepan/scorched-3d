@@ -6,8 +6,8 @@ How Scorched 3D is built. Mirrors the sibling photomator repo's layout, minus th
 
 | Workspace | Responsibility |
 | --- | --- |
-| `apps/web` (`@scorched-3d/web`) | Vite application: HUD shell, view options, minimap, and the Three.js terrain renderer. Depends on `@scorched-3d/core`. |
-| `packages/core` (`@scorched-3d/core`) | Framework-free game logic: product branding, TNT-style terrain generation (heightfields, tiles, palette, textures). |
+| `apps/web` (`@scorched-3d/web`) | Vite application: HUD shell, view options, minimap, unit legend, and the Three.js terrain + unit renderer. Depends on `@scorched-3d/core`. |
+| `packages/core` (`@scorched-3d/core`) | Framework-free game logic: product branding, TNT-style terrain generation (heightfields, tiles, palette, textures), and deterministic static-unit placement. |
 
 There is no `packages/ui`: the web app is a single demo shell, so shared React components would be premature. There is no `apps/server`: all state is generated client-side per seed. Both can be added later following the photomator shape (`apps/*`, `packages/*` workspaces are already globbed).
 
@@ -15,13 +15,14 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 
 | File | Responsibility |
 | --- | --- |
-| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap, probe readout. |
-| `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, hover picking. |
+| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with unit markers, unit legend, probe readout. |
+| `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, hover picking. |
+| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) and exaggeration re-snapping. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
-| `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options. |
-| `packages/core/src/terrain/generate.ts` | Seeded heightfield sampling, feature stamping, tile painting, minimap. |
+| `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options, placed units. |
+| `packages/core/src/terrain/generate.ts` | Seeded heightfield sampling, feature stamping, tile painting, minimap, unit placement. |
 | `packages/core/src/terrain/noise.ts` | Value-noise and FBM helpers. |
 | `packages/core/src/terrain/palette.ts` | 256-color palette and per-tile color ramps. |
 | `packages/core/src/terrain/texture.ts` | Albedo/height/minimap `ImageData` composition. |

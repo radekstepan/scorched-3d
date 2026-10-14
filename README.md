@@ -1,6 +1,6 @@
 # Scorched 3D
 
-A browser remake of the classic Scorched Earth artillery game — currently a playable terrain demo: seeded TNT-style islands rendered in 3D with water, trees, rocks, and a hover probe.
+A browser remake of the classic Scorched Earth artillery game — currently a playable terrain demo: seeded TNT-style islands rendered in 3D with water, trees, rocks, a hover probe, and a static Total Annihilation unit roster (Commander, Stumpy, Flash, Hammer) re-placed on every regen.
 
 ## Start the app
 
