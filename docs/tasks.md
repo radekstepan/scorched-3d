@@ -12,10 +12,14 @@ System instruction: Work through every item in ## List below, top to bottom, exe
 8. Keep track of learnings from each task. Then once done with all of the tasks summarize the learnings into a markdown document so that we do not repeat the same mistakes over and over (in `docs/learnings.md`).
 9. Each subagent must add a changeset (`yarn changeset`) describing its change and include it in the same commit, so versions keep moving. See `.changeset/README.md` and the "Versioning" section in `docs/development.md` for the workflow.
 
+Use sibling `nanolathe` repo for inspiration.
+
 ## List
 
-Turn this package into a typescript, yarn, turborepo, changesets repo like the sibling photomator repo.
+Support moving (pan) around using a arrow keys or WASD as well.
 
-Rename this project to "Scorched 3D"
+Start the view from behind a command unit from the "outside" of the map looking in.
 
-Look at the sibling "nanolathe" repo. Your goal will be to implement units from the game. They don't have to move. But they do have to render correctly on the map. Every time we reset the demo, place a couple of units throughout the app/environment.
+Show fps on the map
+
+Support units randomly firing at each other with all the animations and effects.
