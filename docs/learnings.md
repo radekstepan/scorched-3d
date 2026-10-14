@@ -1,6 +1,6 @@
 # Learnings
 
-Distilled from per-task writeups in `docs/tasks/` across the initial 3-task run plus the 4-task camera/controls/FX run. Read this before touching the monorepo layout, branding, terrain, units, camera, or effects so we don't repeat the same mistakes.
+Distilled from per-task writeups in `docs/tasks/` across the initial 3-task run, the 4-task camera/controls/FX run, and the 4-task facing/destruction/movement/selection run. Read this before touching the monorepo layout, branding, terrain, units, camera, effects, movement, or selection so we don't repeat the same mistakes.
 
 Task index:
 - 01 — Turborepo migration (`docs/tasks/01-turborepo-migration.md`)
@@ -10,6 +10,10 @@ Task index:
 - 05 — Commander camera start (`docs/tasks/05-commander-camera.md`)
 - 06 — FPS overlay (`docs/tasks/06-fps-overlay.md`)
 - 07 — Units firing (`docs/tasks/07-units-firing.md`)
+- 08 — Facing hulls + traverse-limited turrets (`docs/tasks/08-facing-turret.md`)
+- 09 — Environment destruction (`docs/tasks/09-environment-destruction.md`)
+- 10 — Unit patrol routes (`docs/tasks/10-unit-routes.md`)
+- 11 — Selection + pathfinding (`docs/tasks/11-selection-pathfinding.md`)
 
 ## 1. Monorepo layout (from 01)
 
@@ -54,3 +58,20 @@ Task index:
 - **Cap everything.** Max 6 concurrent shots, 8 explosions (oldest evicted), 2 shared point lights, shared geometries; only small materials + spark buffers are per-effect and disposed on removal. Shots always "hit" near the hull with scatter — random ambient skirmish only, no health/damage model.
 - **Compute muzzles from live state each shot.** Body position + facing per shot keeps recoil kicks (0.28s restore) and exaggeration re-snaps from desyncing guns. Commander has no barrel mesh, so its bolt leaves from chest height. No sound — visuals only.
 - **Bump minor for visible features.** Tasks 04–06 were patches; ambient combat is user-visible enough for minor. Docs-only learnings updates need no changeset (precedent: `bbd4feb`).
+
+## 6. Facing, destruction, movement, selection (from 08–11)
+
+- **Turn hulls instead of gating fire.** A forward-arc fire gate would stall the ambient skirmish (most random pairs start outside any narrow arc). Turning the hull at a capped rate toward the target with the turret slewing only the clamped remainder keeps every engagement firing eventually while showing facing discipline; the turret clamp binds because the hull rate-limits. Turret always faster than hull = fine vs gross motion (from 08).
+- **One posing place for aim.** `getTurret()` / `setUnitAim()` in `units.ts` own all hull/turret yaw; exaggeration re-snaps only move origins so aim survives. Commander reuses its whole upper torso as the "turret" (legs stay on hull). Muzzle + recoil use the absolute turret line (`muzzleYaw`), recomputed from live state each shot (from 08).
+- **Pending-pair scheduler with fast retry.** `tryFire()` registers attacker→target and fires only when `canFire()`; misses retry in ~0.15s instead of a full ambient interval, so traverse delays never read as silence. Expose `totalFired` / `aimState()` readouts for tests/HUD (from 08).
+- **Decals over vertex deformation.** True cratering fights the baked-geometry + shader pipeline and the exaggeration re-snap path; dark instanced discs (+1.2, polygon-offset) read as scorch at demo scale with one draw call and trivial re-seating via `reseatScorch()`. Persistent (session-lifetime, oldest-eviction at 48) instead of fading — the battlefield accumulates history (from 09).
+- **Fell, don't remove.** Felled trees keep a stump trunk, felled rocks a sunk 0.35× rubble instance — no holes in instanced buffers, no index invalidation. Carry `userData.felled` sets + shared `writeTreePose()` / `writeRockPose()` helpers so re-snaps preserve felled state instead of resurrecting features. `fellFeatures` never touches unit groups; units are never moved by blasts (from 09).
+- **Optional env hooks keep headless tests cheap.** `CombatEnv` (`groundY`, `fellFeatures`) is optional with no-op defaults so existing `CombatFx` tests construct unchanged; `clearTransients()` keeps scorch, `dispose()` removes it. Sync decals only on impact via a reused scratch object — no per-frame allocations (from 09).
+- **Hulls belong to movement, turrets to combat.** In live play `CombatFx` never yaws a hull (`setExternalHull()` mode: hulls stay on travel heading, only turrets slew); headless tests keep internal-hull behavior so old traverse suites pass untouched. Tick movement before combat; on exaggeration change `clearTransients()` then `movement.resnap()` (movement X/Z is authoritative — reverse order restores stale recoil bases) (from 10).
+- **Forward drive, not steering to the point.** Velocity runs along the hull with alignment grip (full speed lined up, ~0.3× spun around) so corners produce turning arcs at capped rates. Spacing stays slow/stop only (hold inside 30u, crawl inside 72u) — full avoidance is the pathfinding task's job (from 10).
+- **Routes read the field, never reseed it.** `planRoutes` uses its own `seed ^ 0x3ec1` stream and only reads heights, so terrain/placement snapshots can't shift; waypoint 0 = spawn, rest on dry + gentle ground within 45 cells. Routes are derived per regen in the canvas, not stored on `TNTMap` (from 10).
+- **Shift recoil anchors with the hulls.** The kick stores its restore point at fire time; a driving unit would restore up to ~15u backward. Each movement tick shifts active anchors by the hull delta via `shiftRecoilBase()` (from 10).
+- **Top-notch pathfinding = A* + smoothing + formation.** 8-dir A* with corner-cut prevention, cardinal-1/diagonal-√2 costs, octile heuristic, deterministic `(f,h,z,x)` heap tie-break; greedy string-pulling smoothing that keeps the detours A* paid for; `nearestWalkable()` ring snap + straight-drive fallback so unreachable goals degrade instead of stranding; hex-ring `formationTargets()` so groups arrive as a line, not a pile. Arrival → hold, patrol never auto-resumes; orders suspend patrol without forking it (from 11).
+- **Assert walkability on real maps, not just synthetic flats.** An x/z transposition in `cellSlope` nulled every detour and only real-map waypoint tests caught it; shoreline cells read as steep because the slope probe touches the water neighbour (same as `place.ts`) — tests must expect that (from 11).
+- **Click resolution raycast-first, projection-second.** Raycast wins on hull hits; otherwise nearest projected body within 28px counts so small/occluded hulls at glancing angles stay clickable. Box-select needs Shift+drag (plain left-drag orbits); right-click-no-drag orders (right-drag still pans); Esc clears; click/drag disambiguates at 6px; orbit disabled for the gesture only, always restored. Document the one UX deviation from retail (left-click orders) in the HUD footer (from 11).
+- **Minimap markers are DOM, not canvas.** Baked minimap stays terrain-only; live kind-colored dots with selection outlines are absolutely-positioned spans at ~4Hz through React state — no per-frame canvas upload, closes task 10's stale-spawn limitation (from 11).
