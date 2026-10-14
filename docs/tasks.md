@@ -16,10 +16,10 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Support moving (pan) around using a arrow keys or WASD as well.
+Unit need to face each other, fire only from one direction. A tank can fae one way, turret can still move, but not completely freely.
 
-Start the view from behind a command unit from the "outside" of the map looking in.
+Add destruction to the environment from fire/explosions.
 
-Show fps on the map
+Add movement to the units, each one will have a "route" it will follow.
 
-Support units randomly firing at each other with all the animations and effects.
+Be able to select a unit or multiple units and make them go to an area. Pathfinding needs to be top notch.
