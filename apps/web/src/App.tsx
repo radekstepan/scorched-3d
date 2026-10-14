@@ -194,7 +194,7 @@ export default function App() {
 
       <footer className="pointer-events-none absolute inset-x-0 bottom-3 z-10 hidden justify-center md:flex">
         <p className="rounded-full border border-white/10 bg-black/40 px-4 py-1.5 font-mono text-[10px] tracking-[0.18em] text-slate-400">
-          DRAG orbit · SCROLL zoom · RMB pan · cells 16px · tiles 32px · Y-up +Z south
+          DRAG orbit · SCROLL zoom · RMB pan · WASD / ARROWS pan · cells 16px · tiles 32px · Y-up +Z south
         </p>
       </footer>
     </div>

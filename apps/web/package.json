@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "echo \"(no lint configured)\" && exit 0",
-    "test": "echo \"(no web tests)\" && exit 0",
+    "test": "node ../../node_modules/vitest/vitest.mjs run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

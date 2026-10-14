@@ -22,6 +22,15 @@ import {
   waterVertex,
 } from "./shaders";
 import { buildUnits, placeUnitsGroup } from "./units";
+import {
+  PAN_SPEED_FACTOR,
+  applyPan,
+  clampPanTarget,
+  isPanKey,
+  panInputFromCodes,
+  panOffset,
+  shouldIgnoreKeyEvent,
+} from "./cameraPan";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -164,6 +173,23 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerleave", onLeave);
 
+    // Keyboard pan: arrows / WASD translate camera + target in screen space.
+    const pressed = new Set<string>();
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (!isPanKey(ev.code) || shouldIgnoreKeyEvent(ev.target)) return;
+      ev.preventDefault();
+      pressed.add(ev.code);
+    };
+    const onKeyUp = (ev: KeyboardEvent) => {
+      pressed.delete(ev.code);
+    };
+    const onBlur = () => {
+      pressed.clear();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+
     const resize = () => {
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
@@ -181,7 +207,8 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
     const tick = () => {
       raf = requestAnimationFrame(tick);
-      const t = clock.getElapsedTime();
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const t = clock.elapsedTime;
       const opt = optsRef.current;
 
       if (opt.exaggeration !== lastExag) {
@@ -209,6 +236,16 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         albedoTex.minFilter = min;
       }
 
+      if (pressed.size > 0) {
+        const input = panInputFromCodes(pressed);
+        if (input.right !== 0 || input.forward !== 0) {
+          const dist = camera.position.distanceTo(controls.target);
+          const offset = panOffset(camera.position, controls.target, input, dist * PAN_SPEED_FACTOR * dt);
+          applyPan(camera.position, controls.target, offset);
+          clampPanTarget(controls.target, worldW, worldD);
+        }
+      }
+
       controls.update();
 
       if (hovering) {
@@ -228,6 +265,9 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
       renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       controls.dispose();
