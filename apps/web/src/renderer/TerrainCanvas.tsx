@@ -31,6 +31,7 @@ import {
   panOffset,
   shouldIgnoreKeyEvent,
 } from "./cameraPan";
+import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -56,7 +57,10 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
     const camera = new THREE.PerspectiveCamera(48, 1, 2, 14000);
     const { worldW, worldD } = worldSize(map);
-    camera.position.set(-worldW * 0.32, 620, worldD * 0.52);
+    // Opening frame: behind a command unit, outside the map looking in.
+    const startPose = commanderCameraPose(map, options.exaggeration);
+    const startUnit = pickStartUnit(map.units);
+    camera.position.set(startPose.position.x, startPose.position.y, startPose.position.z);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -70,7 +74,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.minDistance = 80;
     controls.maxDistance = 4200;
-    controls.target.set(0, map.seaLevel * optsRef.current.exaggeration, 0);
+    controls.target.set(startPose.target.x, startPose.target.y, startPose.target.z);
 
     const fogColor = new THREE.Color(0x8eb4c8);
     const fogNear = 1800;
@@ -212,6 +216,12 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
       const opt = optsRef.current;
 
       if (opt.exaggeration !== lastExag) {
+        // Keep the view geometry while the terrain re-snaps: shift camera and
+        // target by the start anchor's ground-height delta so orbiting and
+        // keyboard panning continue from the same relative frame.
+        const dy = resnapHeightDelta(map, startUnit, lastExag, opt.exaggeration);
+        camera.position.y += dy;
+        controls.target.y += dy;
         lastExag = opt.exaggeration;
         applyExaggeration(geometry, map, lastExag);
         geometry.computeVertexNormals();
