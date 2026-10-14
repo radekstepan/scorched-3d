@@ -22,9 +22,9 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
 | `packages/core/src/units/place.ts` | Seeded roster placement on dry, gentle, separated ground. |
-| `packages/core/src/units/movement.ts` | Patrol routes + forward-drive hull physics with steep-slope clamp/skip. |
+| `packages/core/src/units/movement.ts` | Patrol routes + forward-drive hull physics with steep-slope clamp/skip, lateral separation steering, and an ordered-hull spacing floor. |
 | `packages/core/src/units/terrain.ts` | Bilinear seating, hull pitch/roll, and step blocking for movers. |
-| `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out. |
+| `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
 | `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and projectile math. |
 | `packages/core/src/units/destruction.ts` | Blast scorch + tree/rock felling queries. |

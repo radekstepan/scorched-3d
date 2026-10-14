@@ -6,6 +6,7 @@ import {
   hasOrder,
   initMover,
   orderMover,
+  snappedFormationTargets,
   type HullSeat,
   type Mover,
   type PlacedUnit,
@@ -110,10 +111,16 @@ export class UnitMovement {
   /**
    * Issue a group move order: each unit gets its own formation-fan slot
    * around the clicked point (slot 0 takes the point itself) with an
-   * independent A* path, so the group fans out instead of stacking.
+   * independent A* path, so the group fans out instead of stacking. With a
+   * heightfield the slots are snapped onto walkable ground up front with a
+   * separation guarantee (`snappedFormationTargets`) — independent per-unit
+   * snaps of adjacent slots could otherwise collapse onto one cell and park
+   * the pair inside the mutual spacing stop.
    */
   orderGroup(indices: readonly number[], target: { x: number; z: number }): number {
-    const slots = formationTargets(target, indices.length);
+    const slots = this.field
+      ? snappedFormationTargets(this.field, target, indices.length)
+      : formationTargets(target, indices.length);
     let issued = 0;
     indices.forEach((index, i) => {
       if (this.orderUnit(index, slots[i] ?? target)) issued++;

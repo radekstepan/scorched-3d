@@ -26,7 +26,11 @@ import type { UnitField } from "./place.js";
  *   grip (slow in turns) plus the spacing stop/slow instead of full
  *   avoidance — and now by the terrain clamp in `terrain.ts`: steps into
  *   unwalkable/too-steep ground hold position while the hull keeps turning,
- *   with patrol skipping its leg past `BLOCKED_SKIP_AFTER`.
+ *   with patrol skipping its leg past `BLOCKED_SKIP_AFTER` — and by lateral
+ *   separation in `advanceMovers`: hulls the spacing stop pins mutually
+ *   (both read scale 0) shove apart along their pair axes instead of
+ *   deadlocking, the way retail re-requests paths for blocked movers rather
+ *   than parking them forever.
  * - `internal/content/compile_unit.go` unit-record fields (`MaxVelocity`,
  *   `TurnRate`) become per-kind `MOVE_SPEED` plus the shared hull turn-rate
  *   caps, instead of fixed-point yard-map stamping.
@@ -52,6 +56,40 @@ export const STOP_RADIUS = 30;
 export const SLOW_RADIUS = 72;
 /** Speed multiplier while inside SLOW_RADIUS of another mover. */
 export const SLOW_SCALE = 0.35;
+/**
+ * Spacing floor for ordered hulls: a player-sent unit keeps at least this
+ * fraction of its drive inside another mover's stop radius instead of
+ * reading scale 0. Retail caps blocked movers at half `MaxVelocity` rather
+ * than parking them (see the spec notes in the module docstring); the floor
+ * is the same idea — an explicit order must stay alive through a crowd so a
+ * hull can close the last metres to a goal near a parked unit and arrive.
+ * Patrol keeps the hard 0 (ambient wandering must rest outside the hold,
+ * and separation alone opens those gaps). Stacking through the floor is
+ * still bounded: separation shoves harder (22 u/s) than the floor drives
+ * (≤17 u/s), so head-on pairs open rather than pass through each other.
+ */
+export const ORDER_SPACING_FLOOR = 0.3;
+/**
+ * Separation: lateral push-out inside this distance to another mover (world
+ * units). Equals `STOP_RADIUS` on purpose — the forward-drive stop is what
+ * deadlocks (both hulls read scale 0 and grind forever), so the push acts on
+ * exactly the pairs the drive refuses to close.
+ */
+export const SEPARATION_RADIUS = STOP_RADIUS;
+/**
+ * Separation push speed, world units per second. Slower than any hull's
+ * forward drive (`MOVE_SPEED` floor is 26) so the nudge reads as jostling,
+ * not teleporting — but fast enough to clear a 30-unit hold in ~2 s.
+ */
+export const SEPARATION_SPEED = 22;
+/**
+ * Sidestep weight inside the separation push, relative to the radial shove.
+ * Purely radial push cannot resolve head-on crossings (the pair backs away
+ * along its travel line, re-enters, and jostles forever); the perpendicular
+ * sidestep opens a passing lane so crossings spiral past each other while
+ * side-by-side pairs just lean apart.
+ */
+export const SEPARATION_SIDESTEP = 0.6;
 /**
  * Blocked-drive patience, seconds: a patrolling hull pinned against too-steep
  * ground (a patrol leg can cut across a slope its waypoints straddle) skips
@@ -224,6 +262,13 @@ export function hasOrder(mover: Mover): boolean {
  * stacking), SLOW_SCALE inside slow radius, 1 otherwise. Pure helper so the
  * renderer and vitest share the same spacing rule — simple slow/stop, no
  * full avoidance (that is a later task).
+ *
+ * NOTE: the 0 inside `STOP_RADIUS` is mutual — two hulls inside it both read
+ * 0, so forward drive alone deadlocks them forever (neither can open the
+ * gap the other needs). `advanceMovers` therefore applies a lateral
+ * `separationVector` push after every drive step; the stop stays (hulls must
+ * not drive *through* each other) but the push guarantees the pair exits
+ * the hold radius. Keep the two in sync: `SEPARATION_RADIUS === STOP_RADIUS`.
  */
 export function spacingScale(
   self: number,
@@ -348,8 +393,96 @@ export function advanceMovers(
   dt: number,
   terrain?: SeatField | null,
 ): Mover[] {
-  const scales = movers.map((_, i) => spacingScale(i, movers));
-  return movers.map((m, i) =>
+  if (!(dt > 0) || movers.length === 0) {
+    // No time passes: keep the old step exactly (same refs, no separation —
+    // a non-positive step must never shove hulls backwards).
+    return movers.slice();
+  }
+  const scales = movers.map((m, i) => {
+    const scale = spacingScale(i, movers);
+    // Ordered hulls never fully stop for spacing: see ORDER_SPACING_FLOOR.
+    return hasOrder(m) ? Math.max(scale, ORDER_SPACING_FLOOR) : scale;
+  });
+  const driven = movers.map((m, i) =>
     advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain),
   );
+  return resolveSeparation(driven, dt, terrain);
+}
+
+/**
+ * Lateral separation steering: push hulls inside `SEPARATION_RADIUS` apart
+ * along their pair axes (plus a perpendicular sidestep so head-on crossings
+ * open a passing lane instead of backing up into each other), so mutually
+ * stopped units (`spacingScale` 0 both ways) still exit the hold instead of
+ * deadlocking. The radial shove runs at constant magnitude — deliberately
+ * not a distance falloff, which would approach the stop radius
+ * asymptotically and stall the pair exactly on it. Computed from one
+ * snapshot so the resolve is symmetric and deterministic (no
+ * order-of-application bias), then gated by `stepBlocked` when terrain is
+ * known — a push into water/steep ground degrades to axis slides, then to
+ * holding, instead of clipping. Pure: returns new movers.
+ */
+export function separationVector(
+  self: number,
+  positions: readonly { x: number; z: number }[],
+  radius = SEPARATION_RADIUS,
+): { x: number; z: number } {
+  const me = positions[self];
+  if (!me || !(radius > 0)) return { x: 0, z: 0 };
+  let px = 0;
+  let pz = 0;
+  for (let i = 0; i < positions.length; i++) {
+    if (i === self) continue;
+    const other = positions[i];
+    if (!other) continue;
+    const dx = me.x - other.x;
+    const dz = me.z - other.z;
+    const d = Math.hypot(dx, dz);
+    if (d >= radius) continue;
+    if (d > 1e-6) {
+      // Radial shove at unit weight (constant so the pair crosses the stop
+      // radius in finite time) + sidestep around the neighbour: the
+      // perpendicular of the away-axis, which flips with the viewpoint, so
+      // the pair always counter-steps and head-on crossings pass each other
+      // instead of mirroring into a backup loop.
+      const inv = 1 / d;
+      const rx = dx * inv;
+      const rz = dz * inv;
+      px += rx - rz * SEPARATION_SIDESTEP;
+      pz += rz + rx * SEPARATION_SIDESTEP;
+    } else {
+      // Coincident hulls have no pair axis: split along a deterministic
+      // per-index heading (golden-angle hash) so the pair still opens.
+      const angle = (self * 2.39996322972865332) % (Math.PI * 2);
+      px += Math.sin(angle);
+      pz += Math.cos(angle);
+    }
+  }
+  return { x: px, z: pz };
+}
+
+function resolveSeparation(
+  movers: Mover[],
+  dt: number,
+  terrain?: SeatField | null,
+): Mover[] {
+  const pushes = movers.map((_, i) => separationVector(i, movers));
+  const step = SEPARATION_SPEED * dt;
+  return movers.map((mover, i) => {
+    const push = pushes[i] ?? { x: 0, z: 0 };
+    if (push.x === 0 && push.z === 0) return mover;
+    const nx = mover.x + push.x * step;
+    const nz = mover.z + push.z * step;
+    if (!terrain || !stepBlocked(terrain, mover.x, mover.z, nx, nz)) {
+      return { ...mover, x: nx, z: nz };
+    }
+    // Blocked push: try sliding along one axis rather than clipping.
+    if (!stepBlocked(terrain, mover.x, mover.z, nx, mover.z)) {
+      return { ...mover, x: nx };
+    }
+    if (!stepBlocked(terrain, mover.x, mover.z, mover.x, nz)) {
+      return { ...mover, z: nz };
+    }
+    return mover;
+  });
 }

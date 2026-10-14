@@ -15,12 +15,17 @@ import {
   planRoutes,
   ROUTE_WAYPOINTS,
   sampleGround,
+  separationVector,
+  SEPARATION_RADIUS,
+  SEPARATION_SIDESTEP,
   SLOW_SCALE,
   spacingScale,
+  STOP_RADIUS,
   worldFromCell,
   type Mover,
   type RoutePoint,
 } from "./movement.js";
+import { addScorchMark } from "./destruction.js";
 import { isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
@@ -197,24 +202,42 @@ describe("spacingScale", () => {
 });
 
 describe("advanceMovers", () => {
-  it("steps the whole column with spacing from live positions", () => {
+  it("separates stopped pairs instead of pinning them forever", () => {
     const kinds = ["flash", "stump", "hammer"] as const;
     const routes: RoutePoint[][] = [flatRoute(), flatRoute(600), flatRoute(900)];
     const movers: Mover[] = [
       { x: 0, z: 0, hull: 0, leg: 1 },
-      // Second unit parked right ahead: both hold instead of stacking.
+      // Second unit parked right ahead, inside the mutual spacing stop: the
+      // old drive-only rule held both at scale 0 forever. Separation must
+      // open the gap even though forward drive still refuses to close it.
       { x: 0, z: 20, hull: 0, leg: 1 },
       // Third unit far from the pair: free to patrol.
       { x: 900, z: 900, hull: Math.PI, leg: 3 },
     ];
+    const before = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
     const next = advanceMovers([...kinds], movers, routes, 0.05);
     expect(next).toHaveLength(3);
-    expect(next[0]!.x).toBeCloseTo(0, 9);
-    expect(next[0]!.z).toBeCloseTo(0, 9);
-    expect(next[1]!.x).toBeCloseTo(0, 9);
-    expect(next[1]!.z).toBeCloseTo(20, 9);
+    const after = Math.hypot(next[0]!.x - next[1]!.x, next[0]!.z - next[1]!.z);
+    expect(after).toBeGreaterThan(before);
+    // The pair opens radially (head-on on the Z line) while counter-stepping
+    // sideways to open a passing lane — never mirrored, never purely axial.
+    expect(next[0]!.z).toBeLessThan(0);
+    expect(next[1]!.z).toBeGreaterThan(20);
+    expect(next[0]!.x).toBeGreaterThan(0);
+    expect(next[1]!.x).toBeLessThan(0);
     const travelled = Math.hypot(next[2]!.x - 900, next[2]!.z - 900);
     expect(travelled).toBeGreaterThan(0);
+  });
+
+  it("keeps degenerate dt a pure no-op (no separation shove)", () => {
+    const kinds = ["flash", "stump"] as const;
+    const movers: Mover[] = [
+      { x: 0, z: 0, hull: 0, leg: 1 },
+      { x: 0, z: 5, hull: 0, leg: 1 },
+    ];
+    const routes: RoutePoint[][] = [flatRoute(), flatRoute()];
+    expect(advanceMovers([...kinds], movers, routes, 0)).toEqual(movers);
+    expect(advanceMovers([...kinds], movers, routes, -1)).toEqual(movers);
   });
 });
 
@@ -235,6 +258,134 @@ describe("world/cell helpers", () => {
     expect(m.z).toBe(route[0]!.z);
     expect(m.hull).toBe(1.2);
     expect(m.leg).toBe(1);
+  });
+});
+
+describe("separationVector", () => {
+  it("pushes nothing when alone or beyond the radius", () => {
+    expect(separationVector(0, [{ x: 0, z: 0 }])).toEqual({ x: 0, z: 0 });
+    expect(separationVector(0, [{ x: 0, z: 0 }, { x: 500, z: 0 }])).toEqual({ x: 0, z: 0 });
+    expect(separationVector(0, [{ x: 0, z: 0 }, { x: SEPARATION_RADIUS, z: 0 }])).toEqual({
+      x: 0,
+      z: 0,
+    });
+  });
+
+  it("pushes along the pair axis with a sidestep, mirrored pair-wise", () => {
+    // Neighbour 10 west of self: unit radial shove +x plus the sidestep
+    // (perp of the away axis), at SEPARATION_SIDESTEP weight.
+    const push = separationVector(0, [
+      { x: 0, z: 0 },
+      { x: -10, z: 0 },
+    ]);
+    expect(push.x).toBeCloseTo(1, 9);
+    expect(push.z).toBeCloseTo(SEPARATION_SIDESTEP, 9);
+    // The neighbour sees the exact negation: symmetric, deterministic, so
+    // the pair counter-steps instead of mirroring into a backup loop.
+    const mirror = separationVector(1, [
+      { x: 0, z: 0 },
+      { x: -10, z: 0 },
+    ]);
+    expect(mirror.x).toBeCloseTo(-push.x, 9);
+    expect(mirror.z).toBeCloseTo(-push.z, 9);
+  });
+
+  it("splits coincident hulls along deterministic headings", () => {
+    const pair = [
+      { x: 7, z: -3 },
+      { x: 7, z: -3 },
+    ];
+    const a = separationVector(0, pair);
+    const b = separationVector(1, pair);
+    expect(Math.hypot(a.x, a.z)).toBeCloseTo(1, 9);
+    expect(Math.hypot(b.x, b.z)).toBeCloseTo(1, 9);
+    // Repeatable: same indices, same headings.
+    expect(separationVector(0, pair)).toEqual(a);
+    expect(separationVector(1, pair)).toEqual(b);
+  });
+});
+
+/** Flat, dry, gentle field: every cell walkable, so only spacing matters. */
+function openField(): SeatField {
+  const w = 64;
+  const h = 64;
+  return { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0 };
+}
+
+describe("adjacent-unit deadlock", () => {
+  it("drives two adjacent ordered units to their goals (no permanent hold)", () => {
+    const field = openField();
+    const kinds = ["flash", "flash"] as const;
+    let movers: Mover[] = [
+      { x: -10, z: 0, hull: 0, leg: 0 },
+      { x: 10, z: 0, hull: 0, leg: 0 },
+    ];
+    // Side-by-side pair ordered due north on parallel lanes: the old
+    // drive-only rule read spacing 0 both ways and parked them forever.
+    movers = [
+      orderMover(movers[0]!, [{ x: -10, z: 400 }]),
+      orderMover(movers[1]!, [{ x: 10, z: 400 }]),
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    // Lanes 20 apart keep the pair inside each other's slow zone most of
+    // the trip, so this needs a long horizon: what matters is continuous
+    // progress to arrival, never a permanent hold.
+    for (let n = 0; n < 2400; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    // Both arrived instead of grinding inside the stop radius.
+    expect(hasOrder(movers[0]!)).toBe(false);
+    expect(hasOrder(movers[1]!)).toBe(false);
+    expect(movers[0]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS);
+    expect(movers[1]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS);
+  });
+
+  it("opens coincident patrol hulls past the stop radius", () => {
+    const field = openField();
+    const kinds = ["stump", "stump"] as const;
+    const routes: RoutePoint[][] = [flatRoute(), flatRoute(600)];
+    let movers: Mover[] = [
+      { x: 50, z: 50, hull: 0, leg: 1 },
+      { x: 50, z: 50, hull: Math.PI, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    for (let n = 0; n < 300; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
+    expect(gap).toBeGreaterThan(STOP_RADIUS * 0.8);
+  });
+
+  it("lets units parked inside scorch (brown-hole) cells drive out", () => {
+    // Scorch marks are renderer decals: recording one must not mutate the
+    // heightfield or walkability, so "stuck in a brown hole" can only ever
+    // be the spacing deadlock above, never the scorch itself.
+    const field = openField();
+    const before = field.heights.slice();
+    const marks = addScorchMark([], { x: 0, z: 0, radius: 46, intensity: 0.8 });
+    expect(marks).toHaveLength(1);
+    expect(field.heights).toEqual(before);
+    const mark = marks[0]!;
+    for (const [x, z] of [[-10, 0], [10, 0], [0, 0]] as const) {
+      const { cellX, cellZ } = cellFromWorld(field, x, z);
+      expect(Math.hypot(x - mark.x, z - mark.z)).toBeLessThan(mark.radius);
+      expect(isWalkable(field, cellX, cellZ)).toBe(true);
+    }
+    const kinds = ["commander", "hammer"] as const;
+    let movers: Mover[] = [
+      orderMover({ x: -10, z: 0, hull: 0, leg: 0 }, [{ x: -30, z: 400 }]),
+      orderMover({ x: 10, z: 0, hull: 0, leg: 0 }, [{ x: 30, z: 400 }]),
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    for (const m of movers) {
+      expect(hasOrder(m)).toBe(false);
+      expect(Math.hypot(m.x - mark.x, m.z - mark.z)).toBeGreaterThan(mark.radius);
+    }
   });
 });
 

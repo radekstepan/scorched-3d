@@ -15,12 +15,15 @@ import {
   findWorldPath,
   formationOffsets,
   formationTargets,
+  FORMATION_MIN_SEPARATION,
   hasLineOfSight,
   isWalkable,
   nearestWalkable,
   octileHeuristic,
   PATH_FORMATION_SPACING,
+  pathWorldToCell,
   smoothCellPath,
+  snappedFormationTargets,
   type PathGrid,
 } from "./pathfinding.js";
 
@@ -247,6 +250,85 @@ describe("formation", () => {
     expect(formationOffsets(0)).toEqual([]);
     const single = formationTargets({ x: 5, z: 5 }, 1);
     expect(single).toEqual([{ x: 5, z: 5 }]);
+  });
+
+  it("snaps every slot onto walkable, separated ground on a real map", () => {
+    const map = generateMap("greenreach", 7);
+    // Click the first walkable cell scanning inward: open ground, so the
+    // separation guarantee must hold without rescue fallbacks.
+    let center = { x: 0, z: 0 };
+    outer: for (let z = 8; z < map.height - 8; z++) {
+      for (let x = 8; x < map.width - 8; x++) {
+        if (isWalkable(map, x, z)) {
+          center = { x: (x - (map.width - 1) / 2) * 16, z: (z - (map.height - 1) / 2) * 16 };
+          break outer;
+        }
+      }
+    }
+    const goals = snappedFormationTargets(map, center, 6);
+    expect(goals).toHaveLength(6);
+    expect(snappedFormationTargets(map, center, 6)).toEqual(goals);
+    expect(snappedFormationTargets(map, center, 0)).toEqual([]);
+    for (const g of goals) {
+      const cell = pathWorldToCell(map, g.x, g.z);
+      expect(isWalkable(map, cell.cellX, cell.cellZ)).toBe(true);
+    }
+    for (let i = 0; i < goals.length; i++) {
+      for (let j = i + 1; j < goals.length; j++) {
+        const d = Math.hypot(goals[i]!.x - goals[j]!.x, goals[i]!.z - goals[j]!.z);
+        expect(d).toBeGreaterThanOrEqual(FORMATION_MIN_SEPARATION);
+      }
+    }
+  });
+
+  it("seats shoreline water-click goals onto separated land", () => {
+    // Synthetic shore: land x<12, water x>=12. The click sits over water but
+    // every slot has land inside snap radius, so each goal must seat onto
+    // walkable ground (one cell inland — shoreline cells read steep, the
+    // same parity placement relies on) with full separation, spreading the
+    // fan along the shore instead of stacking it on one snap cell.
+    const w = 32;
+    const h = 32;
+    const heights = new Uint8Array(w * h);
+    for (let z = 0; z < h; z++) {
+      for (let x = 0; x < w; x++) heights[z * w + x] = x < 12 ? 100 : 0;
+    }
+    const grid: PathGrid = { width: w, height: h, heights, seaLevel: 50 };
+    const center = { x: (16 - (w - 1) / 2) * 16, z: (16 - (h - 1) / 2) * 16 };
+    expect(isWalkable(grid, 16, 16)).toBe(false);
+    const goals = snappedFormationTargets(grid, center, 4);
+    expect(goals).toHaveLength(4);
+    expect(snappedFormationTargets(grid, center, 4)).toEqual(goals);
+    for (const g of goals) {
+      const cell = pathWorldToCell(grid, g.x, g.z);
+      expect(isWalkable(grid, cell.cellX, cell.cellZ)).toBe(true);
+    }
+    for (let i = 0; i < goals.length; i++) {
+      for (let j = i + 1; j < goals.length; j++) {
+        const d = Math.hypot(goals[i]!.x - goals[j]!.x, goals[i]!.z - goals[j]!.z);
+        expect(d).toBeGreaterThanOrEqual(FORMATION_MIN_SEPARATION);
+      }
+    }
+  });
+
+  it("re-seats slots that would snap onto one shared cell", () => {
+    // One walkable cell in a water grid: every geometric slot snaps to it,
+    // so the rescue scan must spread the goals apart.
+    const grid: PathGrid = { width: 32, height: 32, heights: new Uint8Array(32 * 32), seaLevel: 50 };
+    grid.heights[16 * 32 + 16] = 100;
+    grid.heights[16 * 32 + 17] = 100;
+    grid.heights[17 * 32 + 16] = 100;
+    grid.heights[17 * 32 + 17] = 100;
+    const center = { x: (16 - 15.5) * 16, z: (16 - 15.5) * 16 };
+    const goals = snappedFormationTargets(grid, center, 3, 8);
+    expect(goals).toHaveLength(3);
+    // Tiny island: separation may be impossible — but every goal must still
+    // be the shared walkable snap (documented fallback), deterministically.
+    expect(snappedFormationTargets(grid, center, 3, 8)).toEqual(goals);
+    for (const g of goals) {
+      const cell = pathWorldToCell(grid, g.x, g.z);
+      expect(isWalkable(grid, cell.cellX, cell.cellZ)).toBe(true);
+    }
   });
 });
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  FORMATION_MIN_SEPARATION,
+  isWalkable,
+  pathWorldToCell,
   sampleHeightBilinear,
   seatHull,
   yawToTarget,
@@ -165,6 +168,51 @@ describe("UnitMovement", () => {
     expect(Math.hypot(endA.x - endB.x, endA.z - endB.z)).toBeGreaterThan(10);
     expect(movement.positions()).toHaveLength(2);
     expect(movement.positions()[0]!.x).toBeCloseTo(a.x, 9);
+    movement.dispose();
+  });
+
+  it("snaps group goals onto walkable, separated ground so arrivals never stack", () => {
+    // Shore field: land west, water east — the click sits over water, so raw
+    // per-unit snaps could collapse onto one shore cell and park the pair
+    // inside the mutual spacing stop. The snapped fan must keep them apart.
+    const w = 64;
+    const h = 64;
+    const heights = new Uint8Array(w * h);
+    for (let z = 0; z < h; z++) {
+      for (let x = 0; x < w; x++) heights[z * w + x] = x < 40 ? 100 : 0;
+    }
+    const field = { width: w, height: h, heights, seaLevel: 50 };
+    const units = makeGroup();
+    (units.children[0] as THREE.Group).position.set(-400, 100, 0);
+    (units.children[1] as THREE.Group).position.set(-400, 100, 40);
+    const landRoutes: RoutePoint[][] = [
+      [
+        { x: -400, z: 0 },
+        { x: -400, z: 400 },
+      ],
+      [
+        { x: -400, z: 40 },
+        { x: -400, z: 440 },
+      ],
+    ];
+    const movement = new UnitMovement(units, landRoutes, { groundY: () => 100 }, field);
+    const target = { x: (48 - (w - 1) / 2) * 16, z: 0 };
+    expect(movement.orderGroup([0, 1], target)).toBe(2);
+    const a = movement.moverState(0)!;
+    const b = movement.moverState(1)!;
+    const endA = a.order!.points[a.order!.points.length - 1]!;
+    const endB = b.order!.points[b.order!.points.length - 1]!;
+    for (const end of [endA, endB]) {
+      const cell = pathWorldToCell(field, end.x, end.z);
+      expect(isWalkable(field, cell.cellX, cell.cellZ)).toBe(true);
+    }
+    expect(Math.hypot(endA.x - endB.x, endA.z - endB.z)).toBeGreaterThanOrEqual(
+      FORMATION_MIN_SEPARATION,
+    );
+    // Both hulls still drive to their separated goals and arrive.
+    for (let n = 0; n < 3600; n++) movement.update(1 / 60);
+    expect(movement.hasOrder(0)).toBe(false);
+    expect(movement.hasOrder(1)).toBe(false);
     movement.dispose();
   });
 });

@@ -60,6 +60,15 @@ export const PATH_MAX_SLOPE = 24;
 export const PATH_FORMATION_SPACING = 56;
 /** Snap radius when seating an order endpoint onto walkable ground, cells. */
 export const PATH_SNAP_RADIUS = 12;
+/**
+ * Minimum separation between snapped formation goals, in world units.
+ * Deliberately wider than the movers' `STOP_RADIUS` (30, see `movement.ts`;
+ * not imported — `pathfinding.ts` sits below `movement.ts` in the import
+ * graph and a cycle would break the barrel) so arrived units hold their fan
+ * instead of re-entering the mutual spacing stop and leaning on separation
+ * to jostle free.
+ */
+export const FORMATION_MIN_SEPARATION = 40;
 
 function idx(grid: PathGrid, x: number, z: number): number {
   return z * grid.width + x;
@@ -345,4 +354,70 @@ export function formationTargets(
   spacing = PATH_FORMATION_SPACING,
 ): PathPoint[] {
   return formationOffsets(count, spacing).map((o) => ({ x: center.x + o.x, z: center.z + o.z }));
+}
+
+/**
+ * Formation goals snapped onto walkable ground with a separation guarantee:
+ * each geometric slot is seated via `nearestWalkable`, then — in slot order,
+ * so slot 0 keeps the clicked point — any goal inside
+ * `FORMATION_MIN_SEPARATION` of an accepted earlier goal is re-seated by
+ * scanning expanding cell rings around its own slot for the first walkable
+ * cell far enough from every accepted goal. Deterministic (fixed ring order,
+ * first match wins); falls back to the plain snap when the ground is too
+ * constrained to separate (dense islets), in which case the movers'
+ * separation steering still un-stacks the arrivals. Prefer this over raw
+ * `formationTargets` whenever a grid is available — independent per-unit
+ * snaps of adjacent slots can otherwise collapse onto one cell and park the
+ * pair inside the mutual spacing stop.
+ */
+export function snappedFormationTargets(
+  grid: PathGrid,
+  center: PathPoint,
+  count: number,
+  spacing = PATH_FORMATION_SPACING,
+): PathPoint[] {
+  if (count <= 0) return [];
+  const accepted: PathPoint[] = [];
+  const slots = formationTargets(center, count, spacing);
+  for (const slot of slots) {
+    const cell = pathWorldToCell(grid, slot.x, slot.z);
+    const snapped = nearestWalkable(grid, cell.cellX, cell.cellZ);
+    let goal = pathCellToWorld(grid, snapped);
+    // Re-seat when the snap is unwalkable (deep-water click with no shore
+    // in snap radius — same fallback semantics as `findWorldPath`) or when
+    // it crowds an accepted earlier goal.
+    if (!isWalkable(grid, snapped.cellX, snapped.cellZ) || !farEnough(goal, accepted)) {
+      const rescue = firstSeparatedCell(grid, cell, accepted);
+      if (rescue) goal = pathCellToWorld(grid, rescue);
+    }
+    accepted.push(goal);
+  }
+  return accepted;
+}
+
+function farEnough(candidate: PathPoint, accepted: readonly PathPoint[]): boolean {
+  return accepted.every(
+    (g) => Math.hypot(g.x - candidate.x, g.z - candidate.z) >= FORMATION_MIN_SEPARATION,
+  );
+}
+
+function firstSeparatedCell(
+  grid: PathGrid,
+  around: PathCell,
+  accepted: readonly PathPoint[],
+  radius = PATH_SNAP_RADIUS,
+): PathCell | null {
+  for (let r = 1; r <= Math.max(radius, 0); r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const cell = { cellX: around.cellX + dx, cellZ: around.cellZ + dz };
+        if (!inBounds(grid, cell.cellX, cell.cellZ) || !isWalkable(grid, cell.cellX, cell.cellZ)) {
+          continue;
+        }
+        if (farEnough(pathCellToWorld(grid, cell), accepted)) return cell;
+      }
+    }
+  }
+  return null;
 }
