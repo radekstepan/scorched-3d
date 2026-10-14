@@ -22,6 +22,7 @@ import {
   waterVertex,
 } from "./shaders";
 import { buildUnits, placeUnitsGroup } from "./units";
+import { CombatFx } from "./combatFx";
 import {
   PAN_SPEED_FACTOR,
   applyPan,
@@ -162,6 +163,10 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     const units = buildUnits(map, options.exaggeration);
     scene.add(trees, rocks, units);
 
+    // Ambient skirmish: units trade tracer/shell fire with muzzle flashes,
+    // impact explosions, and recoil kicks, driven by the render-loop clock.
+    const combat = new CombatFx(scene, units);
+
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let hovering = false;
@@ -236,6 +241,9 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         water.position.y = map.seaLevel * lastExag + 0.6;
         placeFeatures(trees, rocks, map, lastExag);
         placeUnitsGroup(units, map, lastExag);
+        // In-flight endpoints were sampled at the old heights; drop them so
+        // tracers never chase stale air.
+        combat.clearTransients();
       }
 
       terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
@@ -266,6 +274,8 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
       controls.update();
 
+      combat.update(dt);
+
       if (hovering) {
         raycaster.setFromCamera(pointer, camera);
         const hits = raycaster.intersectObject(terrain);
@@ -283,6 +293,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      combat.dispose();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
