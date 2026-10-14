@@ -1,6 +1,6 @@
 # Learnings
 
-Distilled from per-task writeups in `docs/tasks/` across the initial 3-task run, the 4-task camera/controls/FX run, and the 4-task facing/destruction/movement/selection run. Read this before touching the monorepo layout, branding, terrain, units, camera, effects, movement, or selection so we don't repeat the same mistakes.
+Distilled from per-task writeups in `docs/tasks/` across the initial 3-task run, the 4-task camera/controls/FX run, the 4-task facing/destruction/movement/selection run, and the 5-task terrain-physics-collateral-selection run. Read this before touching the monorepo layout, branding, terrain, units, camera, effects, movement, selection, ballistics, or damage states so we don't repeat the same mistakes.
 
 Task index:
 - 01 — Turborepo migration (`docs/tasks/01-turborepo-migration.md`)
@@ -14,6 +14,11 @@ Task index:
 - 09 — Environment destruction (`docs/tasks/09-environment-destruction.md`)
 - 10 — Unit patrol routes (`docs/tasks/10-unit-routes.md`)
 - 11 — Selection + pathfinding (`docs/tasks/11-selection-pathfinding.md`)
+- 12 — Terrain pitch + steep slopes (`docs/tasks/12-terrain-pitch-steep-slopes.md`)
+- 13 — Adjacent-unit separation (`docs/tasks/13-adjacent-unit-separation.md`)
+- 14 — Cannon ballistics (`docs/tasks/14-cannon-ballistics.md`)
+- 15 — Collateral damage (`docs/tasks/15-collateral-damage.md`)
+- 16 — Selection contrast (`docs/tasks/16-selection-contrast.md`)
 
 ## 1. Monorepo layout (from 01)
 
@@ -75,3 +80,25 @@ Task index:
 - **Assert walkability on real maps, not just synthetic flats.** An x/z transposition in `cellSlope` nulled every detour and only real-map waypoint tests caught it; shoreline cells read as steep because the slope probe touches the water neighbour (same as `place.ts`) — tests must expect that (from 11).
 - **Click resolution raycast-first, projection-second.** Raycast wins on hull hits; otherwise nearest projected body within 28px counts so small/occluded hulls at glancing angles stay clickable. Box-select needs Shift+drag (plain left-drag orbits); right-click-no-drag orders (right-drag still pans); Esc clears; click/drag disambiguates at 6px; orbit disabled for the gesture only, always restored. Document the one UX deviation from retail (left-click orders) in the HUD footer (from 11).
 - **Minimap markers are DOM, not canvas.** Baked minimap stays terrain-only; live kind-colored dots with selection outlines are absolutely-positioned spans at ~4Hz through React state — no per-frame canvas upload, closes task 10's stale-spawn limitation (from 11).
+
+## 7. Terrain pitch, separation, ballistics, collateral, selection (from 12–16)
+
+- **Two height frames on purpose.** Drive/pathfinding gating uses raw heights (must agree with the `isWalkable` gate or blessed legs read blocked); posing uses exaggerated heights (tilt must match the rendered mesh). Mixing them once broke the no-clip sweep — keep the frames explicit at call sites (from 12).
+- **Binary steep refusal, not a cost tier.** One shared movement profile + deterministic A* collapses slope cost to the existing dry + gentle gate; `stepBlocked` reuses the same grade so smoothing can't cut back through rejected cells. Revisit only if per-kind climbers land (from 12).
+- **Max-tap seating, not center seating.** A rigid hull rests on its highest footprint corner: seat at footprint max + clearance, tilt from ±half-length/width taps, clamp at `MAX_HULL_TILT`. Flat ground collapses exactly to the old pose; bilinear taps carry ~1e-15 noise so assert closeness, never exact zero (from 12).
+- **Patrol skips, orders hold.** A patrol leg can straddle an unforeseen slope (skip after 2.5 s pinned); a player order holds at the steep edge ("can't climb that" reads honestly). Blocked steps hold X/Z while the hull keeps turning (from 12).
+- **Prove visual suspects innocent before fixing them.** The brown "hole" is the scorch decal: `addScorchMark` is a pure list append with no heightfield param, the terrain position buffer is written once at build and never per impact — so "make scorch non-blocking" would have changed nothing. Record the evidence so the next report starts from the decal (from 13).
+- **Symmetric stops deadlock — push at constant magnitude.** `spacingScale` returning 0 for both hulls inside the stop radius is permanent; a falloff-scaled shove stalls asymptotically (Zeno). Constant-magnitude radial push + always-on perpendicular sidestep (head-on detection isn't worth the headings it needs) exits in finite time; terrain-gate the push with axis-slide fallback so separation never shoves into water/steep (from 13).
+- **Orders floor, patrol doesn't.** Ordered hulls keep ≥30% drive inside crowds (retail caps blocked movers at half velocity, never zero) so explicit orders complete; patrol keeps the hard stop so the ambient column still rests open. Separation (22 u/s) must out-push floor drive (≤17 u/s) or head-on ordered pairs pass through each other (from 13).
+- **Snap formation jointly, not per-unit.** Independent `nearestWalkable` snaps collapse adjacent slots onto one cell; `snappedFormationTargets` with min-separation (40 > 30 stop) + ring rescue keeps the fan, with a documented dense-islet fallback where steering still un-stacks (from 13).
+- **Build core before testing web.** Web imports core through compiled `dist/`; new core exports read as "not a function" until `core build` reruns (from 13, repeats 01).
+- **Fake arcs fail six ways — solve ballistically.** Fixed per-kind lift peaking mid-flight is distance-independent; bolts must fly flat (`T = D/V`, gravity 0), shells take the low-angle root `tanθ = (V²−√disc)/(gR)` with null = hold fire (retail 0x8000 analog) routed into the ~0.15 s traverse-retry path, never silence. Analytic `p(t) = muzzle + v·t − ½gt²` is exact and frame-rate independent; drop minimum-duration clamps (a 60u bolt is a 0.046 s snap) (from 14).
+- **Aim the barrel, fire from the tip.** Rebuild tubes as elevating pivots with tip markers; seed elevation → pitch barrel (clamped) → solve from the live tip world matrix (one `updateMatrixWorld` per shot is negligible at ≤6 shots) so hull grade and recoil stay correct. Low-root only (no mortar lob); keep scatter-aim (physics serves ambient "hits near hull", not a hit/miss model); recoil opposes the pitched barrel (from 14).
+- **One gravity tuned to the map.** `GRAVITY = 140` with hammer `V = 520` gives max range `V²/g ≈ 1931` ≈ one map width — artillery reaches most of the field but not corner-to-corner; per-kind `maxRangeFor` + `MIN_RANGE = 50` admission keeps duels readable (from 14).
+- **Persistent field, transient views.** Damage lives in a caller-owned core `DamageField` (timers, severity, spread, caps — pure + vitest-covered); flame/smoke meshes, poses, tints are views rebuilt from it. `clearTransients` blanks flames but never the field; exaggeration re-snaps re-seat from the field; only regen drops it (from 15).
+- **Fell, don't remove — extended.** Every terminal keeps its instance (lying trunk, stump, charred snag, sunk rubble) with per-instance char colors on the existing instanced meshes; blast cores flatten instantly, fringes ignite/chip; fringe spread (70u, 0.15/s, min age 2 s) creeps before burnout. Cap-aware eviction fast-forwards (oldest fire → smoulder), never loses state (from 15).
+- **No new lights for fire.** Ignitions kick the existing 2-light pool via `glowAt` (dimmest wins); shots/explosions caps unchanged (from 15).
+- **Damage determinism without perturbing maps.** Transition/spread rolls consume caller-passed runtime rng, never the terrain streams; live-blast terminal rolls use `Math.random` like existing scatter (from 15).
+- **Watch three.js + buffer-order quirks.** r186 `Matrix4.decompose` reports degenerate zero-scale as scale 1 — assert basis elements directly; web feature-id order is round-first-then-pines, so double-check index assumptions with real assertions, not mocks (from 15).
+- **Selection fails on hue, not luminance.** Amber-on-scorch is 11.5:1 (passes AAA) but sits 19° from ember orange amid bolts/flashes/glows; cyan sits 164° opposite and white carries light grass where cyan alone is 2.7:1. Fix with a system, not a color swap: white-halo + cyan-core double ring (`depthTest: false`, above scorch/water/smoke/fire), spinning/bobbing chevron beacon (altitude cue at glancing angles, cheaper than a light pillar), Lambert emissive lift (no post pipeline), cyan pings/drag-box/minimap glow for consistency. Blue/orange opposition is the color-blind-safe split (from 16).
+- **Docs-only learnings need no changeset.** Precedent `bbd4feb`: version bumps ride with code changes, not with writeup/learnings aggregation (from 06–16).
