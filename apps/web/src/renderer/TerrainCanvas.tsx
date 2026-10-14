@@ -32,6 +32,7 @@ import {
   shouldIgnoreKeyEvent,
 } from "./cameraPan";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
+import { createFpsSampler, formatFps } from "./fps";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -43,6 +44,7 @@ interface Props {
 
 export default function TerrainCanvas({ map, options, onHover }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
   const hoverRef = useRef(onHover);
   optsRef.current = options;
@@ -208,9 +210,15 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     let lastExag = options.exaggeration;
     let raf = 0;
     const clock = new THREE.Clock();
+    // FPS readout: sampler feeds the overlay div straight from the tick, so
+    // React state never churns at frame rate.
+    const fpsSampler = createFpsSampler();
+    const fpsEl = fpsRef.current;
 
     const tick = () => {
       raf = requestAnimationFrame(tick);
+      const fps = fpsSampler.frame(performance.now());
+      if (fps !== null && fpsEl) fpsEl.textContent = formatFps(fps);
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = clock.elapsedTime;
       const opt = optsRef.current;
@@ -297,7 +305,17 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     };
   }, [map]);
 
-  return <div ref={wrapRef} className="absolute inset-0" />;
+  return (
+    <div ref={wrapRef} className="absolute inset-0">
+      <div
+        ref={fpsRef}
+        title="Frames per second"
+        className="pointer-events-none absolute bottom-3 right-4 z-10 rounded-full border border-white/10 bg-black/40 px-3 py-1 font-mono text-[10px] tracking-[0.18em] text-slate-400 tabular-nums"
+      >
+        -- FPS
+      </div>
+    </div>
+  );
 }
 
 function imageDataTexture(data: ImageData, mip: boolean): THREE.DataTexture {
