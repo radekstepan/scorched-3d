@@ -1,9 +1,12 @@
 import * as THREE from "three";
 import {
+  addScorchMark,
   aimStep,
+  BLAST_RADIUS,
   canFire,
   flightDuration,
   MAX_EXPLOSIONS,
+  MAX_SCORCH_MARKS,
   MAX_SHOTS,
   muzzleForward,
   muzzleHeight,
@@ -11,9 +14,11 @@ import {
   nextShotDelay,
   pickSkirmishPair,
   projectilePosition,
+  scorchForKind,
   yawToTarget,
   WEAPON_PROFILES,
   type PlacedUnit,
+  type ScorchMark,
   type UnitKind,
 } from "@scorched-3d/core";
 import { setUnitAim } from "./units";
@@ -40,7 +45,10 @@ import { setUnitAim } from "./units";
  *   single interval scheduler standing in for per-slot reload timers.
  * - Explosions pair an expanding flash sphere with gravity-driven spark
  *   particles and a short-lived pooled light, echoing nanolathe's
- *   explosion-sprite + art-light pairing.
+ *   explosion-sprite + art-light pairing. Every impact also scars the
+ *   ground with a persistent scorch decal (capped separately in core) and
+ *   fells nearby trees/rocks into stumps/rubble via the CombatEnv hooks —
+ *   units themselves are untouched.
  */
 
 interface Shot {
@@ -50,6 +58,7 @@ interface Shot {
   t: number;
   dur: number;
   arc: number;
+  kind: UnitKind;
 }
 
 interface Flash {
@@ -109,6 +118,14 @@ export function impactPoint(
   };
 }
 
+/** Environment hooks for persistent destruction: scorch seating + felling. */
+export interface CombatEnv {
+  /** Terrain surface height at world (x, z), for seating scorch decals. */
+  groundY: (x: number, z: number) => number;
+  /** Fell trees/rocks within `radius` of world (x, z). Units are untouched. */
+  fellFeatures: (x: number, z: number, radius: number) => void;
+}
+
 export class CombatFx {
   private scene: THREE.Scene;
   private units: THREE.Group;
@@ -128,13 +145,40 @@ export class CombatFx {
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
   private shockGeo = new THREE.SphereGeometry(10, 14, 10);
+  /** Persistent scorch decals: one shared instanced disc, capped in core. */
+  private scorchGeo = new THREE.CircleGeometry(1, 18);
+  private scorchMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+  private scorchMesh: THREE.InstancedMesh;
+  private scorchMarks: ScorchMark[] = [];
+  private scorchDummy = new THREE.Object3D();
+  private scorchTint = new THREE.Color();
+  private env: CombatEnv | null;
   private disposed = false;
 
-  constructor(scene: THREE.Scene, units: THREE.Group, rng: () => number = Math.random) {
+  constructor(
+    scene: THREE.Scene,
+    units: THREE.Group,
+    rng: () => number = Math.random,
+    env?: CombatEnv,
+  ) {
     this.scene = scene;
     this.units = units;
     this.rng = rng;
+    this.env = env ?? null;
     this.timer = nextShotDelay(rng);
+    this.scorchGeo.rotateX(-Math.PI / 2);
+    this.scorchMesh = new THREE.InstancedMesh(this.scorchGeo, this.scorchMat, MAX_SCORCH_MARKS);
+    this.scorchMesh.count = 0;
+    this.scorchMesh.frustumCulled = false;
+    this.scorchMesh.renderOrder = 2;
+    this.scene.add(this.scorchMesh);
     for (let i = 0; i < LIGHT_COUNT; i++) {
       const light = new THREE.PointLight(0xffb36b, 0, 650, 1.8);
       this.scene.add(light);
@@ -159,6 +203,11 @@ export class CombatFx {
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
   aimState(index: number): { hull: number; turret: number } | null {
     return this.aim[index] ? { ...this.aim[index]! } : null;
+  }
+
+  /** Persistent scorch decal count (bounded by MAX_SCORCH_MARKS). */
+  get scorchCount(): number {
+    return this.scorchMarks.length;
   }
 
   update(dt: number): void {
@@ -204,16 +253,30 @@ export class CombatFx {
     for (const light of this.lights) light.intensity = 0;
   }
 
+  /**
+   * Re-seat persistent scorch decals on the terrain surface (e.g. after an
+   * exaggeration re-snap). Scorch is never cleared by `clearTransients` —
+   * it persists for the session and is only dropped on dispose/regen.
+   */
+  reseatScorch(): void {
+    if (!this.env) return;
+    this.syncScorch(0);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.clearTransients();
+    this.scene.remove(this.scorchMesh);
+    this.scorchMarks = [];
     for (const light of this.lights) this.scene.remove(light);
     this.lights = [];
     this.boltGeo.dispose();
     this.shellGeo.dispose();
     this.flashGeo.dispose();
     this.shockGeo.dispose();
+    this.scorchGeo.dispose();
+    this.scorchMat.dispose();
   }
 
   private unitKind(index: number): UnitKind | null {
@@ -301,7 +364,7 @@ export class CombatFx {
     mesh.position.copy(start);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    this.shots.push({ mesh, start, end, t: 0, dur, arc: profile.arc });
+    this.shots.push({ mesh, start, end, t: 0, dur, arc: profile.arc, kind });
     this.fired += 1;
 
     this.spawnFlash(start, profile.color, profile.flashTime);
@@ -340,7 +403,7 @@ export class CombatFx {
     light.intensity = 2600;
   }
 
-  private explode(at: THREE.Vector3, color: number): void {
+  private explode(at: THREE.Vector3, color: number, kind: UnitKind): void {
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
       if (oldest) this.removeExplosion(oldest);
@@ -395,6 +458,47 @@ export class CombatFx {
       maxAge: EXPLOSION_MAX_AGE,
     });
     this.kickLight(at, 0xff8a3c);
+    this.scarGround(at, kind);
+  }
+
+  /**
+   * Persistent ground scar + nearby feature felling for an impact. Decals
+   * reuse one shared instanced disc (no per-mark geometry/material); only
+   * instance matrices/colors are rewritten, and only on impact — never per
+   * frame. Units are never touched: a tree felled under a unit leaves the
+   * unit where it stands.
+   */
+  private scarGround(at: THREE.Vector3, kind: UnitKind): void {
+    const shape = scorchForKind(kind);
+    this.scorchMarks = addScorchMark(this.scorchMarks, {
+      x: at.x,
+      z: at.z,
+      radius: shape.radius,
+      intensity: shape.intensity,
+    });
+    this.syncScorch(at.y);
+    this.env?.fellFeatures(at.x, at.z, BLAST_RADIUS[kind]);
+  }
+
+  /** Rewrite scorch instance matrices/colors from the mark list. */
+  private syncScorch(fallbackY: number): void {
+    const dummy = this.scorchDummy;
+    for (let i = 0; i < this.scorchMarks.length; i++) {
+      const mark = this.scorchMarks[i]!;
+      const y = this.env ? this.env.groundY(mark.x, mark.z) + 1.2 : fallbackY;
+      dummy.position.set(mark.x, y, mark.z);
+      dummy.rotation.set(0, (i * 2.39996) % Math.PI, 0);
+      dummy.scale.setScalar(Math.max(mark.radius, 0.5));
+      dummy.updateMatrix();
+      this.scorchMesh.setMatrixAt(i, dummy.matrix);
+      // Darker with intensity: char-black core lightening toward ash.
+      const tone = 0.16 - mark.intensity * 0.12;
+      this.scorchTint.setRGB(tone, tone * 0.82, tone * 0.68);
+      this.scorchMesh.setColorAt(i, this.scorchTint);
+    }
+    this.scorchMesh.count = this.scorchMarks.length;
+    this.scorchMesh.instanceMatrix.needsUpdate = true;
+    if (this.scorchMesh.instanceColor) this.scorchMesh.instanceColor.needsUpdate = true;
   }
 
   private removeExplosion(ex: Explosion): void {
@@ -429,7 +533,7 @@ export class CombatFx {
       this.scene.remove(shot.mesh);
       (shot.mesh.material as THREE.Material).dispose();
       this.shots.splice(this.shots.indexOf(shot), 1);
-      this.explode(shot.end, color);
+      this.explode(shot.end, color, shot.kind);
       this.spawnFlash(shot.end, color, FLASH_MAX_AGE * 0.6);
     }
   }

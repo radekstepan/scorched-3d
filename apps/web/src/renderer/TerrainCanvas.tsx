@@ -8,6 +8,7 @@ import {
   composeAlbedo,
   composeHeight,
   featureName,
+  indicesInBlast,
   worldSize,
   type HoverInfo,
   type TNTMap,
@@ -165,7 +166,35 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
     // Ambient skirmish: units trade tracer/shell fire with muzzle flashes,
     // impact explosions, and recoil kicks, driven by the render-loop clock.
-    const combat = new CombatFx(scene, units);
+    // Impacts scar the ground (persistent capped scorch decals, re-seated on
+    // exaggeration change) and fell nearby trees/rocks into stumps/rubble;
+    // units themselves are never moved by blasts.
+    const groundY = (x: number, z: number): number => {
+      const ex = optsRef.current.exaggeration;
+      const cx = clampInt(Math.round(x / CELL_PIXELS + (map.width - 1) / 2), 0, map.width - 1);
+      const cz = clampInt(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0, map.height - 1);
+      return (map.heights[cz * map.width + cx] ?? 0) * ex;
+    };
+    const fellFeatures = (x: number, z: number, radius: number): void => {
+      const dummy = new THREE.Object3D();
+      const felledTrees = trees.userData.felled as Set<number>;
+      const allTrees = trees.userData.all as THREE.Vector3[];
+      for (const fid of indicesInBlast(allTrees, x, z, radius)) {
+        if (felledTrees.has(fid)) continue;
+        felledTrees.add(fid);
+        const p = allTrees[fid]!;
+        writeTreePose(trees, dummy, fid, groundY(p.x, p.z), true);
+      }
+      const felledRocks = rocks.userData.felled as Set<number>;
+      const rockPts = rocks.userData.positions as THREE.Vector3[];
+      for (const i of indicesInBlast(rockPts, x, z, radius)) {
+        if (felledRocks.has(i)) continue;
+        felledRocks.add(i);
+        const p = rockPts[i]!;
+        writeRockPose(rocks, dummy, i, groundY(p.x, p.z), true);
+      }
+    };
+    const combat = new CombatFx(scene, units, Math.random, { groundY, fellFeatures });
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -242,8 +271,9 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         placeFeatures(trees, rocks, map, lastExag);
         placeUnitsGroup(units, map, lastExag);
         // In-flight endpoints were sampled at the old heights; drop them so
-        // tracers never chase stale air.
+        // tracers never chase stale air. Scorch persists — just re-seat it.
         combat.clearTransients();
+        combat.reseatScorch();
       }
 
       terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
@@ -457,6 +487,8 @@ function buildTrees(map: TNTMap, exaggeration: number): THREE.Group {
   cones.frustumCulled = false;
   group.add(trunks, canopies, cones);
   group.userData.positions = { round, pines };
+  group.userData.all = [...round, ...pines];
+  group.userData.felled = new Set<number>();
   return group;
 }
 
@@ -482,59 +514,117 @@ function buildRocks(map: TNTMap, exaggeration: number): THREE.InstancedMesh {
   });
   mesh.instanceMatrix.needsUpdate = true;
   mesh.userData.positions = pts;
+  mesh.userData.felled = new Set<number>();
   mesh.count = pts.length;
   mesh.frustumCulled = false;
   return mesh;
 }
 
 function placeFeatures(trees: THREE.Group, rocks: THREE.InstancedMesh, map: TNTMap, exaggeration: number) {
-  const dummy = new THREE.Object3D();
   const { round, pines } = trees.userData.positions as { round: THREE.Vector3[]; pines: THREE.Vector3[] };
-  const trunks = trees.children[0] as THREE.InstancedMesh;
-  const canopies = trees.children[1] as THREE.InstancedMesh;
-  const cones = trees.children[2] as THREE.InstancedMesh;
-  let ti = 0;
-  round.forEach((p, i) => {
+  const felledTrees = trees.userData.felled as Set<number>;
+  const dummy = new THREE.Object3D();
+  for (let fid = 0; fid < round.length + pines.length; fid++) {
+    const p = (fid < round.length ? round[fid] : pines[fid - round.length])!;
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
     const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
-    dummy.position.set(p.x, y + 9, p.z);
-    dummy.scale.setScalar(0.85 + (i % 5) * 0.08);
-    dummy.updateMatrix();
-    trunks.setMatrixAt(ti++, dummy.matrix);
-    dummy.position.set(p.x, y + 24, p.z);
-    dummy.scale.setScalar(0.9 + (i % 4) * 0.12);
-    dummy.updateMatrix();
-    canopies.setMatrixAt(i, dummy.matrix);
-  });
-  pines.forEach((p, i) => {
-    const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
-    const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
-    dummy.position.set(p.x, y + 9, p.z);
-    dummy.scale.set(0.7, 1, 0.7);
-    dummy.updateMatrix();
-    trunks.setMatrixAt(ti++, dummy.matrix);
-    dummy.position.set(p.x, y + 28, p.z);
-    dummy.scale.setScalar(0.85 + (i % 3) * 0.1);
-    dummy.updateMatrix();
-    cones.setMatrixAt(i, dummy.matrix);
-  });
-  trunks.instanceMatrix.needsUpdate = true;
-  canopies.instanceMatrix.needsUpdate = true;
-  cones.instanceMatrix.needsUpdate = true;
+    writeTreePose(trees, dummy, fid, y, felledTrees.has(fid));
+  }
 
   const pts = rocks.userData.positions as THREE.Vector3[];
+  const felledRocks = rocks.userData.felled as Set<number>;
   pts.forEach((p, i) => {
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
     const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
+    writeRockPose(rocks, dummy, i, y, felledRocks.has(i));
+  });
+}
+
+/**
+ * Pose one tree feature: alive trees keep their trunk + canopy/cone, felled
+ * ones collapse to a stump (squashed trunk, hidden crown). Feature id `fid`
+ * indexes round trees first, then pines — matching the trunk order in
+ * `buildTrees`. Shared by blast felling and exaggeration re-snaps so felled
+ * trees stay felled.
+ */
+function writeTreePose(trees: THREE.Group, dummy: THREE.Object3D, fid: number, y: number, felled: boolean): void {
+  const { round, pines } = trees.userData.positions as { round: THREE.Vector3[]; pines: THREE.Vector3[] };
+  const trunks = trees.children[0] as THREE.InstancedMesh;
+  const canopies = trees.children[1] as THREE.InstancedMesh;
+  const cones = trees.children[2] as THREE.InstancedMesh;
+  if (fid < round.length) {
+    const p = round[fid]!;
+    const i = fid;
+    const s = 0.85 + (i % 5) * 0.08;
+    if (!felled) {
+      dummy.position.set(p.x, y + 9, p.z);
+      dummy.scale.setScalar(s);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(p.x, y + 24, p.z);
+      dummy.scale.setScalar(0.9 + (i % 4) * 0.12);
+      dummy.updateMatrix();
+      canopies.setMatrixAt(i, dummy.matrix);
+    } else {
+      dummy.position.set(p.x, y + 3, p.z);
+      dummy.scale.set(s, 0.3, s);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(p.x, y, p.z);
+      dummy.scale.setScalar(0);
+      dummy.updateMatrix();
+      canopies.setMatrixAt(i, dummy.matrix);
+    }
+  } else {
+    const k = fid - round.length;
+    const p = pines[k]!;
+    if (!felled) {
+      dummy.position.set(p.x, y + 9, p.z);
+      dummy.scale.set(0.7, 1, 0.7);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(round.length + k, dummy.matrix);
+      dummy.position.set(p.x, y + 28, p.z);
+      dummy.scale.setScalar(0.85 + (k % 3) * 0.1);
+      dummy.updateMatrix();
+      cones.setMatrixAt(k, dummy.matrix);
+    } else {
+      dummy.position.set(p.x, y + 3, p.z);
+      dummy.scale.set(0.7, 0.3, 0.7);
+      dummy.rotation.set(0, 0, 0);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(round.length + k, dummy.matrix);
+      dummy.position.set(p.x, y, p.z);
+      dummy.scale.setScalar(0);
+      dummy.updateMatrix();
+      cones.setMatrixAt(k, dummy.matrix);
+    }
+  }
+  trunks.instanceMatrix.needsUpdate = true;
+  canopies.instanceMatrix.needsUpdate = true;
+  cones.instanceMatrix.needsUpdate = true;
+}
+
+/** Pose one rock: alive rocks sit proud, felled ones sink to low rubble. */
+function writeRockPose(rocks: THREE.InstancedMesh, dummy: THREE.Object3D, i: number, y: number, felled: boolean): void {
+  const pts = rocks.userData.positions as THREE.Vector3[];
+  const p = pts[i]!;
+  const s = 0.7 + (i % 5) * 0.18;
+  if (!felled) {
     dummy.position.set(p.x, y + 2, p.z);
     dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-    dummy.scale.setScalar(0.7 + (i % 5) * 0.18);
-    dummy.updateMatrix();
-    rocks.setMatrixAt(i, dummy.matrix);
-  });
+    dummy.scale.setScalar(s);
+  } else {
+    dummy.position.set(p.x, y - 1, p.z);
+    dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
+    dummy.scale.setScalar(s * 0.35);
+  }
+  dummy.updateMatrix();
+  rocks.setMatrixAt(i, dummy.matrix);
   rocks.instanceMatrix.needsUpdate = true;
 }
 

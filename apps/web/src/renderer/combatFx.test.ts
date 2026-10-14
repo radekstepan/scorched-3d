@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { mulberry32, TURRET_LIMIT, type UnitKind } from "@scorched-3d/core";
+import { MAX_SCORCH_MARKS, mulberry32, TURRET_LIMIT, type UnitKind } from "@scorched-3d/core";
 import { CombatFx, impactPoint, muzzlePoint } from "./combatFx";
 import { getTurret } from "./units";
 
@@ -149,8 +149,7 @@ describe("CombatFx", () => {
     fx.dispose();
   });
 
-  it("keeps turrets inside their traverse and turns hulls to face targets", () => {
-    const scene = new THREE.Scene();
+  it("keeps turrets inside their traverse and turns hulls to face targets", () => {    const scene = new THREE.Scene();
     const units = makeUnits();
     const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
     const fx = new CombatFx(scene, units, mulberry32(7));
@@ -174,5 +173,82 @@ describe("CombatFx", () => {
     );
     expect(moved).toBe(true);
     fx.dispose();
+  });
+});
+
+describe("CombatFx destruction", () => {
+  function makeEnv() {
+    const calls: { x: number; z: number; radius: number }[] = [];
+    let height = 100;
+    return {
+      calls,
+      setHeight(h: number) {
+        height = h;
+      },
+      env: {
+        groundY: () => height,
+        fellFeatures: (x: number, z: number, radius: number) => {
+          calls.push({ x, z, radius });
+        },
+      },
+    };
+  }
+
+  function scorchY(scene: THREE.Scene, index: number): number {
+    const mesh = scene.children.find(
+      (c) => (c as THREE.InstancedMesh).isInstancedMesh,
+    ) as THREE.InstancedMesh;
+    const m = new THREE.Matrix4();
+    mesh.getMatrixAt(index, m);
+    return m.elements[13]!;
+  }
+
+  function hasScorchMesh(scene: THREE.Scene): boolean {
+    return scene.children.some((c) => (c as THREE.InstancedMesh).isInstancedMesh);
+  }
+
+  it("scars the ground and fells features on impact", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const { calls, env } = makeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), env);
+    for (let n = 0; n < 200; n++) fx.update(0.05);
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) expect(c.radius).toBeGreaterThan(0);
+    // Units themselves are never moved by blasts (only recoil touches them,
+    // and clearTransients restores that).
+    expect(units.children.length).toBe(3);
+    fx.dispose();
+  });
+
+  it("caps scorch decals and keeps them through clearTransients", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const { env } = makeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), env);
+    for (let n = 0; n < 4000; n++) fx.update(0.05);
+    expect(fx.scorchCount).toBe(MAX_SCORCH_MARKS);
+    const kept = fx.scorchCount;
+    fx.clearTransients();
+    expect(fx.scorchCount).toBe(kept);
+    expect(fx.activeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("re-seats scorch on exaggeration change and drops it on dispose", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const ctl = makeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
+    for (let n = 0; n < 200; n++) fx.update(0.05);
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    expect(scorchY(scene, 0)).toBeCloseTo(101.2, 5);
+    ctl.setHeight(200);
+    fx.reseatScorch();
+    expect(scorchY(scene, 0)).toBeCloseTo(201.2, 5);
+    fx.dispose();
+    expect(fx.scorchCount).toBe(0);
+    expect(hasScorchMesh(scene)).toBe(false);
   });
 });

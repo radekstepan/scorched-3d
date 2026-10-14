@@ -6,5 +6,6 @@ export * from "./terrain/texture.js";
 export * from "./terrain/types.js";
 export * from "./units/place.js";
 export * from "./units/combat.js";
+export * from "./units/destruction.js";
 export * from "./units/facing.js";
 export * from "./units/types.js";
