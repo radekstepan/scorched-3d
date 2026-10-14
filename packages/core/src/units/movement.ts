@@ -71,6 +71,29 @@ export interface Mover {
   hull: number;
   /** Index of the waypoint currently being steered toward. */
   leg: number;
+  /**
+   * Player-issued move order: a smoothed world-space waypoint list with a
+   * cursor. Present while the unit drives to an ordered destination;
+   * patrol is suspended until the order completes or is replaced. Chosen
+   * over patrol-resume so an ordered unit stays where it was sent.
+   */
+  order?: MoveOrder;
+  /**
+   * Set when a move order completes (or via `holdMover`): the unit holds
+   * position instead of patrolling. Cleared by a new order; patrol never
+   * auto-resumes so orders stay where they were put.
+   */
+  hold?: boolean;
+}
+
+/**
+ * A player-issued move order: waypoints in world units plus the index of
+ * the waypoint currently being steered toward. Built by `orderMover()` from
+ * a `findWorldPath()` result; repathing just replaces the order.
+ */
+export interface MoveOrder {
+  points: RoutePoint[];
+  at: number;
 }
 
 /** World-space X/Z of an attribute-grid cell center. */
@@ -160,6 +183,27 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
 }
 
 /**
+ * Issue (or repath) a move order: the mover leaves patrol and drives the
+ * given world-space waypoints in order, clearing any hold. An empty path
+ * holds the unit in place instead of stranding it on a degenerate order.
+ */
+export function orderMover(mover: Mover, points: RoutePoint[]): Mover {
+  if (points.length === 0) return { ...mover, order: undefined, hold: true };
+  return { ...mover, order: { points: points.map((p) => ({ ...p })), at: 0 }, hold: false };
+}
+
+/** Hold in place: drop any order and stop patrolling until ordered again. */
+export function holdMover(mover: Mover): Mover {
+  return { ...mover, order: undefined, hold: true };
+}
+
+/** True while the mover is driving a player-issued move order. */
+export function hasOrder(mover: Mover): boolean {
+  const order = mover.order;
+  return order !== undefined && order.at >= 0 && order.at < order.points.length;
+}
+
+/**
  * Speed multiplier from nearby movers: 0 inside stop radius (hold to avoid
  * stacking), SLOW_SCALE inside slow radius, 1 otherwise. Pure helper so the
  * renderer and vitest share the same spacing rule — simple slow/stop, no
@@ -186,11 +230,15 @@ export function spacingScale(
 }
 
 /**
- * Advance one mover by `dt` seconds: arrive (rotate to the next patrol
- * waypoint, looping), turn the hull toward it at the kind's turn rate, then
- * drive forward along the hull — never sideways — at per-kind speed scaled
- * by alignment grip (slow in turns, like retail's capped blocked-mover
- * speed) and the spacing factor. Pure: returns a new mover.
+ * Advance one mover by `dt` seconds. A live move order takes precedence:
+ * arrive (advance the order cursor, skipping waypoints already reached),
+ * and on the final waypoint arrive → hold (order cleared, patrol does not
+ * resume). Without an order a holding mover stays put; otherwise the patrol
+ * leg advances as before. Either way the hull turns toward its target at
+ * the kind's turn rate, then drives forward along the hull — never
+ * sideways — at per-kind speed scaled by alignment grip (slow in turns,
+ * like retail's capped blocked-mover speed) and the spacing factor. Pure:
+ * returns a new mover.
  */
 export function advanceMover(
   kind: UnitKind,
@@ -199,7 +247,22 @@ export function advanceMover(
   dt: number,
   spacing = 1,
 ): Mover {
-  if (route.length < 2 || !(dt > 0)) return mover;
+  if (!(dt > 0)) return mover;
+  const order = mover.order;
+  if (order && order.at < order.points.length) {
+    let at = order.at;
+    let target = order.points[at]!;
+    const dx0 = target.x - mover.x;
+    const dz0 = target.z - mover.z;
+    if (dx0 * dx0 + dz0 * dz0 <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
+      at += 1;
+      if (at >= order.points.length) return { ...mover, order: undefined, hold: true };
+      target = order.points[at]!;
+    }
+    return driveToward(kind, mover, target, dt, spacing, { ...order, at });
+  }
+  if (mover.hold) return mover;
+  if (route.length < 2) return mover;
   let leg = ((mover.leg % route.length) + route.length) % route.length;
   let target = route[leg]!;
   const dx = target.x - mover.x;
@@ -208,6 +271,19 @@ export function advanceMover(
     leg = (leg + 1) % route.length;
     target = route[leg]!;
   }
+  const next = driveToward(kind, mover, target, dt, spacing);
+  return { ...next, leg };
+}
+
+/** Turn the hull toward `target` and drive forward along it. */
+function driveToward(
+  kind: UnitKind,
+  mover: Mover,
+  target: RoutePoint,
+  dt: number,
+  spacing: number,
+  order?: MoveOrder,
+): Mover {
   const desired = yawToTarget(mover, target);
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const hull = stepAngle(mover.hull, desired, rate * dt);
@@ -219,7 +295,9 @@ export function advanceMover(
     x: mover.x + Math.sin(hull) * step,
     z: mover.z + Math.cos(hull) * step,
     hull,
-    leg,
+    leg: mover.leg,
+    ...(order ? { order } : {}),
+    ...(mover.hold ? { hold: true as const } : {}),
   };
 }
 

@@ -1,10 +1,15 @@
 import * as THREE from "three";
 import {
   advanceMovers,
+  findWorldPath,
+  formationTargets,
+  hasOrder,
   initMover,
+  orderMover,
   type Mover,
   type PlacedUnit,
   type RoutePoint,
+  type UnitField,
   type UnitKind,
 } from "@scorched-3d/core";
 
@@ -33,12 +38,19 @@ export class UnitMovement {
   private kinds: UnitKind[];
   private movers: Mover[];
   private env: MovementEnv;
+  private field: UnitField | null;
   private disposed = false;
 
-  constructor(units: THREE.Group, routes: RoutePoint[][], env: MovementEnv) {
+  constructor(
+    units: THREE.Group,
+    routes: RoutePoint[][],
+    env: MovementEnv,
+    field?: UnitField | null,
+  ) {
     this.units = units;
     this.routes = routes;
     this.env = env;
+    this.field = field ?? null;
     const placed = (units.userData.units as PlacedUnit[] | undefined) ?? [];
     this.kinds = units.children.map((_, i) => placed[i]?.kind ?? "flash");
     // Seed patrol state from live bodies (spawn == route waypoint 0, so the
@@ -56,7 +68,47 @@ export class UnitMovement {
   /** Live patrol state of a unit (position + hull + target leg), for tests. */
   moverState(index: number): Mover | null {
     const mover = this.movers[index];
-    return mover ? { ...mover } : null;
+    return mover ? { ...mover, order: mover.order ? { ...mover.order } : undefined } : null;
+  }
+
+  /** Live world-space X/Z of every unit, for selection projection + minimap. */
+  positions(): { x: number; z: number }[] {
+    return this.movers.map((m) => ({ x: m.x, z: m.z }));
+  }
+
+  /** True while the unit is driving a player-issued move order. */
+  hasOrder(index: number): boolean {
+    const mover = this.movers[index];
+    return mover ? hasOrder(mover) : false;
+  }
+
+  /**
+   * Issue a move order to one unit: A* from its live position to the target
+   * (straight drive when no heightfield was provided), replacing any patrol
+   * leg or previous order. Repathing just calls this again.
+   */
+  orderUnit(index: number, target: { x: number; z: number }): boolean {
+    const mover = this.movers[index];
+    if (!mover) return false;
+    const path = this.field
+      ? findWorldPath(this.field, { x: mover.x, z: mover.z }, target)
+      : [{ x: target.x, z: target.z }];
+    this.movers[index] = orderMover(mover, path);
+    return true;
+  }
+
+  /**
+   * Issue a group move order: each unit gets its own formation-fan slot
+   * around the clicked point (slot 0 takes the point itself) with an
+   * independent A* path, so the group fans out instead of stacking.
+   */
+  orderGroup(indices: readonly number[], target: { x: number; z: number }): number {
+    const slots = formationTargets(target, indices.length);
+    let issued = 0;
+    indices.forEach((index, i) => {
+      if (this.orderUnit(index, slots[i] ?? target)) issued++;
+    });
+    return issued;
   }
 
   update(dt: number): void {

@@ -9,4 +9,5 @@ export * from "./units/combat.js";
 export * from "./units/destruction.js";
 export * from "./units/facing.js";
 export * from "./units/movement.js";
+export * from "./units/pathfinding.js";
 export * from "./units/types.js";

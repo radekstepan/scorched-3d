@@ -21,6 +21,8 @@ export default function App() {
   const [preset, setPreset] = useState<MapPreset>("greenreach");
   const [seed, setSeed] = useState(0xa11ce);
   const [hover, setHover] = useState<HoverInfo | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [liveUnits, setLiveUnits] = useState<{ x: number; z: number }[]>([]);
   const [options, setOptions] = useState<ViewOptions>({
     exaggeration: 3.6,
     showWater: true,
@@ -31,6 +33,9 @@ export default function App() {
   });
 
   const map = useMemo(() => generateMap(preset, seed), [preset, seed]);
+  // Minimap bakes terrain only: unit markers are a live overlay from the
+  // render loop (~4 Hz), so they track patrols and move orders instead of
+  // going stale at their spawn cells.
   const miniUrl = useMemo(() => {
     const img = composeMinimap(map);
     const canvas = document.createElement("canvas");
@@ -38,16 +43,10 @@ export default function App() {
     canvas.height = img.height;
     const ctx = canvas.getContext("2d")!;
     ctx.putImageData(img, 0, 0);
-    for (const u of map.units) {
-      const px = (u.cellX / (map.width - 1)) * img.width;
-      const py = (u.cellZ / (map.height - 1)) * img.height;
-      ctx.fillStyle = "#0b0f14";
-      ctx.fillRect(Math.round(px) - 3, Math.round(py) - 3, 7, 7);
-      ctx.fillStyle = `#${UNIT_DEFS[u.kind].color.toString(16).padStart(6, "0")}`;
-      ctx.fillRect(Math.round(px) - 2, Math.round(py) - 2, 5, 5);
-    }
     return canvas.toDataURL();
   }, [map]);
+  const worldW = map.width * CELL_PIXELS;
+  const worldD = map.height * CELL_PIXELS;
 
   const patch = (partial: Partial<ViewOptions>) => setOptions((o) => ({ ...o, ...partial }));
   const meta = PRESET_META[preset];
@@ -56,7 +55,13 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#071018] text-slate-100">
-      <TerrainCanvas map={map} options={options} onHover={setHover} />
+      <TerrainCanvas
+        map={map}
+        options={options}
+        onHover={setHover}
+        onSelection={setSelected}
+        onPositions={setLiveUnits}
+      />
 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(3,8,12,0.55)_100%)]" />
 
@@ -117,6 +122,27 @@ export default function App() {
         <div className="hud-panel overflow-hidden p-2">
           <div className="relative">
             <img src={miniUrl} alt="Minimap" className="aspect-square w-full rounded-sm border border-white/10" />
+            {liveUnits.map((p, i) => {
+              const kind = map.units[i]?.kind;
+              const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";
+              const isSel = selected.includes(i);
+              return (
+                <span
+                  key={i}
+                  className={cn(
+                    "absolute -translate-x-1/2 -translate-y-1/2 rounded-[1px] border border-black/70",
+                    isSel && "outline outline-1 outline-amber-300",
+                  )}
+                  style={{
+                    left: `${(p.x / worldW + 0.5) * 100}%`,
+                    top: `${(p.z / worldD + 0.5) * 100}%`,
+                    width: 5,
+                    height: 5,
+                    background: color,
+                  }}
+                />
+              );
+            })}
             {hover && (
               <span
                 className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_8px_#fbbf24]"
@@ -128,7 +154,7 @@ export default function App() {
             )}
           </div>
           <p className="mt-1 text-center font-mono text-[9px] tracking-[0.2em] text-slate-500">
-            MINIMAP · 252×252
+            MINIMAP · 252×252 · LIVE
           </p>
         </div>
       </aside>
@@ -188,13 +214,22 @@ export default function App() {
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
             Patrolling TA roster, re-routed on every regen.
+            {selected.length > 0 ? (
+              <span className="text-amber-200">
+                {" "}
+                {selected.length} selected — right-click the terrain to order a move, Esc to clear.
+              </span>
+            ) : (
+              " Click a unit to select, shift-click to extend, shift-drag to box."
+            )}
           </p>
         </div>
       </aside>
 
       <footer className="pointer-events-none absolute inset-x-0 bottom-3 z-10 hidden justify-center md:flex">
         <p className="rounded-full border border-white/10 bg-black/40 px-4 py-1.5 font-mono text-[10px] tracking-[0.18em] text-slate-400">
-          DRAG orbit · SCROLL zoom · RMB pan · WASD / ARROWS pan · cells 16px · tiles 32px · Y-up +Z south
+          CLICK select · SHIFT+CLICK extend · SHIFT+DRAG box · RIGHT-CLICK order move · ESC clear · DRAG orbit ·
+          SCROLL zoom · RMB pan · WASD pan
         </p>
       </footer>
     </div>

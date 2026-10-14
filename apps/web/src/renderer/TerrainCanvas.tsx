@@ -35,6 +35,14 @@ import {
   panOffset,
   shouldIgnoreKeyEvent,
 } from "./cameraPan";
+import {
+  CLICK_DRAG_PX,
+  boxPick,
+  boxSelect,
+  clickSelect,
+  normalizeRect,
+  pickNearest,
+} from "./selection";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { createFpsSampler, formatFps } from "./fps";
 
@@ -44,15 +52,23 @@ interface Props {
   map: TNTMap;
   options: ViewOptions;
   onHover: (info: HoverInfo | null) => void;
+  /** Fired when the RTS selection changes (sorted unit indices). */
+  onSelection?: (indices: number[]) => void;
+  /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay. */
+  onPositions?: (positions: { x: number; z: number }[]) => void;
 }
 
-export default function TerrainCanvas({ map, options, onHover }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
   const hoverRef = useRef(onHover);
+  const selectionRef = useRef(onSelection);
+  const positionsRef = useRef(onPositions);
   optsRef.current = options;
   hoverRef.current = onHover;
+  selectionRef.current = onSelection;
+  positionsRef.current = onPositions;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -204,29 +220,218 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
     const movement = new UnitMovement(units, planRoutes(map, map.units, map.seed), {
       groundY,
       onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
-    });
+    }, map);
     combat.setExternalHull(true);
+
+    // RTS selection: an amber ring rides under each selected body (a child of
+    // the body group, so it follows patrol/order motion for free). Shared
+    // geometry, one material — visibility toggles only.
+    const ringGeo = new THREE.RingGeometry(16, 20, 48);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    units.children.forEach((child) => {
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.name = "select-ring";
+      ring.position.y = 1.5;
+      ring.visible = false;
+      child.add(ring);
+    });
+    let selection: number[] = [];
+    const applySelection = (next: number[]): void => {
+      selection = next;
+      units.children.forEach((child, i) => {
+        const ring = child.getObjectByName("select-ring");
+        if (ring) ring.visible = next.includes(i);
+      });
+      selectionRef.current?.([...next]);
+    };
+
+    // Move-order pings: short-lived expanding rings where an order landed.
+    const pingGeo = new THREE.RingGeometry(10, 13, 40);
+    pingGeo.rotateX(-Math.PI / 2);
+    const pings: { mesh: THREE.Mesh; t: number }[] = [];
+    const pingBase = new THREE.MeshBasicMaterial({
+      color: 0xfbbf24,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    const addPing = (x: number, z: number): void => {
+      if (pings.length >= 8) {
+        const oldest = pings.shift();
+        if (oldest) {
+          scene.remove(oldest.mesh);
+          (oldest.mesh.material as THREE.Material).dispose();
+        }
+      }
+      const mesh = new THREE.Mesh(pingGeo, pingBase.clone());
+      mesh.position.set(x, groundY(x, z) + 1.5, z);
+      scene.add(mesh);
+      pings.push({ mesh, t: 0 });
+    };
+
+    // Drag-box overlay for shift-drag selection (pointer-events-none so the
+    // hover probe and orbit keep working underneath).
+    const boxEl = document.createElement("div");
+    boxEl.style.cssText =
+      "position:absolute;display:none;border:1px solid rgba(251,191,36,0.9);" +
+      "background:rgba(251,191,36,0.12);pointer-events:none;z-index:5;";
+    wrap.appendChild(boxEl);
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let hovering = false;
 
-    const onMove = (ev: PointerEvent) => {
+    const canvasRect = (): DOMRect => renderer.domElement.getBoundingClientRect();
+
+    /** Project every live body to canvas pixels for picking. */
+    const projectUnits = (): { x: number; y: number }[] => {
+      const rect = canvasRect();
+      const v = new THREE.Vector3();
+      return movement.positions().map((p) => {
+        v.set(p.x, groundY(p.x, p.z) + 6, p.z).project(camera);
+        return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
+      });
+    };
+
+    const bodyIndexOf = (obj: THREE.Object3D | null): number | null => {
+      let cur: THREE.Object3D | null = obj;
+      while (cur && cur.parent !== units) cur = cur.parent;
+      if (!cur) return null;
+      const i = units.children.indexOf(cur);
+      return i >= 0 ? i : null;
+    };
+
+    const pickBody = (clientX: number, clientY: number): number | null => {
+      const rect = canvasRect();
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(units.children, true);
+      return hits.length > 0 ? bodyIndexOf(hits[0]?.object ?? null) : null;
+    };
+
+    const pickGround = (clientX: number, clientY: number): THREE.Vector3 | null => {
+      const rect = canvasRect();
+      pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObject(terrain);
+      return hits.length > 0 && hits[0] ? hits[0].point : null;
+    };
+
+    // Input UX (documented in the HUD footer): left-click selects,
+    // shift-click toggles, shift-drag boxes (plain left-drag keeps orbiting),
+    // right-click without drag orders the selection to move (right-drag keeps
+    // panning), Esc clears. Click vs drag disambiguates on a pixel threshold.
+    let down: { x: number; y: number; button: number; shift: boolean } | null = null;
+    let boxing = false;
+    const onPointerDown = (ev: PointerEvent) => {
+      if (ev.button !== 0 && ev.button !== 2) return;
+      down = { x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey };
+      boxing = false;
+      // Disable orbiting up front for shift-left so a box gesture never
+      // starts with an orbit jump; pointerup always restores it (a plain
+      // shift-click never boxes, it just toggles).
+      if (ev.button === 0 && ev.shiftKey) controls.enabled = false;
+    };
+    const onPointerMove = (ev: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
       hovering = true;
+      if (
+        down &&
+        down.button === 0 &&
+        down.shift &&
+        !boxing &&
+        Math.hypot(ev.clientX - down.x, ev.clientY - down.y) >= CLICK_DRAG_PX
+      ) {
+        boxing = true;
+        controls.enabled = false;
+      }
+      if (boxing && down) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const x0 = Math.min(down.x, ev.clientX) - wrapRect.left;
+        const y0 = Math.min(down.y, ev.clientY) - wrapRect.top;
+        boxEl.style.display = "block";
+        boxEl.style.left = `${x0}px`;
+        boxEl.style.top = `${y0}px`;
+        boxEl.style.width = `${Math.abs(ev.clientX - down.x)}px`;
+        boxEl.style.height = `${Math.abs(ev.clientY - down.y)}px`;
+      }
+    };
+    const onPointerUp = (ev: PointerEvent) => {
+      const wasDown = down;
+      down = null;
+      // Shift-drag may have disabled orbiting mid-gesture: always restore.
+      const wasBoxing = boxing;
+      boxing = false;
+      controls.enabled = true;
+      boxEl.style.display = "none";
+      if (!wasDown || ev.button !== wasDown.button) return;
+      const moved = Math.hypot(ev.clientX - wasDown.x, ev.clientY - wasDown.y);
+      if (wasBoxing) {
+        if (wasDown.button === 0) {
+          const rect = canvasRect();
+          const toLocal = (cx: number, cy: number): { x: number; y: number } => ({
+            x: cx - rect.left,
+            y: cy - rect.top,
+          });
+          const hits = boxPick(
+            projectUnits(),
+            normalizeRect(toLocal(wasDown.x, wasDown.y), toLocal(ev.clientX, ev.clientY)),
+          );
+          applySelection(boxSelect(selection, hits, ev.shiftKey));
+        }
+        return;
+      }
+      if (moved >= CLICK_DRAG_PX) return;
+      if (wasDown.button === 0) {
+        // Resolve clicks in screen space too: the raycast can miss small or
+        // partially occluded hulls, while the projected pick matches what the
+        // player sees. Raycast wins when both hit (exact mesh), else the
+        // nearest projection within the pick radius.
+        const rect = canvasRect();
+        const meshHit = pickBody(ev.clientX, ev.clientY);
+        const screenHit = pickNearest(projectUnits(), {
+          x: ev.clientX - rect.left,
+          y: ev.clientY - rect.top,
+        });
+        applySelection(clickSelect(selection, meshHit ?? screenHit, ev.shiftKey));
+      } else if (wasDown.button === 2 && selection.length > 0) {
+        const point = pickGround(ev.clientX, ev.clientY);
+        if (point) {
+          movement.orderGroup(selection, { x: point.x, z: point.z });
+          addPing(point.x, point.z);
+        }
+      }
     };
     const onLeave = () => {
       hovering = false;
       hoverRef.current(null);
     };
-    renderer.domElement.addEventListener("pointermove", onMove);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerleave", onLeave);
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", onPointerUp);
+    const onContextMenu = (ev: Event): void => {
+      ev.preventDefault();
+    };
+    renderer.domElement.addEventListener("contextmenu", onContextMenu);
 
     // Keyboard pan: arrows / WASD translate camera + target in screen space.
     const pressed = new Set<string>();
     const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.code === "Escape") {
+        applySelection([]);
+        return;
+      }
       if (!isPanKey(ev.code) || shouldIgnoreKeyEvent(ev.target)) return;
       ev.preventDefault();
       pressed.add(ev.code);
@@ -254,6 +459,7 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
 
     let lastExag = options.exaggeration;
     let raf = 0;
+    let posTimer = 1;
     const clock = new THREE.Clock();
     // FPS readout: sampler feeds the overlay div straight from the tick, so
     // React state never churns at frame rate.
@@ -320,6 +526,27 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
       movement.update(dt);
       combat.update(dt);
 
+      // Order-ping decay (0.8 s expanding rings) and the ~4 Hz live-position
+      // broadcast that feeds the minimap overlay.
+      for (let i = pings.length - 1; i >= 0; i--) {
+        const ping = pings[i]!;
+        ping.t += dt;
+        const k = ping.t / 0.8;
+        if (k >= 1) {
+          scene.remove(ping.mesh);
+          (ping.mesh.material as THREE.Material).dispose();
+          pings.splice(i, 1);
+        } else {
+          ping.mesh.scale.setScalar(1 + k * 2.5);
+          (ping.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k);
+        }
+      }
+      posTimer += dt;
+      if (posTimer >= 0.25) {
+        posTimer = 0;
+        positionsRef.current?.(movement.positions());
+      }
+
       if (hovering) {
         raycaster.setFromCamera(pointer, camera);
         const hits = raycaster.intersectObject(terrain);
@@ -339,13 +566,27 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
       ro.disconnect();
       movement.dispose();
       combat.dispose();
+      selectionRef.current?.([]);
+      positionsRef.current?.([]);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
-      renderer.domElement.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();
       renderer.dispose();
+      ringGeo.dispose();
+      ringMat.dispose();
+      pingGeo.dispose();
+      pingBase.dispose();
+      for (const ping of pings) {
+        scene.remove(ping.mesh);
+        (ping.mesh.material as THREE.Material).dispose();
+      }
+      if (boxEl.parentElement === wrap) wrap.removeChild(boxEl);
       geometry.dispose();
       waterGeo.dispose();
       terrainMat.dispose();

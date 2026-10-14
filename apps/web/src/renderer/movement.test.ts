@@ -117,4 +117,48 @@ describe("UnitMovement", () => {
     movement.update(1);
     expect((units.children[0] as THREE.Group).position.equals(before)).toBe(true);
   });
+
+  it("drives ordered units to their target and holds on arrival", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    expect(movement.orderUnit(0, { x: 600, z: 0 })).toBe(true);
+    expect(movement.orderUnit(99, { x: 0, z: 0 })).toBe(false);
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.hasOrder(1)).toBe(false);
+    for (let n = 0; n < 1500; n++) movement.update(1 / 60);
+    expect(movement.hasOrder(0)).toBe(false);
+    const body = units.children[0] as THREE.Group;
+    expect(body.position.x).toBeGreaterThan(300);
+    // Arrival holds: further ticks keep the unit parked.
+    const parked = body.position.clone();
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    expect(body.position.distanceTo(parked)).toBeCloseTo(0, 6);
+    // The unordered unit kept patrolling meanwhile.
+    expect(movement.hasOrder(1)).toBe(false);
+    movement.dispose();
+  });
+
+  it("fans group orders out over formation slots with live positions", () => {
+    const field = {
+      width: 64,
+      height: 64,
+      heights: new Uint8Array(64 * 64).fill(100),
+      features: new Uint16Array(64 * 64),
+      seaLevel: 0,
+    };
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 }, field);
+    expect(movement.orderGroup([0, 1], { x: 300, z: 300 })).toBe(2);
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.hasOrder(1)).toBe(true);
+    const a = movement.moverState(0)!;
+    const b = movement.moverState(1)!;
+    const endA = a.order!.points[a.order!.points.length - 1]!;
+    const endB = b.order!.points[b.order!.points.length - 1]!;
+    // Distinct destinations: first slot takes the click, the rest fan out.
+    expect(Math.hypot(endA.x - endB.x, endA.z - endB.z)).toBeGreaterThan(10);
+    expect(movement.positions()).toHaveLength(2);
+    expect(movement.positions()[0]!.x).toBeCloseTo(a.x, 9);
+    movement.dispose();
+  });
 });
