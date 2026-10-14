@@ -1,4 +1,4 @@
-/** TNT-shaped terrain used by the Nanolathe / Total Annihilation map pipeline. */
+/** TNT-shaped terrain (Total Annihilation map format) used by the Scorched 3D map pipeline. */
 
 export const TNT_VERSION = 0x2000;
 export const CELL_PIXELS = 16;

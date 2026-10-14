@@ -2,6 +2,7 @@
   "name": "@scorched-3d/web",
   "version": "0.1.0",
   "private": true,
+  "description": "Scorched 3D web app: seeded 3D terrain demo shell.",
   "type": "module",
   "scripts": {
     "dev": "vite",

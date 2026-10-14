@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  APP_NAME,
   CELL_PIXELS,
   PRESET_META,
   TILE_PIXELS,
@@ -52,7 +53,7 @@ export default function App() {
         <div className="pointer-events-auto hud-panel px-4 py-3">
           <div className="flex items-baseline gap-3">
             <span className="font-display text-[11px] font-semibold tracking-[0.42em] text-amber-300/90">
-              NANOLATHE
+              {APP_NAME.toUpperCase()}
             </span>
             <span className="text-[10px] tracking-[0.28em] text-slate-400">TERRAIN POC</span>
           </div>

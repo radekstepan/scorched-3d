@@ -2,6 +2,7 @@
   "name": "scorched-3d",
   "version": "0.0.0",
   "private": true,
+  "description": "Scorched 3D — a browser remake of the classic Scorched Earth artillery game.",
   "packageManager": "yarn@4.9.1",
   "workspaces": [
     "apps/*",

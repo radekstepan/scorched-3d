@@ -14,6 +14,9 @@ export const APP_VERSION = "0.1.0";
 
 export const APP_TAGLINE = "Turn-based artillery tactics on deformable terrain.";
 
+/** Browser tab title for the web app. Derived so it cannot drift from APP_NAME. */
+export const APP_DOCUMENT_TITLE = `${APP_NAME} · Terrain`;
+
 export const APP_DESCRIPTION =
   "A browser remake of the classic Scorched Earth artillery game. " +
   "Generate an island, aim across the terrain, and outlast your opponents.";
