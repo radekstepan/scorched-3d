@@ -1,0 +1,36 @@
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: #071018;
+}
+
+body {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.hud-panel {
+  border: 1px solid rgba(251, 191, 36, 0.18);
+  background: linear-gradient(180deg, rgba(8, 14, 20, 0.82), rgba(6, 10, 16, 0.72));
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  border-radius: 4px;
+}
+
+input[type="range"] {
+  height: 4px;
+  background: transparent;
+}
