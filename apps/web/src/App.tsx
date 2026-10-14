@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
-import TerrainCanvas from "./renderer/TerrainCanvas";
-import { generateMap } from "./terrain/generate";
-import { composeMinimap } from "./terrain/texture";
 import {
   CELL_PIXELS,
   PRESET_META,
   TILE_PIXELS,
+  composeMinimap,
+  generateMap,
   type HoverInfo,
   type MapPreset,
   type ViewOptions,
-} from "./terrain/types";
+} from "@scorched-3d/core";
+import TerrainCanvas from "./renderer/TerrainCanvas";
 import { cn } from "./utils/cn";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera"];

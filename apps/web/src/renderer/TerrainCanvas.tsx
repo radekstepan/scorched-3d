@@ -1,9 +1,18 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { featureName, worldSize } from "../terrain/generate";
-import { composeAlbedo, composeHeight } from "../terrain/texture";
-import { CELL_PIXELS, FEATURE_EMPTY, FEATURE_FRINGE, type HoverInfo, type TNTMap, type ViewOptions } from "../terrain/types";
+import {
+  CELL_PIXELS,
+  FEATURE_EMPTY,
+  FEATURE_FRINGE,
+  composeAlbedo,
+  composeHeight,
+  featureName,
+  worldSize,
+  type HoverInfo,
+  type TNTMap,
+  type ViewOptions,
+} from "@scorched-3d/core";
 import {
   skyFragment,
   skyVertex,
@@ -181,11 +190,11 @@ export default function TerrainCanvas({ map, options, onHover }: Props) {
         placeFeatures(trees, rocks, map, lastExag);
       }
 
-      terrainMat.uniforms.exaggeration.value = opt.exaggeration;
-      terrainMat.uniforms.showContours.value = opt.showContours ? 1 : 0;
-      terrainMat.uniforms.time.value = t;
-      waterMat.uniforms.exaggeration.value = opt.exaggeration;
-      waterMat.uniforms.time.value = t;
+      terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
+      terrainMat.uniforms.showContours!.value = opt.showContours ? 1 : 0;
+      terrainMat.uniforms.time!.value = t;
+      waterMat.uniforms.exaggeration!.value = opt.exaggeration;
+      waterMat.uniforms.time!.value = t;
       water.visible = opt.showWater && map.seaLevel > 0;
       trees.visible = opt.showFeatures;
       rocks.visible = opt.showFeatures;
@@ -259,7 +268,7 @@ function buildTerrainGeometry(map: TNTMap, exaggeration: number): THREE.BufferGe
     for (let x = 0; x < w; x++) {
       const i = z * w + x;
       positions[i * 3] = (x - (w - 1) / 2) * CELL_PIXELS;
-      positions[i * 3 + 1] = map.heights[i] * exaggeration;
+      positions[i * 3 + 1] = (map.heights[i] ?? 0) * exaggeration;
       positions[i * 3 + 2] = (z - (h - 1) / 2) * CELL_PIXELS;
       uvs[i * 2] = x / (w - 1);
       uvs[i * 2 + 1] = 1 - z / (h - 1);
@@ -291,7 +300,7 @@ function applyExaggeration(geo: THREE.BufferGeometry, map: TNTMap, exaggeration:
   for (let z = 0; z < h; z++) {
     for (let x = 0; x < w; x++) {
       const i = z * w + x;
-      pos.setY(i, map.heights[i] * exaggeration);
+      pos.setY(i, (map.heights[i] ?? 0) * exaggeration);
     }
   }
   pos.needsUpdate = true;
@@ -301,7 +310,7 @@ function applyExaggeration(geo: THREE.BufferGeometry, map: TNTMap, exaggeration:
 function cellWorld(map: TNTMap, x: number, z: number, exaggeration: number): THREE.Vector3 {
   return new THREE.Vector3(
     (x - (map.width - 1) / 2) * CELL_PIXELS,
-    map.heights[z * map.width + x] * exaggeration,
+    (map.heights[z * map.width + x] ?? 0) * exaggeration,
     (z - (map.height - 1) / 2) * CELL_PIXELS,
   );
 }
@@ -321,7 +330,7 @@ function buildTrees(map: TNTMap, exaggeration: number): THREE.Group {
   const pines: THREE.Vector3[] = [];
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
-      const word = map.features[z * map.width + x];
+      const word = map.features[z * map.width + x] ?? FEATURE_EMPTY;
       if (word > 2) continue;
       const p = cellWorld(map, x, z, exaggeration);
       if (word === 1) pines.push(p);
@@ -374,7 +383,7 @@ function buildRocks(map: TNTMap, exaggeration: number): THREE.InstancedMesh {
   const pts: THREE.Vector3[] = [];
   for (let z = 0; z < map.height; z++) {
     for (let x = 0; x < map.width; x++) {
-      const word = map.features[z * map.width + x];
+      const word = map.features[z * map.width + x] ?? FEATURE_EMPTY;
       if (word === 3 || word === 4) pts.push(cellWorld(map, x, z, exaggeration));
     }
   }
@@ -405,7 +414,7 @@ function placeFeatures(trees: THREE.Group, rocks: THREE.InstancedMesh, map: TNTM
   round.forEach((p, i) => {
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = map.heights[z * map.width + x] * exaggeration;
+    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
     dummy.position.set(p.x, y + 9, p.z);
     dummy.scale.setScalar(0.85 + (i % 5) * 0.08);
     dummy.updateMatrix();
@@ -418,7 +427,7 @@ function placeFeatures(trees: THREE.Group, rocks: THREE.InstancedMesh, map: TNTM
   pines.forEach((p, i) => {
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = map.heights[z * map.width + x] * exaggeration;
+    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
     dummy.position.set(p.x, y + 9, p.z);
     dummy.scale.set(0.7, 1, 0.7);
     dummy.updateMatrix();
@@ -436,7 +445,7 @@ function placeFeatures(trees: THREE.Group, rocks: THREE.InstancedMesh, map: TNTM
   pts.forEach((p, i) => {
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = map.heights[z * map.width + x] * exaggeration;
+    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
     dummy.position.set(p.x, y + 2, p.z);
     dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
     dummy.scale.setScalar(0.7 + (i % 5) * 0.18);
@@ -449,21 +458,21 @@ function placeFeatures(trees: THREE.Group, rocks: THREE.InstancedMesh, map: TNTM
 function hitToInfo(map: TNTMap, point: THREE.Vector3): HoverInfo {
   const x = clampInt(Math.round(point.x / CELL_PIXELS + (map.width - 1) / 2), 0, map.width - 1);
   const z = clampInt(Math.round(point.z / CELL_PIXELS + (map.height - 1) / 2), 0, map.height - 1);
-  const hgt = map.heights[z * map.width + x];
+  const hgt = map.heights[z * map.width + x] ?? 0;
   const h00 = hgt;
-  const h10 = map.heights[z * map.width + Math.min(map.width - 1, x + 1)];
-  const h01 = map.heights[Math.min(map.height - 1, z + 1) * map.width + x];
+  const h10 = map.heights[z * map.width + Math.min(map.width - 1, x + 1)] ?? 0;
+  const h01 = map.heights[Math.min(map.height - 1, z + 1) * map.width + x] ?? 0;
   const slope = Math.max(h00, h10, h01) - Math.min(h00, h10, h01);
   const tileW = map.width / 2;
-  const tileIndex = map.tileMap[(z >> 1) * tileW + (x >> 1)];
-  const featWord = map.features[z * map.width + x];
+  const tileIndex = map.tileMap[(z >> 1) * tileW + (x >> 1)] ?? 0;
+  const featWord = map.features[z * map.width + x] ?? FEATURE_EMPTY;
   return {
     cellX: x,
     cellZ: z,
     height: hgt,
     slope,
     underwater: hgt < map.seaLevel,
-    tileKind: map.tileKinds[tileIndex],
+    tileKind: map.tileKinds[tileIndex] ?? "grass",
     tileIndex,
     feature: featWord === FEATURE_EMPTY || featWord === FEATURE_FRINGE ? null : featureName(map, x, z),
     worldX: point.x,

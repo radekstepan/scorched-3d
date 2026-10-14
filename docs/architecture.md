@@ -1,0 +1,35 @@
+# Architecture
+
+How Scorched 3D is built. Mirrors the sibling photomator repo's layout, minus the pieces this project does not need (no server, no UI package, no Playwright).
+
+## Workspaces
+
+| Workspace | Responsibility |
+| --- | --- |
+| `apps/web` (`@scorched-3d/web`) | Vite application: HUD shell, view options, minimap, and the Three.js terrain renderer. Depends on `@scorched-3d/core`. |
+| `packages/core` (`@scorched-3d/core`) | Framework-free game logic: product branding, TNT-style terrain generation (heightfields, tiles, palette, textures). |
+
+There is no `packages/ui`: the web app is a single demo shell, so shared React components would be premature. There is no `apps/server`: all state is generated client-side per seed. Both can be added later following the photomator shape (`apps/*`, `packages/*` workspaces are already globbed).
+
+## Key files
+
+| File | Responsibility |
+| --- | --- |
+| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap, probe readout. |
+| `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, hover picking. |
+| `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
+| `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
+| `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
+| `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options. |
+| `packages/core/src/terrain/generate.ts` | Seeded heightfield sampling, feature stamping, tile painting, minimap. |
+| `packages/core/src/terrain/noise.ts` | Value-noise and FBM helpers. |
+| `packages/core/src/terrain/palette.ts` | 256-color palette and per-tile color ramps. |
+| `packages/core/src/terrain/texture.ts` | Albedo/height/minimap `ImageData` composition. |
+| `packages/core/src/index.ts` | Public barrel export for `@scorched-3d/core`. |
+| `scripts/sync-app-version.mjs` | Rewrites `APP_VERSION` from workspace versions (see Versioning). |
+
+## Build notes
+
+`@scorched-3d/core` compiles with `tsc -b` (composite project) to `dist/`; `@scorched-3d/web` resolves it through the workspace symlink, so `yarn build` must run at least once before `yarn dev` picks up core changes. Turbo's `build` task declares `dependsOn: ["^build"]` to enforce that order, and `typecheck`/`test`/`lint` all depend on `^build`. The web bundle stays single-file via `vite-plugin-singlefile` (`dist/index.html`).
+
+TypeScript strictness follows `tsconfig.base.json` (including `noUncheckedIndexedAccess`), which is stricter than the original single-package `tsconfig.json`. Typed-array and palette indexing therefore carries `??` fallbacks at read sites; all are in-bounds by construction, so the fallbacks never fire — they only satisfy the checker.

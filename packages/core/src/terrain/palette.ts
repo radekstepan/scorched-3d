@@ -63,5 +63,5 @@ export const TILE_RAMPS: Record<TileKind, { start: number; count: number; specks
 
 export function palRGB(pal: Uint8Array, index: number): [number, number, number] {
   const i = index * 3;
-  return [pal[i], pal[i + 1], pal[i + 2]];
+  return [pal[i] ?? 0, pal[i + 1] ?? 0, pal[i + 2] ?? 0];
 }

@@ -120,7 +120,7 @@ function sampleHeight(
       [ -0.05, 0.52, 0.2 ],
     ];
     for (let i = 0; i < islands.length; i++) {
-      const [cx, cz, r] = islands[i];
+      const [cx = 0, cz = 0, r = 0] = islands[i] ?? [];
       const warp = (fbm(x * 0.04 + i * 3, z * 0.04, seed + i, 3) - 0.5) * 0.28;
       const d = Math.hypot(nx - cx + warp, nz - cz);
       mask = Math.max(mask, smoothstep(r, r * 0.25, d));
@@ -153,10 +153,10 @@ function sampleHeight(
 }
 
 function cellSlope(heights: Uint8Array, w: number, h: number, x: number, z: number): number {
-  const h00 = heights[z * w + x];
-  const h10 = heights[z * w + Math.min(w - 1, x + 1)];
-  const h01 = heights[Math.min(h - 1, z + 1) * w + x];
-  const h11 = heights[Math.min(h - 1, z + 1) * w + Math.min(w - 1, x + 1)];
+  const h00 = heights[z * w + x] ?? 0;
+  const h10 = heights[z * w + Math.min(w - 1, x + 1)] ?? 0;
+  const h01 = heights[Math.min(h - 1, z + 1) * w + x] ?? 0;
+  const h11 = heights[Math.min(h - 1, z + 1) * w + Math.min(w - 1, x + 1)] ?? 0;
   return Math.max(h00, h10, h01, h11) - Math.min(h00, h10, h01, h11);
 }
 
@@ -169,7 +169,7 @@ function classifyTile(
   z: number,
   seed: number,
 ): TileKind {
-  const hgt = heights[z * w + x];
+  const hgt = heights[z * w + x] ?? 0;
   const slope = cellSlope(heights, w, h, x, z);
   const metal = fbm(x * 0.07, z * 0.07, seed + 40, 3);
 
@@ -199,7 +199,7 @@ function stampFeatures(
   for (let z = 2; z < h - 2; z++) {
     for (let x = 2; x < w - 2; x++) {
       const i = z * w + x;
-      const hgt = heights[i];
+      const hgt = heights[i] ?? 0;
       if (hgt <= sea + 4) continue;
       const slope = cellSlope(heights, w, h, x, z);
       const forest = fbm(x * 0.055, z * 0.055, seed + 70, 4);
@@ -219,7 +219,7 @@ function stampFeatures(
     const x = 8 + Math.floor(rng() * (w - 16));
     const z = 8 + Math.floor(rng() * (h - 16));
     const i = z * w + x;
-    if (heights[i] <= sea + 6) continue;
+    if ((heights[i] ?? 0) <= sea + 6) continue;
     features[i] = 5;
     for (let dz = 0; dz < 3; dz++) {
       for (let dx = 0; dx < 3; dx++) {
@@ -273,11 +273,11 @@ function buildMinimap(
     for (let x = 0; x < mw; x++) {
       const tx = Math.min(w - 1, Math.floor((x / mw) * w));
       const tz = Math.min(h - 1, Math.floor((y / mh) * h));
-      const hgt = heights[tz * w + tx];
+      const hgt = heights[tz * w + tx] ?? 0;
       const tix = Math.min(tileW - 1, tx >> 1);
       const tiz = Math.min(h / 2 - 1, tz >> 1);
-      const tileIndex = tileMap[tiz * tileW + tix];
-      const tile = tiles[tileIndex];
+      const tileIndex = tileMap[tiz * tileW + tix] ?? 0;
+      const tile = tiles[tileIndex] ?? tiles[0] ?? new Uint8Array(TILE_PIXELS * TILE_PIXELS);
       const px = tile[(tz & 1) * 16 * TILE_PIXELS + (tx & 1) * 16] ?? 16;
       let idx = px;
       if (hgt < sea) idx = hgt < sea - 12 ? 160 : 180;
@@ -297,11 +297,11 @@ export function worldSize(map: TNTMap): { worldW: number; worldD: number } {
 export function heightAt(map: TNTMap, x: number, z: number): number {
   const xi = clamp(Math.floor(x), 0, map.width - 1);
   const zi = clamp(Math.floor(z), 0, map.height - 1);
-  return map.heights[zi * map.width + xi];
+  return map.heights[zi * map.width + xi] ?? 0;
 }
 
 export function featureName(map: TNTMap, x: number, z: number): string | null {
-  const word = map.features[z * map.width + x];
+  const word = map.features[z * map.width + x] ?? FEATURE_EMPTY;
   if (word === FEATURE_EMPTY || word === FEATURE_FRINGE) return null;
   return map.featureTable[word]?.name ?? null;
 }
