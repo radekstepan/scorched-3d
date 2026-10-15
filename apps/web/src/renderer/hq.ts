@@ -13,8 +13,9 @@ import { buildTeamRing } from "./units";
  * cylinders (no new materials per frame — everything is created once in
  * `buildHq`), so the door animation is a single position write per tick
  * and the wreck pose is a one-time recolor. A red warning beacon on the
- * canopy front edge (emissive dome + one cheap PointLight) blinks while
- * the works stands as the "working building" signal and dies with it.
+ * canopy top (a bare translucent hemisphere with a light + bulb spinning
+ * inside it) sweeps while the works stands as the "working building"
+ * signal and dies with it.
  *
  * Local frame: the door faces +X. The canvas mirrors team 1 (east) so its
  * door faces the map center (-X world).
@@ -44,16 +45,19 @@ export const HQ_CONCRETE = 0x6b6f75;
 export const HQ_DARK = 0x3a3d42;
 /** Red warning-beacon lens color: the "working building" signal. */
 export const HQ_BEACON_COLOR = 0xff2a1a;
-/** Flash cycle of the warning beacon, seconds (square blink, 50% duty). */
+/** One full sweep of the beacon rotor, seconds (continuous rotation). */
 export const HQ_BEACON_PERIOD = 1.4;
-export const HQ_BEACON_DUTY = 0.5;
 /** Beacon PointLight peak intensity (physical falloff, combat-pool order). */
 export const HQ_BEACON_PEAK = 900;
 /** Beacon falloff range: washes the canopy + door apron, nothing more. */
 export const HQ_BEACON_DISTANCE = 170;
-/** Beacon dome seat, local frame (mast on the canopy front edge, over the door). */
+/** Beacon dome radius (a bare hemisphere, no mast or platform). */
+export const HQ_BEACON_RADIUS = 2;
+/** Rotor orbit inside the dome: bulb + light sweep this radius. */
+export const HQ_BEACON_ORBIT = 1.1;
+/** Beacon dome seat, local frame (bare hemisphere on the canopy top, over the door). */
 export const HQ_BEACON_X = 58;
-export const HQ_BEACON_Y = 41.8;
+export const HQ_BEACON_Y = 33;
 /**
  * Default footing depth under the slab/hall (world units, straight down
  * from the slab underside at local y=0). `HqFx` re-sizes both footings per
@@ -192,29 +196,47 @@ export function buildHq(team: TeamId): THREE.Group {
   door.userData.baseY = door.position.y;
   tag(door);
 
-  // Warning beacon on the canopy front edge, centered over the door: a
-  // short mast + collar with a red emissive dome (`hq-beacon`) and one
-  // cheap no-shadow PointLight (`hq-beacon-light`) that washes the canopy
-  // and door apron. The flash reads as a "working building" signal; the
-  // HqFx tick blinks it via `setHqBeaconLevel`, wrecks kill it for good.
-  tag(hqBox(group, 2, 7, 2, HQ_BEACON_X, 36.5, 0, HQ_DARK));
-  tag(hqBox(group, 4, 1, 4, HQ_BEACON_X, 40.2, 0, HQ_DARK));
+  // Warning beacon on the canopy top, centered over the door: a bare
+  // red hemisphere (`hq-beacon`, no mast, no platform) with a small rotor
+  // inside (`hq-beacon-rotor`) carrying the bulb (`hq-beacon-bulb`) and one
+  // cheap no-shadow PointLight (`hq-beacon-light`). The rotor spins so the
+  // light sweeps inside the lens as the "working building" signal; the
+  // HqFx tick rotates it via `setHqBeaconAngle`, wrecks kill it for good.
   const dome = new THREE.Mesh(
-    new THREE.SphereGeometry(2, 12, 10),
+    new THREE.SphereGeometry(HQ_BEACON_RADIUS, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshLambertMaterial({
       color: HQ_BEACON_COLOR,
       emissive: HQ_BEACON_COLOR,
       emissiveIntensity: 2.2,
+      transparent: true,
+      opacity: 0.55,
+      side: THREE.DoubleSide,
     }),
   );
   dome.name = "hq-beacon";
   dome.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
   tag(dome);
   group.add(dome);
+  const rotor = new THREE.Group();
+  rotor.name = "hq-beacon-rotor";
+  rotor.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
+  group.add(rotor);
+  const bulb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.7, 10, 8),
+    new THREE.MeshLambertMaterial({
+      color: 0xffd0c0,
+      emissive: HQ_BEACON_COLOR,
+      emissiveIntensity: 3,
+    }),
+  );
+  bulb.name = "hq-beacon-bulb";
+  bulb.position.set(HQ_BEACON_ORBIT, 1, 0);
+  tag(bulb);
+  rotor.add(bulb);
   const beaconLight = new THREE.PointLight(HQ_BEACON_COLOR, HQ_BEACON_PEAK, HQ_BEACON_DISTANCE, 1.8);
   beaconLight.name = "hq-beacon-light";
-  beaconLight.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
-  group.add(beaconLight);
+  beaconLight.position.set(HQ_BEACON_ORBIT, 1, 0);
+  rotor.add(beaconLight);
 
   // Open hall toward the map center: floor strip + low guide curbs the
   // reinforcement drives between on its way out.
@@ -254,15 +276,30 @@ export function getHqBeaconLight(group: THREE.Group): THREE.PointLight | null {
   return (group.getObjectByName("hq-beacon-light") as THREE.PointLight | undefined) ?? null;
 }
 
+/** Warning-beacon rotor of an HQ group, or null (plain test groups). */
+export function getHqBeaconRotor(group: THREE.Group): THREE.Group | null {
+  return (group.getObjectByName("hq-beacon-rotor") as THREE.Group | undefined) ?? null;
+}
+
 /**
- * Beacon flash level `timeS` seconds into the loop: 1 for the first duty
- * half of each period, 0 for the rest. Pure, so headless tests can pin the
- * blink without a scene. Non-finite/negative time reads lit (start bright).
+ * Rotor angle `timeS` seconds into the loop, radians: one full sweep per
+ * `HQ_BEACON_PERIOD`. Pure, so headless tests can pin the spin without a
+ * scene. Non-finite/negative time reads 0 (rotor parked facing +X).
  */
-export function hqWarningBlinkAt(timeS: number): number {
-  if (!isFinite(timeS) || timeS < 0) return 1;
-  const phase = (timeS % HQ_BEACON_PERIOD) / HQ_BEACON_PERIOD;
-  return phase < HQ_BEACON_DUTY ? 1 : 0;
+export function hqBeaconAngleAt(timeS: number): number {
+  if (!isFinite(timeS) || timeS < 0) return 0;
+  return ((timeS % HQ_BEACON_PERIOD) / HQ_BEACON_PERIOD) * Math.PI * 2;
+}
+
+/** Current rotor angle of an HQ group, radians (0 when missing). */
+export function hqBeaconAngleOf(group: THREE.Group): number {
+  return getHqBeaconRotor(group)?.rotation.y ?? 0;
+}
+
+/** Point the beacon rotor at `angle` radians (wrecks stay dark regardless). */
+export function setHqBeaconAngle(group: THREE.Group, angle: number): void {
+  const rotor = getHqBeaconRotor(group);
+  if (rotor) rotor.rotation.y = angle;
 }
 
 /**
@@ -278,6 +315,12 @@ export function setHqBeaconLevel(group: THREE.Group, level: number): void {
     if (dome && mat && "emissive" in mat) {
       mat.emissive.setHex(0x000000);
       mat.emissiveIntensity = 0;
+    }
+    const bulb = group.getObjectByName("hq-beacon-bulb") as THREE.Mesh | undefined;
+    const bulbMat = bulb?.material as THREE.MeshLambertMaterial | undefined;
+    if (bulb && bulbMat && "emissive" in bulbMat) {
+      bulbMat.emissive.setHex(0x000000);
+      bulbMat.emissiveIntensity = 0;
     }
     const light = getHqBeaconLight(group);
     if (light) light.intensity = 0;

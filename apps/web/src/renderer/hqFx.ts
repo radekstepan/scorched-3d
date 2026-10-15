@@ -12,12 +12,13 @@ import {
 import {
   buildHq,
   doorLiftOf,
+  hqBeaconAngleAt,
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
-  hqWarningBlinkAt,
   poseHqWreck,
   setDoorLift,
+  setHqBeaconAngle,
   setHqBeaconLevel,
   setHqFoundation,
   HQ_DOOR_TRAVEL,
@@ -107,7 +108,7 @@ export class HqFx {
   private released: boolean[] = [false, false];
   /** Kind drawn for the running release (set when its clock fires). */
   private pendingKind: (UnitKind | null)[] = [];
-  /** Beacon flash clock: every live HQ blinks on this shared phase. */
+  /** Beacon sweep clock: every live HQ rotor turns on this shared phase. */
   private clock = 0;
   private env: HqEnv;
   private rng: () => number;
@@ -127,7 +128,7 @@ export class HqFx {
       // surface under the footprint so the downhill side shows concrete
       // instead of an air gap (flat ground just buries them invisibly).
       setHqFoundation(group, hqFoundationDropWorld({ x: a.x, y: a.y, z: a.z }, facing, env.groundY));
-      // Warning beacons start lit — the first tick's blink takes over.
+      // Warning beacons start lit — the first tick's sweep takes over.
       setHqBeaconLevel(group, 1);
       this.scene.add(group);
       this.groups.push(group);
@@ -246,15 +247,16 @@ export class HqFx {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
-    // Shared beacon phase: one cheap level write per live HQ (2 lights
-    // total, no shadows), so both works flash in sync while they stand.
+    // Shared beacon phase: one cheap angle write per live HQ (2 rotors
+    // total, lights have no shadows), so both works sweep in sync.
     this.clock += dt;
-    const blink = hqWarningBlinkAt(this.clock);
+    const angle = hqBeaconAngleAt(this.clock);
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
-      setHqBeaconLevel(group, blink);
+      setHqBeaconLevel(group, 1);
+      setHqBeaconAngle(group, angle);
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release draws a random
         // kind and starts the door — stronger units also rearm a longer

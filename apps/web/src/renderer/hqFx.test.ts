@@ -222,23 +222,27 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("blinks the warning beacons in sync while the works stand", () => {
+  it("sweeps the warning beacons in sync while the works stand", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
-    const lights = [hq.groupAt(0)!, hq.groupAt(1)!].map(
-      (g) => g.getObjectByName("hq-beacon-light") as THREE.PointLight,
-    );
-    // Fresh forts start lit.
+    const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
+    const lights = groups.map((g) => g.getObjectByName("hq-beacon-light") as THREE.PointLight);
+    const rotors = groups.map((g) => g.getObjectByName("hq-beacon-rotor") as THREE.Group);
+    // Fresh forts start lit, rotors parked.
     expect(lights[0]!.intensity).toBeGreaterThan(0);
     expect(lights[1]!.intensity).toBeGreaterThan(0);
-    // Advance into the dark half of the period: both go dark together.
-    hq.update(HQ_BEACON_PERIOD * 0.75);
-    expect(lights[0]!.intensity).toBe(0);
-    expect(lights[1]!.intensity).toBe(0);
-    // And back into the lit half a quarter period later.
-    hq.update(HQ_BEACON_PERIOD * 0.5);
+    expect(rotors[0]!.rotation.y).toBeCloseTo(0, 9);
+    // A quarter period turns both rotors a quarter turn, in sync — and the
+    // wash stays on while the rotor sweeps (no blink dark half).
+    hq.update(HQ_BEACON_PERIOD * 0.25);
+    expect(rotors[0]!.rotation.y).toBeCloseTo(Math.PI / 2, 6);
+    expect(rotors[1]!.rotation.y).toBeCloseTo(Math.PI / 2, 6);
     expect(lights[0]!.intensity).toBeGreaterThan(0);
     expect(lights[1]!.intensity).toBeGreaterThan(0);
+    // Another quarter turn keeps them locked together.
+    hq.update(HQ_BEACON_PERIOD * 0.25);
+    expect(rotors[0]!.rotation.y).toBeCloseTo(Math.PI, 6);
+    expect(rotors[1]!.rotation.y).toBeCloseTo(rotors[0]!.rotation.y, 9);
     hq.dispose();
   });
 
@@ -249,9 +253,12 @@ describe("HqFx", () => {
     expect(hq.isDestroyedAt(0)).toBe(true);
     const light = hq.groupAt(0)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
     expect(light.intensity).toBe(0);
-    // Ticks never re-light the wreck; the survivor keeps flashing.
+    // Ticks never re-light the wreck; the survivor keeps sweeping lit.
+    const rotor = hq.groupAt(0)!.getObjectByName("hq-beacon-rotor") as THREE.Group;
+    const parked = rotor.rotation.y;
     hq.update(HQ_BEACON_PERIOD * 2);
     expect(light.intensity).toBe(0);
+    expect(rotor.rotation.y).toBe(parked);
     const survivor = hq.groupAt(1)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
     expect(survivor.intensity).toBeGreaterThan(0);
     hq.dispose();
