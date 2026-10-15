@@ -32,4 +32,10 @@ describe("minimap click-to-move wiring", () => {
     expect(canvasSource).toContain("jumpCameraTo");
     expect(canvasSource).toContain("appliedJumpSeq");
   });
+
+  it("seats the jump target onto the terrain so the clicked point centers", () => {
+    // Without the ground-height seating the orbit target keeps its old
+    // height and the clicked point renders off-center on oblique views.
+    expect(canvasSource).toMatch(/jumpCameraTo\([\s\S]*?groundY/);
+  });
 });

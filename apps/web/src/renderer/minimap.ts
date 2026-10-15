@@ -3,8 +3,10 @@
 // Pure, framework-free coordinate mapping + camera retarget: a minimap
 // pointer (u/v fractions across the square minimap box) maps linearly to
 // world X/Z, and jumping the orbit camera there translates both the camera
-// position and the orbit target by the same ground offset — so yaw, pitch,
-// and zoom distance are preserved (only the focus point moves). Kept free
+// position and the orbit target by the same offset — so yaw, pitch, and
+// zoom distance are preserved (only the focus point moves, seated onto the
+// terrain height at the destination so the clicked point lands in the
+// center of the view). Kept free
 // of three.js so it stays unit-testable in a node environment, mirroring
 // cameraPan.ts.
 
@@ -77,10 +79,17 @@ export function minimapPointToWorld(
 /**
  * Retarget an orbit camera to a minimap world point while preserving the
  * angle of view and zoom level: the position→target offset vector is kept
- * (same yaw/pitch/distance, same target height), only translated in X/Z.
- * The destination is clamped to the map (same edge margin as keyboard
- * pan) and the camera follows by the clamped delta, so the offset truly
- * never changes — even at the map edges.
+ * (same yaw/pitch/distance), only translated. The destination is clamped
+ * to the map (same edge margin as keyboard pan) and the camera follows by
+ * the clamped delta, so the offset truly never changes — even at the map
+ * edges.
+ *
+ * Pass `sampleY` (ground height at the clamped destination) so the clicked
+ * surface point lands exactly on the orbit target — and therefore in the
+ * center of the view. Without it only X/Z translate (target height kept),
+ * so on oblique views the clicked point sits above/below the view-center
+ * ray and renders off-center by roughly the height mismatch divided by the
+ * zoom distance. Non-finite samples fall back to preserving target height.
  */
 export function jumpCameraTo(
   position: Vec3,
@@ -88,13 +97,22 @@ export function jumpCameraTo(
   dest: { x: number; z: number },
   worldW: number,
   worldD: number,
+  sampleY?: (x: number, z: number) => number,
 ): void {
   const clamped = { x: dest.x, y: target.y, z: dest.z };
   clampPanTarget(clamped, worldW, worldD);
+  let y = target.y;
+  if (sampleY) {
+    const sampled = sampleY(clamped.x, clamped.z);
+    if (Number.isFinite(sampled)) y = sampled;
+  }
   const dx = clamped.x - target.x;
+  const dy = y - target.y;
   const dz = clamped.z - target.z;
   position.x += dx;
+  position.y += dy;
   position.z += dz;
   target.x = clamped.x;
+  target.y = y;
   target.z = clamped.z;
 }

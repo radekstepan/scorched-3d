@@ -909,12 +909,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         controls.zoomSpeed = clampZoomSpeed(opt.zoomSpeed);
       }
 
-      // Minimap click-to-move: translate target + camera by the same ground
-      // offset so yaw/pitch/zoom survive; clamped to the map like pan.
+      // Minimap click-to-move: translate target + camera by the same
+      // offset so yaw/pitch/zoom survive (clamped to the map like pan),
+      // seating the target onto the terrain height at the destination so
+      // the clicked point lands in the center of the view.
       const jump = jumpRef.current;
       if (jump && jump.seq !== appliedJumpSeq) {
         appliedJumpSeq = jump.seq;
-        jumpCameraTo(camera.position, controls.target, jump, worldW, worldD);
+        jumpCameraTo(camera.position, controls.target, jump, worldW, worldD, groundY);
       }
 
       controls.update();
