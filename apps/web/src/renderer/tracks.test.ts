@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  FOOTSTEP_LENGTH,
+  FOOTSTEP_OFFSET,
   MAX_TRACKS,
   TRACK_LIFT,
   TRACK_LENGTH,
@@ -10,6 +12,9 @@ import {
   TrackTrails,
   isDriving,
   trackAlpha,
+  trackLengthFor,
+  trackOffsetFor,
+  trackOffsetsFor,
   trackWidthFor,
   type TrackSource,
 } from "./tracks";
@@ -79,6 +84,38 @@ describe("track helpers", () => {
     expect(trackWidthFor("commander")).toBeLessThan(trackWidthFor("flash"));
   });
 
+  it("seats tread outer edges flush with the hull flank footprint", async () => {
+    const { HULL_FOOTPRINT } = await import("@scorched-3d/core");
+    for (const kind of ["flash", "stump", "hammer"] as const) {
+      const fp = HULL_FOOTPRINT[kind];
+      // Outer edge = center offset + half tread width lands on the flank tap.
+      expect(trackOffsetFor(kind) + trackWidthFor(kind) / 2).toBeCloseTo(fp.halfWid, 9);
+      expect(trackOffsetFor(kind)).toBeGreaterThan(0);
+    }
+    expect(trackOffsetFor("commander")).toBe(0);
+  });
+
+  it("stamps a symmetric tread pair for tanks, alternating footsteps for the walker", () => {
+    for (const kind of ["flash", "stump", "hammer"] as const) {
+      const pair = trackOffsetsFor(kind, 0);
+      expect(pair).toHaveLength(2);
+      expect(pair[0]).toBeCloseTo(-pair[1]!, 9);
+      expect(pair[0]).toBeCloseTo(-trackOffsetFor(kind), 9);
+      // Stride-independent: tanks never alternate.
+      expect(trackOffsetsFor(kind, 7)).toEqual(pair);
+    }
+    // Commander: one foot per stride, alternating left/right at leg spread.
+    expect(trackOffsetsFor("commander", 0)).toEqual([-FOOTSTEP_OFFSET]);
+    expect(trackOffsetsFor("commander", 1)).toEqual([FOOTSTEP_OFFSET]);
+    expect(trackOffsetsFor("commander", 2)).toEqual([-FOOTSTEP_OFFSET]);
+    // Treads link up along travel; footsteps leave gaps between dashes.
+    for (const kind of ["flash", "stump", "hammer"] as const) {
+      expect(trackLengthFor(kind)).toBeGreaterThan(TRACK_SPACING);
+    }
+    expect(trackLengthFor("commander")).toBe(FOOTSTEP_LENGTH);
+    expect(trackLengthFor("commander")).toBeLessThan(TRACK_SPACING);
+  });
+
   it("gates emission on real driving only", () => {
     const driving: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
     expect(isDriving(driving, false)).toBe(true);
@@ -117,6 +154,67 @@ describe("TrackTrails", () => {
     expect(movement.moverState(0)).toEqual(before);
     movement.dispose();
     tracks.dispose();
+  });
+
+  it("stamps a tread pair per tank stride and alternating footsteps for the walker", () => {
+    const scene = new THREE.Scene();
+    // Single tank driving straight: each stride drops exactly 2 marks, one
+    // per flank, symmetric about the hull centerline.
+    const tank: TrackSource = {
+      unitCount: 1,
+      kindAt: () => "stump",
+      isDestroyed: () => false,
+      moverState: null as unknown as TrackSource["moverState"],
+    };
+    let tx = 0;
+    tank.moverState = () => ({ x: (tx += TRACK_SPACING + 1), z: 0, hull: 0, leg: 1 });
+    const tankTracks = new TrackTrails(scene, { groundY: () => 100 });
+    tankTracks.update(tank, 1 / 60); // first sighting anchors
+    tankTracks.update(tank, 1 / 60); // one stride -> one tread pair
+    expect(tankTracks.count).toBe(2);
+    const left = tankTracks.slotAt(0)!;
+    const right = tankTracks.slotAt(1)!;
+    expect(left.live).toBe(true);
+    expect(right.live).toBe(true);
+    // Hull faces +Z at yaw 0, so the pair splits across X, centered on tx.
+    expect(left.x + right.x).toBeCloseTo(2 * tx, 6);
+    expect(Math.abs(left.x - right.x)).toBeCloseTo(2 * trackOffsetFor("stump"), 6);
+    expect(left.z).toBeCloseTo(right.z, 6);
+    const meshes = scene.children.filter((c): c is THREE.Mesh => c.type === "Mesh");
+    expect(meshes).toHaveLength(2);
+    for (const mesh of meshes) {
+      expect(mesh.scale.x).toBeCloseTo(trackWidthFor("stump"), 9);
+      expect(mesh.scale.z).toBeCloseTo(trackLengthFor("stump"), 9);
+    }
+    tankTracks.dispose();
+
+    // Walker: one footstep per stride, alternating sides with gaps.
+    const scene2 = new THREE.Scene();
+    const walker: TrackSource = {
+      unitCount: 1,
+      kindAt: () => "commander",
+      isDestroyed: () => false,
+      moverState: null as unknown as TrackSource["moverState"],
+    };
+    let wx = 0;
+    walker.moverState = () => ({ x: (wx += TRACK_SPACING + 1), z: 0, hull: 0, leg: 1 });
+    const walkTracks = new TrackTrails(scene2, { groundY: () => 100 });
+    walkTracks.update(walker, 1 / 60);
+    walkTracks.update(walker, 1 / 60);
+    expect(walkTracks.count).toBe(1);
+    const first = walkTracks.slotAt(0)!;
+    walkTracks.update(walker, 1 / 60);
+    expect(walkTracks.count).toBe(2);
+    const second = walkTracks.slotAt(1)!;
+    // Alternation: footsteps land on opposite sides of the centerline.
+    expect(first.x - wx + (TRACK_SPACING + 1)).toBeCloseTo(-FOOTSTEP_OFFSET, 6);
+    expect(second.x - wx).toBeCloseTo(FOOTSTEP_OFFSET, 6);
+    const steps = scene2.children.filter((c): c is THREE.Mesh => c.type === "Mesh");
+    for (const mesh of steps) {
+      expect(mesh.scale.x).toBeCloseTo(trackWidthFor("commander"), 9);
+      expect(mesh.scale.z).toBe(FOOTSTEP_LENGTH);
+    }
+    walkTracks.dispose();
   });
 
   it("stays silent while stunned, held, or wrecked — and stamps while driving", () => {
@@ -205,11 +303,12 @@ describe("TrackTrails", () => {
   });
 
   it("renders wider, longer-lived marks under the scorch layer", () => {
-    // Visibility tune pinned: 12 s ribbons, overlapping quads, tank treads
-    // wider than the old 9–11 u, all still below scorch in every dimension.
+    // Visibility tune pinned: 12 s ribbons, overlapping tank treads
+    // (footsteps stay gapped), all still below scorch in every dimension.
     expect(TRACK_LIFETIME).toBe(12);
     expect(TRACK_LENGTH).toBeGreaterThan(TRACK_SPACING);
-    expect(trackWidthFor("stump")).toBeGreaterThan(11);
+    expect(FOOTSTEP_LENGTH).toBeLessThan(TRACK_SPACING);
+    expect(trackWidthFor("stump")).toBeGreaterThan(trackWidthFor("flash"));
     const scene = new THREE.Scene();
     const far: TrackSource = {
       unitCount: 1,

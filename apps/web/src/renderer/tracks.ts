@@ -1,11 +1,13 @@
 import * as THREE from "three";
-import type { Mover, UnitKind } from "@scorched-3d/core";
+import { HULL_FOOTPRINT, type Mover, type UnitKind } from "@scorched-3d/core";
 
 /**
- * Fading track trails: vehicles leave a subtle compressed-dust trace behind
- * themselves while driving. Each moving hull drops small flat quads at fixed
- * travel intervals; every mark fades to nothing over seconds and is
- * then recycled — so a patrol lane reads as a dotted ribbon, never as
+ * Fading track trails: vehicles leave a compressed-dust trace behind
+ * themselves while driving. Tracked hulls (flash/stump/hammer) stamp two
+ * parallel treads — one per side, offset to the hull's flank footprint —
+ * while the commander (biped) stamps small alternating footsteps with gaps
+ * between them. Every mark fades to nothing over seconds and is then
+ * recycled, so a patrol lane reads as a tread/footprint ribbon, never as
  * scorch. Renderer-side only: movers and simulation never see the marks.
  *
  * Palette discipline (cf. the gentler-scorch tone): cool dark grey at low
@@ -17,28 +19,81 @@ import type { Mover, UnitKind } from "@scorched-3d/core";
 export const TRACK_LIFETIME = 12;
 /** Travel distance (world units) between dropped marks. */
 export const TRACK_SPACING = 16;
-/** Hard cap on live marks (bounded pool, oldest recycled first). */
-export const MAX_TRACKS = 160;
+/**
+ * Hard cap on live marks (bounded pool, oldest recycled first). Doubled
+ * from the single-trail 160: each tank stamp drops two tread quads, so 320
+ * slots hold the same lane length as before.
+ */
+export const MAX_TRACKS = 320;
 /** Peak opacity of a fresh mark (visible, still well under the scorch layer). */
 export const TRACK_PEAK_OPACITY = 0.42;
 /** Mark color: cool dark grey (compressed dust, never scorch-brown). */
 export const TRACK_COLOR = 0x33302b;
 /** Surface lift above the seated terrain (below scorch, above z-fight). */
 export const TRACK_LIFT = 0.8;
-/** Mark length along travel (overlaps `TRACK_SPACING` so lanes link up). */
+/** Tread length along travel (overlaps `TRACK_SPACING` so lanes link up). */
 export const TRACK_LENGTH = 22;
+/**
+ * Footstep length along travel for the walker. Shorter than
+ * `TRACK_SPACING`, so footsteps read as dashes with gaps between them
+ * instead of a linked ribbon.
+ */
+export const FOOTSTEP_LENGTH = 10;
+/**
+ * Lateral footstep offset for the walker: matches the leg spread (±4 in
+ * the body build), so left/right steps land under the striding feet.
+ */
+export const FOOTSTEP_OFFSET = 4;
 
-/** Tread width per kind (tanks wider, the walker just scuffs). */
+/**
+ * Single-tread width per kind (one quad of a tank's pair, or one walker
+ * footstep). Tanks tread wider than the walker scuffs; the stump runs the
+ * widest pair. Outer tread edges sit flush with the hull flank footprint
+ * (see `trackOffsetFor`).
+ */
 export const TRACK_WIDTH: Record<UnitKind, number> = {
-  flash: 11,
-  stump: 13,
-  hammer: 12,
-  commander: 6,
+  flash: 4,
+  stump: 5,
+  hammer: 4.5,
+  commander: 3.5,
 };
 
-/** Tread width for a kind (falls back to flash for unknown kinds). */
+/** Single-tread width for a kind (falls back to flash for unknown kinds). */
 export function trackWidthFor(kind: UnitKind): number {
   return TRACK_WIDTH[kind] ?? TRACK_WIDTH.flash;
+}
+
+/**
+ * Lateral center distance of one tread from the hull centerline. Tanks: the
+ * outer tread edge lands flush with the flank footprint
+ * (`offset + tread/2 = halfWid`). The walker stamps on the centerline here
+ * (its alternation lives in `trackOffsetsFor`, not in a fixed gauge).
+ * Pure for tests.
+ */
+export function trackOffsetFor(kind: UnitKind): number {
+  if (kind === "commander") return 0;
+  const fp = HULL_FOOTPRINT[kind] ?? HULL_FOOTPRINT.flash;
+  return fp.halfWid - trackWidthFor(kind) / 2;
+}
+
+/**
+ * Lateral tread offsets for one stamp of `kind` at stride `step` (strides
+ * count stamps, starting at 0). Tanks return the symmetric pair
+ * `[-offset, +offset]` every stride; the commander alternates a single
+ * footstep left/right (`-FOOTSTEP_OFFSET` on even strides, `+` on odd) so
+ * the lane reads as alternating prints with gaps. Pure for tests.
+ */
+export function trackOffsetsFor(kind: UnitKind, step: number): number[] {
+  if (kind === "commander") {
+    return [step % 2 === 0 ? -FOOTSTEP_OFFSET : FOOTSTEP_OFFSET];
+  }
+  const off = trackOffsetFor(kind);
+  return [-off, off];
+}
+
+/** Mark length along travel for a kind (treads link, footsteps gap). */
+export function trackLengthFor(kind: UnitKind): number {
+  return kind === "commander" ? FOOTSTEP_LENGTH : TRACK_LENGTH;
 }
 
 /**
@@ -97,6 +152,8 @@ export class TrackTrails {
   /** Last emission point per unit (NaN until the unit is first seen). */
   private lastX: number[] = [];
   private lastZ: number[] = [];
+  /** Stamp (stride) count per unit: drives the walker's left/right alternation. */
+  private strides: number[] = [];
   private disposed = false;
 
   constructor(scene: THREE.Scene, env: TrackEnv) {
@@ -119,11 +176,12 @@ export class TrackTrails {
 
   /**
    * Poll every unit once per tick: driving hulls that travelled past the
-   * spacing drop a mark; stunned/held/wreck hulls never emit (even when a
-   * separation shove jostles a stunned hull — the gate is the mover state,
-   * not the displacement). Ages every live mark toward expiry. Roster-sized
-   * work per tick (one small mover snapshot per hull); meshes/materials are
-   * pooled, so the frame never allocates scene objects.
+   * spacing drop their footprint marks (a tread pair for tanks, one
+   * alternating footstep for the commander); stunned/held/wreck hulls never
+   * emit (even when a separation shove jostles a stunned hull — the gate is
+   * the mover state, not the displacement). Ages every live mark toward
+   * expiry. Roster-sized work per tick (one small mover snapshot per hull);
+   * meshes/materials are pooled, so the frame never allocates scene objects.
    */
   update(source: TrackSource, dt: number): void {
     if (this.disposed || !(dt > 0)) return;
@@ -131,10 +189,12 @@ export class TrackTrails {
     while (this.lastX.length < n) {
       this.lastX.push(Number.NaN);
       this.lastZ.push(Number.NaN);
+      this.strides.push(0);
     }
     if (this.lastX.length > n) {
       this.lastX.length = n;
       this.lastZ.length = n;
+      this.strides.length = n;
     }
     for (let i = 0; i < n; i++) {
       const mover = source.moverState(i);
@@ -150,7 +210,9 @@ export class TrackTrails {
       const dx = m.x - px;
       const dz = m.z - this.lastZ[i]!;
       if (dx * dx + dz * dz >= TRACK_SPACING * TRACK_SPACING) {
-        this.emit(m.x, m.z, m.hull, source.kindAt(i));
+        const kind = source.kindAt(i);
+        this.emit(m.x, m.z, m.hull, kind, this.strides[i]!);
+        this.strides[i] = (this.strides[i] ?? 0) + 1;
         this.lastX[i] = m.x;
         this.lastZ[i] = m.z;
       }
@@ -194,7 +256,25 @@ export class TrackTrails {
     return { x: s.mesh.position.x, y: s.mesh.position.y, z: s.mesh.position.z, live: s.live };
   }
 
-  private emit(x: number, z: number, yaw: number, kind: UnitKind): void {
+  /**
+   * Stamp one stride at (x, z) facing `yaw`: a tread pair for tanks, one
+   * alternating footstep for the commander. Lateral offsets run across the
+   * hull (local +X under yaw: `(cos yaw, -sin yaw)` in (x, z)), matching the
+   * flank taps the grade seating uses.
+   */
+  private emit(x: number, z: number, yaw: number, kind: UnitKind, step: number): void {
+    const rx = Math.cos(yaw);
+    const rz = -Math.sin(yaw);
+    const width = trackWidthFor(kind);
+    const length = trackLengthFor(kind);
+    for (const off of trackOffsetsFor(kind, step)) {
+      const mx = x + rx * off;
+      const mz = z + rz * off;
+      this.emitMark(mx, mz, yaw, width, length);
+    }
+  }
+
+  private emitMark(x: number, z: number, yaw: number, width: number, length: number): void {
     let slot: TrackSlot | undefined;
     if (this.slots.length < MAX_TRACKS) {
       const mat = new THREE.MeshBasicMaterial({
@@ -224,7 +304,7 @@ export class TrackTrails {
     mesh.visible = true;
     mesh.position.set(x, this.env.groundY(x, z) + TRACK_LIFT, z);
     mesh.rotation.set(0, yaw, 0);
-    mesh.scale.set(trackWidthFor(kind), 1, TRACK_LENGTH);
+    mesh.scale.set(width, 1, length);
     slot!.mat.opacity = TRACK_PEAK_OPACITY;
   }
 
