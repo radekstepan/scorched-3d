@@ -3,14 +3,13 @@ import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
 import { accumulateStun, tickStun } from "./impact.js";
 import {
-  THREAT_DISENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
   clearThreat,
   pursueStandOff,
   tickThreat,
   type ThreatMemory,
 } from "./retaliation.js";
-import { outnumbered } from "./strategy.js";
+import { outnumbered, disengageRadiusFor } from "./strategy.js";
 import {
   CRUSH_DRAG,
   stepBlocked,
@@ -578,11 +577,14 @@ function pursueStep(
   if (!(Number.isFinite(tx) && Number.isFinite(tz))) return null;
   // Disengage (hysteresis side): an engaged hull tolerates more distance
   // than a fresh one, but past this the attacker got away — let go.
+  // Scouts hold scout-range contacts (see `disengageRadiusFor`): without the
+  // wider bound the drive would drop every acquisition the scout gates made
+  // past the regular disengage on its first step.
   // Position memories (attacker -1: a last-known spot or an HQ structure)
   // are exempt — the quarry cannot flee, so distance from the spot is the
   // reason to advance, not a reason to give up. The anchor leash and the
   // memory expiry below still release the hull.
-  if (threat.attacker >= 0 && Math.hypot(tx - mover.x, tz - mover.z) > THREAT_DISENGAGE_RADIUS) return null;
+  if (threat.attacker >= 0 && Math.hypot(tx - mover.x, tz - mover.z) > disengageRadiusFor(kind)) return null;
   // Leash to the post: the threat must sit near the patrol anchor (route
   // waypoint 0, the spawn) or the chase would drag the hull across the map.
   // The memory carries its own leash — retaliation holds the tight anchor

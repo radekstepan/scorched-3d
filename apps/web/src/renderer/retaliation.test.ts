@@ -604,6 +604,136 @@ describe("UnitMovement team advance", () => {
   });
 });
 
+describe("peewee scout", () => {
+  /** Idle hulls with custom spawns, sides, and kinds (anchors at spawns). */
+  function makeScoutMovement(
+    spawns: { x: number; z: number }[],
+    teams: number[],
+    kinds: UnitKind[],
+  ): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = spawns.map((_, i) => ({
+      kind: kinds[i] ?? "flash",
+      cellX: 10 + i,
+      cellZ: 10,
+      rotation: 0,
+      team: teams[i],
+    }));
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(pos.x, 100, pos.z);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("spots a distant column past tank notice and pulls its side in", () => {
+    // Scout + tank (team 0) at the origin, enemy (team 1) at 1300 — past
+    // the 1100 regular notice, inside the 1500 scout notice.
+    const { movement } = makeScoutMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 100, z: 0 },
+        { x: 1300, z: 0 },
+      ],
+      [0, 0, 1],
+      ["peewee", "flash", "flash"],
+    );
+    movement.update(1 / 60);
+    // The scout acquires what its heavier teammate cannot see…
+    expect(movement.moverState(0)?.threat?.attacker).toBe(2);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.update(1 / 60);
+    // …and the sighting focuses the side: the tank advances on the sticky
+    // contact (a position, never a grudge) instead of guarding its loop.
+    const issued = movement.moverState(1)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(movement.hasThreat(1)).toBe(true);
+    const distAtIssue = Math.hypot(issued.x - 1300, issued.z - 0);
+    for (let n = 0; n < 240; n++) movement.update(1 / 60);
+    const after = movement.moverState(1)!;
+    expect(movement.hasThreat(1)).toBe(true);
+    expect(after.x).toBeGreaterThan(issued.x);
+    expect(Math.hypot(after.x - 1300, after.z - 0)).toBeLessThan(distAtIssue);
+    movement.dispose();
+  });
+
+  it("probes alone into a column where a heavier hull would wait", () => {
+    // Same geometry as the "waits instead of charging" squad test, but the
+    // lone hull is a peewee: it acquires the nearest live enemy instead of
+    // patrolling on, while the backed column still commits to it.
+    const { movement } = makeScoutMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 500, z: 300 },
+        { x: 530, z: 310 },
+        { x: 560, z: 320 },
+      ],
+      [0, 1, 1, 1],
+      ["peewee", "flash", "flash", "flash"],
+    );
+    movement.update(1 / 60);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(1);
+    expect(movement.moverState(1)?.threat?.attacker).toBe(0);
+    movement.dispose();
+  });
+
+  it("ranges farther than tanks on a stale contact", () => {
+    // Mate bloodies an enemy at 1800 while the scout sits at the origin:
+    // past scout notice (so no live hunt), past the 1400 tank advance
+    // leash, inside the 2000 scout leash.
+    const build = (scoutKind: UnitKind): { movement: UnitMovement; units: THREE.Group } =>
+      makeScoutMovement(
+        [
+          { x: 0, z: 0 },
+          { x: 1700, z: 0 },
+          { x: 1800, z: 0 },
+        ],
+        [0, 0, 1],
+        [scoutKind, "flash", "flash"],
+      );
+    const { movement: scouting } = build("peewee");
+    scouting.update(1 / 60);
+    expect(scouting.moverState(1)?.threat?.attacker).toBe(2);
+    scouting.update(1 / 60);
+    const issued = scouting.moverState(0)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    for (let n = 0; n < 120; n++) scouting.update(1 / 60);
+    expect(scouting.moverState(0)!.x).toBeGreaterThan(issued.x);
+    scouting.dispose();
+    // A heavier hull in the same spot never leaves its loop.
+    const { movement: guarding } = build("flash");
+    for (let n = 0; n < 3; n++) guarding.update(1 / 60);
+    expect(guarding.hasThreat(0)).toBe(false);
+    guarding.dispose();
+  });
+
+  it("lets player orders win over scouting", () => {
+    // Ordered peewee with an enemy sitting in the scout-only band: the
+    // order holds, no probe, no advance.
+    const { movement } = makeScoutMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 1300, z: 0 },
+      ],
+      [0, 1],
+      ["peewee", "flash"],
+    );
+    movement.orderUnit(0, { x: -500, z: -500 });
+    for (let n = 0; n < 3; n++) movement.update(1 / 60);
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.dispose();
+  });
+});
+
 describe("waypoint pursuit display", () => {
   it("promises the chase in rose, hiding the patrol loop", () => {
     const routeSet = routes();

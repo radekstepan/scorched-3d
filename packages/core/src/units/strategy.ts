@@ -1,5 +1,6 @@
-import { HUNT_ENGAGE_RADIUS, HUNT_LEASH_RADIUS, THREAT_MEMORY_DURATION } from "./retaliation.js";
+import { HUNT_ENGAGE_RADIUS, HUNT_LEASH_RADIUS, THREAT_DISENGAGE_RADIUS, THREAT_MEMORY_DURATION } from "./retaliation.js";
 import type { ThreatMemory } from "./retaliation.js";
+import type { UnitKind } from "./types.js";
 
 /**
  * Strategic skirmish layer: the "when / whom / with whom" above the
@@ -68,6 +69,57 @@ export const STRATEGY_FOCUS_WEIGHT = 170;
 export const STRATEGY_THREAT_WEIGHT = 120;
 /** Distance-equivalent pull of staying on the current gun target (no thrash). */
 export const STRATEGY_STICKY_WEIGHT = 200;
+/**
+ * Peewee scout notice radius, world units: the lightest hull carries the
+ * sharpest eyes. Past the regular `HUNT_ENGAGE_RADIUS` (so a scout spots a
+ * column its heavier teammates cannot see yet) yet inside the shared
+ * disengage bound, so the hysteresis gap keeps a scouting hull on the
+ * boundary from flickering like any other hunter.
+ */
+export const SCOUT_NOTICE_RADIUS = HUNT_ENGAGE_RADIUS + 400;
+/**
+ * Peewee scout leash, world units: a ranging scout may chase a contact
+ * farther from its patrol anchor than a tank — still local (inside two map
+ * half-widths on the doubled field), never a map-wide chase.
+ */
+export const SCOUT_LEASH_RADIUS = 2000;
+/**
+ * Peewee scout disengage radius, world units: an engaged scout tolerates a
+ * contact out to here before letting go — the same 150-unit hysteresis gap
+ * as the regular gates (engage 1500 < disengage 1650), so a scout on the
+ * boundary does not flicker either. Without it the drive would drop every
+ * scout-range acquisition on the first step.
+ */
+export const SCOUT_DISENGAGE_RADIUS = SCOUT_NOTICE_RADIUS + 150;
+
+/**
+ * True for the scout kind: the peewee ranges ahead, spots early, and probes
+ * even when outnumbered — its live threat memory feeds `squadFocus` and the
+ * sticky team contact, so the rest of the side engages what the scout found.
+ */
+export function isScoutKind(kind: UnitKind | undefined | null): boolean {
+  return kind === "peewee";
+}
+
+/** Hunt notice radius for `kind` (scouts see farther, everyone else default). */
+export function huntNoticeRadiusFor(kind?: UnitKind | null): number {
+  return isScoutKind(kind ?? undefined) ? SCOUT_NOTICE_RADIUS : HUNT_ENGAGE_RADIUS;
+}
+
+/** Hunt leash for `kind` (scouts range wider, everyone else default). */
+export function huntLeashFor(kind?: UnitKind | null): number {
+  return isScoutKind(kind ?? undefined) ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS;
+}
+
+/**
+ * Disengage radius for `kind`: an active pursuit ends once the live attacker
+ * is past this from the victim. Scouts hold scout-range contacts (see
+ * `SCOUT_DISENGAGE_RADIUS`); everyone else keeps the shared bound, so
+ * existing pursuit history is byte-identical.
+ */
+export function disengageRadiusFor(kind?: UnitKind | null): number {
+  return isScoutKind(kind ?? undefined) ? SCOUT_DISENGAGE_RADIUS : THREAT_DISENGAGE_RADIUS;
+}
 
 /** Local force comparison around a hull: live counts plus health-weighted strength. */
 export interface BattleOdds {
@@ -255,6 +307,12 @@ export interface TargetOptions {
   anchor?: StrategyPoint | null;
   /** Leash radius from the anchor; defaults to the hunt leash when anchored. */
   leash?: number;
+  /**
+   * Scout eyes: use the wider scout notice/leash defaults instead of the
+   * regular hunt gates (see `SCOUT_NOTICE_RADIUS` / `SCOUT_LEASH_RADIUS`).
+   * Explicit `maxDist`/`leash` still win when provided.
+   */
+  scout?: boolean;
 }
 
 /**
@@ -279,10 +337,10 @@ export function chooseTarget(
   if (side === undefined) return -1;
   const me = positions[self];
   if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) return -1;
-  const maxDist = opts?.maxDist ?? HUNT_ENGAGE_RADIUS;
+  const maxDist = opts?.maxDist ?? (opts?.scout ? SCOUT_NOTICE_RADIUS : HUNT_ENGAGE_RADIUS);
   if (!(maxDist > 0)) return -1;
   const anchor = opts?.anchor ?? null;
-  const leash = opts?.leash ?? HUNT_LEASH_RADIUS;
+  const leash = opts?.leash ?? (opts?.scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS);
   const focus = opts?.focus ?? -1;
   const threatAttacker = opts?.threatAttacker ?? -1;
   let best = -1;
@@ -317,11 +375,17 @@ export function chooseTarget(
  * (ordered/holding/busy/wrecked hulls never acquire, unknown sides acquire
  * nothing), plus two strategic gates —
  *
- * - an outnumbered hull waits instead of charging alone (`shouldHold`);
+ * - an outnumbered hull waits instead of charging alone (`shouldHold`) —
+ *   unless it is a peewee scout (`kinds[self]`): scouts probe even when
+ *   outnumbered, shadowing at range (the drive still holds an outnumbered
+ *   pursuer facing the threat instead of closing) so the side keeps eyes on
+ *   the enemy and shares the contact via `squadFocus`;
  * - the quarry is *chosen* (`chooseTarget` over the squad focus), so a hull
  *   joins its squad's fight and prefers wounded enemies over fresh ones.
  *
- * The memory carries the wider hunt leash like `acquireHunt`. Pure: no rng,
+ * Scouts acquire on the wider scout gates (`SCOUT_NOTICE_RADIUS` /
+ * `SCOUT_LEASH_RADIUS`); every other kind resolves exactly like before.
+ * The memory carries the matching leash. Pure: no rng,
  * no clocks. Even fights resolve exactly like `acquireHunt` (nearest live
  * enemy inside both gates).
  */
@@ -336,6 +400,7 @@ export function acquireStrategicHunt<
   anchor?: StrategyPoint | null,
   threats?: readonly (ThreatMemory | undefined)[] | null,
   hp?: readonly number[] | null,
+  kinds?: readonly (UnitKind | undefined)[] | null,
 ): M {
   if (!Number.isInteger(self) || self < 0 || self >= foes.length) return mover;
   if (alive[self] === false) return mover;
@@ -347,22 +412,32 @@ export function acquireStrategicHunt<
   if (side === undefined) return mover;
   const me = foes[self];
   if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) return mover;
+  const scout = isScoutKind(kinds?.[self]);
   // Courage check first: a hull that would lose the local brawl patrols on
   // and waits for backup instead of starting a fight it cannot finish.
-  if (shouldHold(self, foes, teams, alive, hp)) return mover;
+  // Scouts are exempt — probing alone is their job; the drive holds them at
+  // eyes-on distance until backup arrives, and their memory focuses the squad.
+  if (!scout && shouldHold(self, foes, teams, alive, hp)) return mover;
   const focus = threats ? squadFocus(side, threats, teams, alive) : -1;
   const pick = chooseTarget(self, foes, teams, alive, {
     hp,
     focus,
-    maxDist: HUNT_ENGAGE_RADIUS,
+    maxDist: scout ? SCOUT_NOTICE_RADIUS : HUNT_ENGAGE_RADIUS,
     anchor: anchor ?? null,
-    leash: HUNT_LEASH_RADIUS,
+    leash: scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS,
+    scout,
   });
   if (pick < 0) return mover;
   const target = foes[pick]!;
   return {
     ...mover,
-    threat: { attacker: pick, x: target.x, z: target.z, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS },
+    threat: {
+      attacker: pick,
+      x: target.x,
+      z: target.z,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS,
+    },
   };
 }
 

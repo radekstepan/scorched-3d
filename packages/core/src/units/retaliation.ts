@@ -286,9 +286,10 @@ export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; h
  *
  * Pure: no rng, no clocks.
  */
-export function advanceMemory(x: number, z: number): ThreatMemory | null {
+export function advanceMemory(x: number, z: number, leash: number = HUNT_LEASH_RADIUS): ThreatMemory | null {
   if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
-  return { attacker: -1, x, z, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS };
+  if (!(leash > 0)) return null;
+  return { attacker: -1, x, z, ttl: THREAT_MEMORY_DURATION, leash };
 }
 
 /**

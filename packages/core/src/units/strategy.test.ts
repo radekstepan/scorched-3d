@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   acquireHunt,
+  HUNT_ENGAGE_RADIUS,
   HUNT_LEASH_RADIUS,
   notifyThreat,
+  THREAT_DISENGAGE_RADIUS,
   THREAT_MEMORY_DURATION,
 } from "./retaliation.js";
 import {
@@ -17,8 +19,15 @@ import {
   acquireStrategicHunt,
   battleOdds,
   chooseTarget,
+  disengageRadiusFor,
+  huntLeashFor,
+  huntNoticeRadiusFor,
+  isScoutKind,
   outnumbered,
   pickStrategicTarget,
+  SCOUT_DISENGAGE_RADIUS,
+  SCOUT_LEASH_RADIUS,
+  SCOUT_NOTICE_RADIUS,
   shouldHold,
   squadFocus,
   STRATEGY_HOLD_RATIO,
@@ -535,5 +544,178 @@ describe("pickStrategicTarget", () => {
     expect(pickStrategicTarget(0, matesOnly.positions, matesOnly.teams, matesOnly.alive)).toBe(-1);
     expect(pickStrategicTarget(0, positions, [undefined, undefined, undefined], alive)).toBe(-1);
     expect(pickStrategicTarget(9, positions, teams, alive)).toBe(-1);
+  });
+});
+
+describe("peewee scout", () => {
+  function idle(): Mover {
+    return initMover(
+      [
+        { x: 0, z: 0 },
+        { x: 0, z: 400 },
+      ],
+      0,
+    );
+  }
+
+  it("names the scout kind and its wider gates", () => {
+    expect(isScoutKind("peewee")).toBe(true);
+    expect(isScoutKind("flash")).toBe(false);
+    expect(isScoutKind("hammer")).toBe(false);
+    expect(isScoutKind(undefined)).toBe(false);
+    expect(isScoutKind(null)).toBe(false);
+    expect(huntNoticeRadiusFor("peewee")).toBe(SCOUT_NOTICE_RADIUS);
+    expect(huntNoticeRadiusFor("flash")).toBe(HUNT_ENGAGE_RADIUS);
+    expect(huntNoticeRadiusFor()).toBe(HUNT_ENGAGE_RADIUS);
+    expect(huntLeashFor("peewee")).toBe(SCOUT_LEASH_RADIUS);
+    expect(huntLeashFor("stump")).toBe(HUNT_LEASH_RADIUS);
+    expect(huntLeashFor()).toBe(HUNT_LEASH_RADIUS);
+    expect(disengageRadiusFor("peewee")).toBe(SCOUT_DISENGAGE_RADIUS);
+    expect(disengageRadiusFor("flash")).toBe(THREAT_DISENGAGE_RADIUS);
+    expect(disengageRadiusFor()).toBe(THREAT_DISENGAGE_RADIUS);
+    // Scouts see past the regular notice yet inside the shared disengage
+    // bound, and range past the hunt leash without chasing across the map.
+    expect(SCOUT_NOTICE_RADIUS).toBeGreaterThan(HUNT_ENGAGE_RADIUS);
+    expect(SCOUT_NOTICE_RADIUS).toBe(HUNT_ENGAGE_RADIUS + 400);
+    expect(SCOUT_LEASH_RADIUS).toBeGreaterThan(HUNT_LEASH_RADIUS);
+    // Same 150-unit hysteresis gap as the regular gates.
+    expect(SCOUT_DISENGAGE_RADIUS).toBe(SCOUT_NOTICE_RADIUS + 150);
+    expect(SCOUT_DISENGAGE_RADIUS - SCOUT_NOTICE_RADIUS).toBe(
+      THREAT_DISENGAGE_RADIUS - HUNT_ENGAGE_RADIUS,
+    );
+  });
+
+  it("spots enemies past the regular notice gate", () => {
+    // A lone contact at 1300: past the 1100 hunt engage, inside the 1500
+    // scout notice, inside both leashes of the anchor.
+    const teams = [0, 1];
+    const alive = [true, true];
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 1300, z: 0 },
+    ];
+    const anchor = { x: 0, z: 0 };
+    // Heavier hulls see nothing worth engaging…
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor).threat).toBeUndefined();
+    expect(chooseTarget(0, foes, teams, alive)).toBe(-1);
+    // …while the scout acquires on the scout leash, and chooseTarget agrees.
+    const kinds: ("peewee" | undefined)[] = ["peewee", undefined];
+    const scouted = acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor, null, null, kinds);
+    expect(scouted.threat?.attacker).toBe(1);
+    expect(scouted.threat?.leash).toBe(SCOUT_LEASH_RADIUS);
+    expect(chooseTarget(0, foes, teams, alive, { scout: true })).toBe(1);
+    // Explicit gates still win over the scout flag.
+    expect(chooseTarget(0, foes, teams, alive, { scout: true, maxDist: 200 })).toBe(-1);
+  });
+
+  it("ranges past the regular hunt leash", () => {
+    // Self at the origin, anchor 500 behind, enemy at 1000: inside both
+    // notice gates (so only the leash is under test), past the 1400 hunt
+    // leash from the anchor, inside the 2000 scout leash.
+    const teams = [0, 1];
+    const alive = [true, true];
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 1000, z: 0 },
+    ];
+    const anchor = { x: -500, z: 0 };
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor).threat).toBeUndefined();
+    const kinds: ("peewee" | undefined)[] = ["peewee", undefined];
+    const scouted = acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor, null, null, kinds);
+    expect(scouted.threat?.attacker).toBe(1);
+  });
+
+  it("probes alone into a group where heavier hulls wait", () => {
+    // Lone hull at the origin facing three fresh enemies at ~400.
+    const teams = [0, 1, 1, 1];
+    const alive = [true, true, true, true];
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 400, z: 0 },
+      { x: 430, z: 20 },
+      { x: 460, z: -20 },
+    ];
+    const anchor = { x: 0, z: 0 };
+    // Tanks patrol on (existing courage gate)…
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor).threat).toBeUndefined();
+    // …the scout probes: nearest live enemy takes the memory.
+    const kinds: ("peewee" | undefined)[] = ["peewee", undefined, undefined, undefined];
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor, null, null, kinds).threat?.attacker).toBe(
+      1,
+    );
+  });
+
+  it("shadows at range instead of charging alone (eyes on, drive holds)", () => {
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: 400 },
+      { x: 400, z: 400 },
+      { x: 400, z: 0 },
+    ];
+    // Scout threatened by a column scout at 400 with its column behind it.
+    const victim = { ...notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 400, 0, route[0]), hull: 0 };
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 400, z: 0 },
+      { x: 500, z: 0 },
+      { x: 550, z: 0 },
+    ];
+    const teams = [0, 1, 1, 1];
+    const alive = [true, true, true, true];
+    // Outnumbered pursuit holds facing the threat: the scout keeps eyes on
+    // the column (sharing it via squad focus) instead of suiciding into it,
+    // and closes once backup arrives — same as heavier hulls.
+    const shadow = advanceMover("peewee", victim, route, 1, 1, null, null, foes, {
+      self: 0, teams, alive,
+    });
+    expect(shadow.x).toBe(victim.x);
+    expect(shadow.z).toBe(victim.z);
+    expect(shadow.threat?.attacker).toBe(1);
+    expect(shadow.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+  });
+
+  it("holds scout-range contacts past the regular disengage", () => {
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: 400 },
+      { x: 400, z: 400 },
+      { x: 400, z: 0 },
+    ];
+    // Live attacker at 1400: past the 1250 shared disengage, inside the
+    // 1650 scout disengage, on the scout leash of the anchor.
+    const spotted: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: 1, x: 1400, z: 0, ttl: THREAT_MEMORY_DURATION, leash: SCOUT_LEASH_RADIUS },
+    };
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 1400, z: 0 },
+    ];
+    // A heavier hull lets go and resumes patrol…
+    const released = advanceMover("stump", spotted, route, 1, 1, null, null, foes);
+    expect(released.threat).toBeUndefined();
+    // …the scout steps toward the contact with the memory kept.
+    const closing = advanceMover("peewee", spotted, route, 1, 1, null, null, foes);
+    expect(closing.threat?.attacker).toBe(1);
+    expect(closing.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+    expect(Math.hypot(closing.x - 1400, closing.z - 0)).toBeLessThan(1400);
+  });
+
+  it("leaves kinds-free history byte-identical", () => {
+    const teams = [0, 0, 1, 1];
+    const alive = [true, true, true, true];
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 100, z: 0 },
+      { x: 500, z: 0 },
+      { x: 900, z: 0 },
+    ];
+    const anchor = { x: 0, z: 0 };
+    // Absent or non-scout kinds resolve exactly like before.
+    const plain = acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor);
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor, null, null, null)).toEqual(plain);
+    const tankKinds: ("flash" | undefined)[] = ["flash", "flash", "flash", "flash"];
+    expect(acquireStrategicHunt(idle(), 0, teams, foes, alive, anchor, null, null, tankKinds)).toEqual(plain);
   });
 });

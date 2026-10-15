@@ -10,7 +10,9 @@ import {
   hasThreat,
   HULL_TILT_SLEW,
   HUNT_LEASH_RADIUS,
+  SCOUT_LEASH_RADIUS,
   initMover,
+  isScoutKind,
   notifyThreat,
   orderMover,
   seekEngage,
@@ -269,7 +271,10 @@ export class UnitMovement {
     * Hunt sweep with judgment: every live idle/patrolling hull without a live
     * memory checks for a *winnable* fight (core `acquireStrategicHunt`) — an
     * outnumbered hull patrols on and waits for backup instead of charging
-    * alone into a group — and quarries are chosen, not just nearest: hulls
+    * alone into a group, while a peewee scout probes anyway on wider scout
+    * gates (its live memory focuses the squad and feeds the sticky contact
+    * below, so the rest of the side engages what the scout found) — and
+    * quarries are chosen, not just nearest: hulls
     * join their squad's focus and prefer wounded enemies (see `strategy.ts`).
     * Memories pointing at wrecks clear first (survivors stop guarding corpses
     * and may acquire a live enemy the same tick); position memories
@@ -288,9 +293,11 @@ export class UnitMovement {
     * `advanceMemory`: a -1 position memory on the hunt leash, so the push
     * stays local) instead of guarding its loop — while a side with no
     * contact ever keeps patrolling. Advances refuse exactly like hunts
-    * (ordered/holding hulls, no live enemy left anywhere, an outnumbered
-    * hull waiting for backup, a contact past the leash), and a hull carrying
-    * an advance still upgrades to a live hunt the tick one appears.
+    * (ordered/holding hulls, no live enemy left anywhere, a contact past
+    * the leash — and an outnumbered hull waiting for backup, unless it is
+    * the side's peewee scout pushing ahead to keep eyes on the enemy), and
+    * a hull carrying an advance still upgrades to a live hunt the tick one
+    * appears.
    */
   sweepHunt(): void {
     if (this.movers.length === 0) return;
@@ -337,7 +344,7 @@ export class UnitMovement {
       // memory for the acquisition attempt so a live enemy in notice takes
       // over the push the same tick.
       const free = mover.threat?.attacker === -1 ? clearThreat(mover) : mover;
-      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined);
+      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds);
       if (!next.threat || next.threat.ttl <= 0) {
         next = this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined);
       }
@@ -351,7 +358,8 @@ export class UnitMovement {
    * nothing. Refuses exactly like a hunt — ordered/holding hulls (player
    * orders win), sides with no contact ever, no live enemy left anywhere,
    * contacts past the hunt leash of the patrol anchor, and outnumbered
-   * hulls that should wait for backup instead of pushing alone. Pure per
+   * hulls that should wait for backup instead of pushing alone (peewee
+   * scouts excepted — they range ahead to keep the contact live). Pure per
    * tick: returns the mover with a fresh position memory, or untouched.
    */
   private advanceTowardContact(
@@ -370,7 +378,12 @@ export class UnitMovement {
     if (team === undefined) return mover;
     const contact = this.teamContact.get(team);
     if (!contact) return mover;
-    if (anchor && Math.hypot(contact.x - anchor.x, contact.z - anchor.z) > HUNT_LEASH_RADIUS) return mover;
+    // Scouts range on the wider scout leash so an advance issued at scout
+    // distance survives the drive's anchor-leash gate instead of dying on
+    // the first step; heavier hulls keep the regular hunt leash.
+    const scout = isScoutKind(this.kinds[self]);
+    const leash = scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS;
+    if (anchor && Math.hypot(contact.x - anchor.x, contact.z - anchor.z) > leash) return mover;
     let enemyAlive = false;
     for (let j = 0; j < foes.length; j++) {
       if (j === self || !alive[j] || this.destroyed[j]) continue;
@@ -382,8 +395,11 @@ export class UnitMovement {
       break;
     }
     if (!enemyAlive) return mover;
-    if (shouldHold(self, foes, teams, alive, hp ?? undefined)) return mover;
-    const memory = advanceMemory(contact.x, contact.z);
+    // Scouts push ahead to keep eyes on the enemy even when the odds at
+    // home look bad — ranging forward is their job, and their live memory
+    // is what focuses the squad behind them. Heavier hulls wait for backup.
+    if (!isScoutKind(this.kinds[self]) && shouldHold(self, foes, teams, alive, hp ?? undefined)) return mover;
+    const memory = advanceMemory(contact.x, contact.z, leash);
     if (!memory) return mover;
     return { ...mover, threat: memory };
   }
