@@ -16,24 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-obstructed unit shold show its outline, and sligh transparent fill of where it is behind trees and such, NOT a rectangle around it.
+the cannon of a tank sometimes clips through a tree trunk. this shouldn't happen. Make sure we implement collisions correctly. If it simplifies things, you can consider a bounding box around a vehicle and that's it's full "size" for collission purposes
 
-Waypoints is wrong, I want to see the path the unit wants to take, not just waypoints.
+Remote the "Patrolling TA ..." text under "Units"
 
-When a unit is hit it should be slightly "stunned" and maybe it jerks back a bit away from the direction of the hit.
+vehicle tracks should be a bit more visible
 
-The subtle shake of a vehicle is distracting. The idea was to show the vehicle is "running" make it more believable. Subtle.
+We should have even "teams" starting across the map and hunting each other down. Make sure we can tell team colors. Really iron out the AI logic of the units.
 
-When a unit "dies" it should obviously expolode, then the charred hush should sink into the grand. Husk, not the full model. Make it look "exploded". Smoulder a bit. With tanks the turret should explode away and the body explode too. Similar with the other units. THink about how they should explode when they die.
+See if we can have a bit more camo detail on the units.
 
-Vehicles should leave (disappearing) tricks behind themselves as they move around. Make it subtle.
+When we select a unit, the circle and arrow don't have to be "flashing" or moving, static is fine. And when we do select a unit, show at the bottom a little list of boxes with a little icon (or rendering) of said unit and how many we have selected in the corner. I assume these would be pre-rendered once and reused. There should be a colored border (at the top?) matching the "color" of the unit that matches what we show in the Units box.
 
-When I zoom in using a scrollwheel it should naturally zoom onto the area under the cursor. Right now it does something unintuitive.
-
-Check for "hot loops" in the app and try to optimize them.
-
-AS projectors fly through the air, they should illuminate objects they are near to (trees, ground etc.)
-
-The turret itself should recoil a bit when shooting
-
-If a vehicle gets hit from a direction, it's more likely to move that way to pursue and fight back. If the attacking vehicle moves far away though, it should resume its patrolling. Try to be logical about this and implement an AAA RTS AI logic here.
+Add HQ building at opposing end of the map where the teams start and periodically open the "door" sliding up to it (a hall) and a new unit will drive out to join the fray. Enemy units can destroy the HQ, yes. Maybe reduce how far different units can shoot or they'll lob the HQ half way across the map.
