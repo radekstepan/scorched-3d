@@ -16,16 +16,18 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-the hq should have a red flashing light on the top front of the building by the entrance, it should be a little detail to tell it's a "working" building. Make it illuminate the area a little bit.
+the HQ light should not be on a platform with a rod. It should just be a half 3d circle with a light rotating inside it
 
-improve the water. Right now it looks "static" with rectangles just flowing in one direction, make it a ibt more random.
+Current 1.5x pan speed should be the new 1x pan speed.
 
-check for hot loops. If my cursor is not over an area I am getting 120fps, but around 70 when I hover the cursor over the UI.
+Current 2x height scale should be the new 1x height scale.
 
-Clicking on a minimap the view should jump to place the item in the center of the view that I just clicked at, given the angle and zoom level.
+I don't like while panning how if I get to a corner the view suddenly flips backwards or something. No, stop the movemembnt if we can't move forward. Retain the angle we are looking at the world.
 
-Increase zoom speed by 2x by default. And all the current defaults are 1x on the slider (remap them)
+The waves are still nore realistic. I see shallow and deep water waves, they follow patterns too much still. Looka t what we are doing with the world itself, give it some variation.
 
-the units that come out of the HQ should be random, but "stronger" units should take more time to make.
+Still when I keep moving cursor over the world the fps dips to 80, when I stop moving it's 120. Clearly there is an optimization to be had.
 
-If a tank is being shelled it shouldn't just stay there, it should inbestigate where the firing is coming from.
+Clicking onto an area of the map still does not take me to that area with the item that's under the + being centered int he view.
+
+After the last AI update, a bunch of units are "waiting" in their area and nothing is happening. It should be an active battlefield with recon and engagement. Only when I move one opponent closer do they start engaging. But when the one opponent is under attack and finds opposing HQ, the other units on its side do nothing.
