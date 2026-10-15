@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   APP_NAME,
   CELL_PIXELS,
@@ -27,6 +27,7 @@ import {
 } from "./renderer/selectionIcons";
 import { cn } from "./utils/cn";
 import { countLiveUnitsByKind } from "./utils/liveCounts";
+import { minimapPointToWorld } from "./renderer/minimap";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
@@ -37,6 +38,10 @@ export default function App() {
   const [selected, setSelected] = useState<number[]>([]);
   const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean }[]>([]);
   const [hqs, setHqs] = useState<HqStatus[]>([]);
+  // Minimap click-to-move: world point + sequence so repeated clicks on the
+  // same spot still retarget the camera. TerrainCanvas consumes it and
+  // preserves yaw/pitch/zoom (only the orbit target translates).
+  const [jump, setJump] = useState<{ x: number; z: number; seq: number } | null>(null);
   const [options, setOptions] = useState<ViewOptions>({
     exaggeration: 2.0,
     showWater: true,
@@ -74,6 +79,14 @@ export default function App() {
   const worldD = map.height * CELL_PIXELS;
 
   const patch = (partial: Partial<ViewOptions>) => setOptions((o) => ({ ...o, ...partial }));
+  // Minimap click/drag-to-move: pointer fraction across the square box maps
+  // linearly to world X/Z (same math as the overlay dots). Only the world
+  // point crosses into the canvas — the camera keeps its yaw/pitch/zoom.
+  const jumpFromMinimap = (e: ReactPointerEvent<HTMLDivElement>): void => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const w = minimapPointToWorld(e.clientX, e.clientY, rect, worldW, worldD);
+    setJump((j) => ({ x: w.x, z: w.z, seq: (j?.seq ?? 0) + 1 }));
+  };
   // Bottom selection tray: one box per (kind, team) group with a
   // pre-rendered icon (memoized data URL, rendered once per kind and reused
   // for every box) and a count badge. The top border carries the team color
@@ -96,6 +109,7 @@ export default function App() {
         onSelection={setSelected}
         onPositions={setLiveUnits}
         onHq={setHqs}
+        jumpTo={jump}
       />
 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(3,8,12,0.55)_100%)]" />
@@ -155,8 +169,21 @@ export default function App() {
         </div>
 
         <div className="hud-panel overflow-hidden p-2">
-          <div className="relative">
-            <img src={miniUrl} alt="Minimap" className="aspect-square w-full rounded-sm border border-white/10" />
+          <div
+            className="relative cursor-crosshair touch-none"
+            title="Click to move the camera here"
+            onPointerDown={jumpFromMinimap}
+            onPointerMove={(e) => {
+              // Drag across the minimap keeps retargeting while held.
+              if ((e.buttons & 1) !== 0) jumpFromMinimap(e);
+            }}
+          >
+            <img
+              src={miniUrl}
+              alt="Minimap"
+              className="aspect-square w-full rounded-sm border border-white/10"
+              draggable={false}
+            />
             {liveUnits.map((p, i) => {
               const kind = map.units[i]?.kind;
               const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";

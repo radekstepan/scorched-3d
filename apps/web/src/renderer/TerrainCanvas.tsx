@@ -96,6 +96,7 @@ import {
 } from "./movePing";
 import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
+import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
@@ -110,9 +111,15 @@ interface Props {
   onPositions?: (positions: { x: number; z: number; alive: boolean }[]) => void;
   /** Live HQ status broadcast (~4 Hz) for minimap markers. */
   onHq?: (hqs: HqStatus[]) => void;
+  /**
+   * Minimap click-to-move request (world X/Z + sequence). Consumed in the
+   * render tick: the orbit target translates there with the camera offset
+   * preserved, so yaw/pitch/zoom never reset.
+   */
+  jumpTo?: { x: number; z: number; seq: number } | null;
 }
 
-export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, jumpTo }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
@@ -120,11 +127,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
   const selectionRef = useRef(onSelection);
   const positionsRef = useRef(onPositions);
   const hqRef = useRef(onHq);
+  const jumpRef = useRef(jumpTo);
   optsRef.current = options;
   hoverRef.current = onHover;
   selectionRef.current = onSelection;
   positionsRef.current = onPositions;
   hqRef.current = onHq;
+  jumpRef.current = jumpTo;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -805,6 +814,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     let lastExag = options.exaggeration;
     let raf = 0;
     let posTimer = 1;
+    let appliedJumpSeq = jumpRef.current?.seq ?? -1;
     const clock = new THREE.Clock();
     // FPS readout: sampler feeds the overlay div straight from the tick, so
     // React state never churns at frame rate.
@@ -884,6 +894,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
       if (controls.zoomSpeed !== clampZoomSpeed(opt.zoomSpeed)) {
         controls.zoomSpeed = clampZoomSpeed(opt.zoomSpeed);
+      }
+
+      // Minimap click-to-move: translate target + camera by the same ground
+      // offset so yaw/pitch/zoom survive; clamped to the map like pan.
+      const jump = jumpRef.current;
+      if (jump && jump.seq !== appliedJumpSeq) {
+        appliedJumpSeq = jump.seq;
+        jumpCameraTo(camera.position, controls.target, jump, worldW, worldD);
       }
 
       controls.update();
