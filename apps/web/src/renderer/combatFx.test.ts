@@ -974,7 +974,7 @@ describe("CombatFx unit death", () => {
     fx.update(1 / 60);
     expect(fx.unitSmokeCount).toBe(0);
     expect(fx.unitEmberCount).toBe(0);
-    // The roster slots (and dim minimap dots) remain.
+    // The roster slots remain (the minimap drops their dots).
     expect(units.children.length).toBe(3);
     expect(fx.aliveCount).toBe(0);
     fx.dispose();

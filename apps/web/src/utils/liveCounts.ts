@@ -41,3 +41,13 @@ export function liveCountsOrdered(
   const counts = countLiveUnitsByKind(placed, live);
   return UNIT_KINDS.map((k) => [k, counts[k]]);
 }
+
+/**
+ * Minimap visibility for one broadcast dot. Dead hulls (`alive === false`)
+ * drop off the minimap immediately on death — both teams, no dimmed
+ * wreck dots. Missing slots (pre-first broadcast) still read live so dots
+ * show on load.
+ */
+export function isLiveMinimapDot(state: LiveUnitState | undefined): boolean {
+  return state?.alive !== false;
+}

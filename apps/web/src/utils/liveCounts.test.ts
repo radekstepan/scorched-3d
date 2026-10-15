@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { UNIT_KINDS } from "@scorched-3d/core";
-import { countLiveUnitsByKind, liveCountsOrdered } from "./liveCounts";
+import { countLiveUnitsByKind, isLiveMinimapDot, liveCountsOrdered } from "./liveCounts";
 
 describe("countLiveUnitsByKind", () => {
   it("counts every roster slot alive before the first broadcast", () => {
@@ -39,5 +39,16 @@ describe("countLiveUnitsByKind", () => {
     expect(ordered.map(([k]) => k)).toEqual([...UNIT_KINDS]);
     expect(ordered[0]).toEqual(["commander", 1]);
     expect(ordered[ordered.length - 1]).toEqual(["peewee", 0]);
+  });
+});
+
+describe("isLiveMinimapDot", () => {
+  it("hides wrecks (alive === false) immediately, both teams alike", () => {
+    expect(isLiveMinimapDot({ alive: false })).toBe(false);
+  });
+
+  it("keeps live hulls and pre-broadcast slots visible", () => {
+    expect(isLiveMinimapDot({ alive: true })).toBe(true);
+    expect(isLiveMinimapDot(undefined)).toBe(true);
   });
 });

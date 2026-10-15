@@ -990,8 +990,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       posTimer += dt;
       if (posTimer >= 0.25) {
         posTimer = 0;
-        // Wrecks ride along so the minimap can dim them instead of dropping
-        // them (the battlefield keeps its history).
+        // Wrecks ride along with alive:false so the minimap drops their dots
+        // and the Units-box counts drop them (the battlefield keeps the
+        // husk mesh itself as its history).
         positionsRef.current?.(
           movement.positions().map((p, i) => ({ ...p, alive: !combat.isDestroyedAt(i) })),
         );

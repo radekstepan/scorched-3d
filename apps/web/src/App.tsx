@@ -186,11 +186,12 @@ export default function App() {
               draggable={false}
             />
             {liveUnits.map((p, i) => {
+              // Dead hulls drop off the minimap immediately on death (both
+              // teams) — no dimmed wreck dots, per the no-dead-units policy.
+              if (p.alive === false) return null;
               const kind = map.units[i]?.kind;
               const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";
               const isSel = selected.includes(i);
-              // Wrecks dim to grey and can never carry a selection glow.
-              const wrecked = p.alive === false;
               // Team identity rings the kind-colored dot: Blue west, Orange
               // east (same colors as the 3D ground rings).
               const team = map.units[i]?.team;
@@ -202,12 +203,12 @@ export default function App() {
                   style={{
                     left: `${(p.x / worldW + 0.5) * 100}%`,
                     top: `${(p.z / worldD + 0.5) * 100}%`,
-                    width: wrecked ? 4 : 5,
-                    height: wrecked ? 4 : 5,
-                    background: wrecked ? "#57534e" : color,
-                    opacity: wrecked ? 0.55 : 1,
-                    outline: !wrecked && isSel ? MINIMAP_SELECTED_OUTLINE : teamColor ? `2px solid ${teamColor}` : undefined,
-                    boxShadow: !wrecked && isSel ? MINIMAP_SELECTED_GLOW : undefined,
+                    width: 5,
+                    height: 5,
+                    background: color,
+                    opacity: 1,
+                    outline: isSel ? MINIMAP_SELECTED_OUTLINE : teamColor ? `2px solid ${teamColor}` : undefined,
+                    boxShadow: isSel ? MINIMAP_SELECTED_GLOW : undefined,
                   }}
                 />
               );

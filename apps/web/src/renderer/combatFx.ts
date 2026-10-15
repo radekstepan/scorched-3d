@@ -623,7 +623,7 @@ export class CombatFx {
   private debris: (TurretDebris | null)[] = [];
   /**
    * Fired once per kill with the wreck index so the canvas can hold the
-   * mover, drop targeting/selection, and dim the minimap dot. Assigned by
+   * mover, drop targeting/selection, and drop the minimap dot. Assigned by
    * the canvas; null in headless tests.
    */
   onUnitKilled: ((index: number) => void) | null = null;
