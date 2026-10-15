@@ -304,18 +304,18 @@ describe("TrackTrails", () => {
   });
 
   it("renders wider, longer-lived marks under the scorch layer", () => {
-    // Visibility tune pinned: 14 s ribbons, overlapping tank treads
+    // Visibility tune pinned: 16 s ribbons, overlapping tank treads
     // (footsteps stay gapped), all still below scorch in every dimension.
-    expect(TRACK_LIFETIME).toBe(14);
-    expect(TRACK_PEAK_OPACITY).toBe(0.5);
+    expect(TRACK_LIFETIME).toBe(16);
+    expect(TRACK_PEAK_OPACITY).toBe(0.55);
     expect(TRACK_PEAK_OPACITY).toBeLessThan(0.62);
-    expect(TRACK_LENGTH).toBe(24);
+    expect(TRACK_LENGTH).toBe(26);
     expect(TRACK_LENGTH).toBeGreaterThan(TRACK_SPACING);
-    expect(FOOTSTEP_LENGTH).toBe(12);
+    expect(FOOTSTEP_LENGTH).toBe(13);
     expect(FOOTSTEP_LENGTH).toBeLessThan(TRACK_SPACING);
-    expect(trackWidthFor("flash")).toBe(5);
-    expect(trackWidthFor("stump")).toBe(6);
-    expect(trackWidthFor("commander")).toBe(4);
+    expect(trackWidthFor("flash")).toBe(5.5);
+    expect(trackWidthFor("stump")).toBe(6.5);
+    expect(trackWidthFor("commander")).toBe(4.5);
     const scene = new THREE.Scene();
     const far: TrackSource = {
       unitCount: 1,
