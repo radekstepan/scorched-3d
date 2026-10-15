@@ -98,6 +98,7 @@ import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
+import { createHoverGate, hoverInfoKey } from "./hoverProbe";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -626,7 +627,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    let hovering = false;
+    // Hover probe gate: pointermove only records coords + dirties the probe
+    // (no raycast, no layout read in the handler); the tick samples at most
+    // once per frame, and only when the pointer or the camera moved. A parked
+    // cursor costs zero raycasts and zero React re-renders — previously both
+    // ran every frame while the pointer was over the canvas (~50 fps lost).
+    const hoverGate = createHoverGate();
+    let lastHoverKey = hoverInfoKey(null);
+    const markHoverDirty = (): void => {
+      hoverGate.cameraMoved();
+    };
 
     const canvasRect = (): DOMRect => renderer.domElement.getBoundingClientRect();
 
@@ -705,10 +715,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (ev.button === 0 && ev.shiftKey) controls.enabled = false;
     };
     const onPointerMove = (ev: PointerEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-      hovering = true;
+      // Record only: the tick consumes the latest position (one raycast per
+      // frame max, none while parked). No getBoundingClientRect here — that
+      // layout read happens once per consumed probe in the tick.
+      hoverGate.move(ev.clientX, ev.clientY);
       if (
         down &&
         down.button === 0 &&
@@ -780,12 +790,21 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
     };
     const onLeave = () => {
-      hovering = false;
-      hoverRef.current(null);
+      hoverGate.leave();
+      // Emit the clear only if a cell was showing: leaving with no active
+      // probe must not churn React with a redundant setState(null).
+      if (lastHoverKey !== hoverInfoKey(null)) {
+        lastHoverKey = hoverInfoKey(null);
+        hoverRef.current(null);
+      }
     };
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerleave", onLeave);
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    // Camera motion under a parked cursor changes the probed cell: re-dirty
+    // the hover gate on every orbit/zoom update (fires only while the camera
+    // actually moves, so a settled camera costs nothing).
+    controls.addEventListener("change", markHoverDirty);
     window.addEventListener("pointerup", onPointerUp);
     const onContextMenu = (ev: Event): void => {
       ev.preventDefault();
@@ -872,6 +891,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
+        markHoverDirty();
       }
 
       terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
@@ -897,6 +917,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           const offset = panOffset(camera.position, controls.target, input, panStepDistance(dist, dt, opt.panSpeed));
           applyPan(camera.position, controls.target, offset);
           clampPanTarget(controls.target, worldW, worldD);
+          markHoverDirty();
         }
       }
 
@@ -917,6 +938,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (jump && jump.seq !== appliedJumpSeq) {
         appliedJumpSeq = jump.seq;
         jumpCameraTo(camera.position, controls.target, jump, worldW, worldD, groundY);
+        markHoverDirty();
       }
 
       controls.update();
@@ -999,13 +1021,22 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         hqRef.current?.(hq?.status() ?? []);
       }
 
-      if (hovering) {
+      // Hover probe: at most one full-mesh raycast per tick, and only when
+      // the pointer or the camera moved since the last probe (a parked
+      // cursor costs nothing). Emission is deduped on the sampled cell, so
+      // React re-renders only when the readout actually changes.
+      const probe = hoverGate.takeProbe();
+      if (probe) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((probe.x - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((probe.y - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
         const hits = raycaster.intersectObject(terrain);
-        if (hits[0]) {
-          hoverRef.current(hitToInfo(map, hits[0].point));
-        } else {
-          hoverRef.current(null);
+        const info = hits[0] ? hitToInfo(map, hits[0].point) : null;
+        const key = hoverInfoKey(info);
+        if (key !== lastHoverKey) {
+          lastHoverKey = key;
+          hoverRef.current(info);
         }
       }
 
@@ -1035,6 +1066,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      controls.removeEventListener("change", markHoverDirty);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();
       renderer.dispose();

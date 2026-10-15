@@ -97,6 +97,79 @@ export default function App() {
   // read alive before the first broadcast; wrecks drop out and HQ
   // reinforcements count once both arrays cover them.
   const liveCounts = useMemo(() => countLiveUnitsByKind(map.units, liveUnits), [map.units, liveUnits]);
+  // Minimap overlays memoize on their own inputs (not `hover`): a probe
+  // cell change re-renders App, but the unit/HQ dot elements keep referential
+  // identity so React bails out of those subtrees instead of reconciling
+  // dozens of spans per hover update.
+  const minimapDots = useMemo(
+    () =>
+      liveUnits.map((p, i) => {
+        // Dead hulls drop off the minimap immediately on death (both
+        // teams) — no dimmed wreck dots, per the no-dead-units policy.
+        if (p.alive === false) return null;
+        const kind = map.units[i]?.kind;
+        const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";
+        const isSel = selected.includes(i);
+        // Team identity rings the kind-colored dot: Blue west, Orange
+        // east (same colors as the 3D ground rings).
+        const team = map.units[i]?.team;
+        const teamColor = team === undefined ? undefined : `#${TEAM_DEFS[team].color.toString(16).padStart(6, "0")}`;
+        return (
+          <span
+            key={i}
+            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-[1px] border border-black/70"
+            style={{
+              left: `${(p.x / worldW + 0.5) * 100}%`,
+              top: `${(p.z / worldD + 0.5) * 100}%`,
+              width: 5,
+              height: 5,
+              background: color,
+              opacity: 1,
+              outline: isSel ? MINIMAP_SELECTED_OUTLINE : teamColor ? `2px solid ${teamColor}` : undefined,
+              boxShadow: isSel ? MINIMAP_SELECTED_GLOW : undefined,
+            }}
+          />
+        );
+      }),
+    [liveUnits, map.units, selected, worldW, worldD],
+  );
+  const minimapHq = useMemo(
+    () =>
+      hqs.map((h) => {
+        // Fort markers: team-colored squares (grey when wrecked), so
+        // the map-end forts read apart from the round hull dots.
+        const teamColor = `#${TEAM_DEFS[h.team].color.toString(16).padStart(6, "0")}`;
+        return (
+          <span
+            key={`hq-${h.team}`}
+            title={`Team ${TEAM_DEFS[h.team].name} HQ${h.alive ? "" : " (destroyed)"}`}
+            className="absolute -translate-x-1/2 -translate-y-1/2 border border-black/70"
+            style={{
+              left: `${(h.x / worldW + 0.5) * 100}%`,
+              top: `${(h.z / worldD + 0.5) * 100}%`,
+              width: 9,
+              height: 9,
+              background: h.alive ? teamColor : "#57534e",
+              opacity: h.alive ? 1 : 0.55,
+            }}
+          />
+        );
+      }),
+    [hqs, worldW, worldD],
+  );
+  const minimapHoverChip = useMemo(
+    () =>
+      hover && (
+        <span
+          className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_8px_#fbbf24]"
+          style={{
+            left: `${(hover.cellX / (map.width - 1)) * 100}%`,
+            top: `${(hover.cellZ / (map.height - 1)) * 100}%`,
+          }}
+        />
+      ),
+    [hover, map.width, map.height],
+  );
   const meta = PRESET_META[preset];
   const tileW = map.width / 2;
   const tileH = map.height / 2;
@@ -185,63 +258,9 @@ export default function App() {
               className="aspect-square w-full rounded-sm border border-white/10"
               draggable={false}
             />
-            {liveUnits.map((p, i) => {
-              // Dead hulls drop off the minimap immediately on death (both
-              // teams) — no dimmed wreck dots, per the no-dead-units policy.
-              if (p.alive === false) return null;
-              const kind = map.units[i]?.kind;
-              const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";
-              const isSel = selected.includes(i);
-              // Team identity rings the kind-colored dot: Blue west, Orange
-              // east (same colors as the 3D ground rings).
-              const team = map.units[i]?.team;
-              const teamColor = team === undefined ? undefined : `#${TEAM_DEFS[team].color.toString(16).padStart(6, "0")}`;
-              return (
-                <span
-                  key={i}
-                  className="absolute -translate-x-1/2 -translate-y-1/2 rounded-[1px] border border-black/70"
-                  style={{
-                    left: `${(p.x / worldW + 0.5) * 100}%`,
-                    top: `${(p.z / worldD + 0.5) * 100}%`,
-                    width: 5,
-                    height: 5,
-                    background: color,
-                    opacity: 1,
-                    outline: isSel ? MINIMAP_SELECTED_OUTLINE : teamColor ? `2px solid ${teamColor}` : undefined,
-                    boxShadow: isSel ? MINIMAP_SELECTED_GLOW : undefined,
-                  }}
-                />
-              );
-            })}
-            {hover && (
-              <span
-                className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_8px_#fbbf24]"
-                style={{
-                  left: `${(hover.cellX / (map.width - 1)) * 100}%`,
-                  top: `${(hover.cellZ / (map.height - 1)) * 100}%`,
-                }}
-              />
-            )}
-            {hqs.map((h) => {
-              // Fort markers: team-colored squares (grey when wrecked), so
-              // the map-end forts read apart from the round hull dots.
-              const teamColor = `#${TEAM_DEFS[h.team].color.toString(16).padStart(6, "0")}`;
-              return (
-                <span
-                  key={`hq-${h.team}`}
-                  title={`Team ${TEAM_DEFS[h.team].name} HQ${h.alive ? "" : " (destroyed)"}`}
-                  className="absolute -translate-x-1/2 -translate-y-1/2 border border-black/70"
-                  style={{
-                    left: `${(h.x / worldW + 0.5) * 100}%`,
-                    top: `${(h.z / worldD + 0.5) * 100}%`,
-                    width: 9,
-                    height: 9,
-                    background: h.alive ? teamColor : "#57534e",
-                    opacity: h.alive ? 1 : 0.55,
-                  }}
-                />
-              );
-            })}
+            {minimapDots}
+            {minimapHoverChip}
+            {minimapHq}
           </div>
           <p className="mt-1 text-center font-mono text-[9px] tracking-[0.2em] text-slate-500">
             MINIMAP · 252×252 · LIVE
