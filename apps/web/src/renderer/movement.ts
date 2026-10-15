@@ -110,6 +110,11 @@ export class UnitMovement {
   /** Live world-space X/Z of every unit, for selection projection + minimap. */
   positions(): { x: number; z: number }[] {
     return this.movers.map((m) => ({ x: m.x, z: m.z }));
+  };
+
+  /** Roster size (drive-state polling for track trails, waypoint overlay). */
+  get unitCount(): number {
+    return this.movers.length;
   }
 
   /** True while the unit is driving a player-issued move order. */

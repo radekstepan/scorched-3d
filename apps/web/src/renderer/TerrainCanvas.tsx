@@ -50,6 +50,7 @@ import {
   writeTreePose,
 } from "./features";
 import { UnitMovement } from "./movement";
+import { TrackTrails } from "./tracks";
 import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
 import {
@@ -355,6 +356,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       },
     });
     combat.setExternalHull(true);
+    // Fading track trails: driving hulls stamp a subtle compressed-dust
+    // trace (per-kind tread width, capped pool, fading over seconds).
+    // Renderer-side only — movers never see the marks.
+    const tracks = new TrackTrails(scene, { groundY });
     // Waypoint overlay (View menu): static patrol loops per regen plus the
     // live driven path per unit (turn arcs + terrain gating included),
     // re-seated with the terrain.
@@ -695,6 +700,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         combat.clearTransients();
         fire.clearTransients();
         movement.resnap();
+        tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
       }
@@ -737,6 +743,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       controls.update();
 
       movement.update(dt);
+      tracks.update(movement, dt);
       waypoints.setVisible(opt.showWaypoints);
       waypoints.update(movement, units.children.length, t);
       health.setVisible(opt.showHealth);
@@ -816,6 +823,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       cancelAnimationFrame(raf);
       ro.disconnect();
       movement.dispose();
+      tracks.dispose();
       waypoints.dispose();
       health.dispose();
       occlusion.dispose();
