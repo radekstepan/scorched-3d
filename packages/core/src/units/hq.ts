@@ -58,28 +58,202 @@ export function hqCellX(width: number, team: TeamId): number {
 }
 
 /**
- * Deterministically site one HQ per team at its map end: the end column,
- * nearest dry gentle ground to the middle row (seed offsets the scan start
- * so regens vary). Pure, no rng draws — replays match exactly.
+ * Factory siting guards: forts must read as valley-floor industry — never
+ * beached in the surf, never perched on a peak. The dry margin keeps the
+ * slab (plus a safety ring) above the waterline; the slope gate keeps the
+ * wide footprint off cliffs; the high-ground cap (see `hqMaxAboveSea`)
+ * keeps forts out of the mountains.
+ */
+export const HQ_DRY_MARGIN = 8;
+/** Strict slope gate for the wide factory footprint (single-cell max-min). */
+export const HQ_MAX_SLOPE = 12;
+/** Relaxed pass still never touches water and never climbs cliffs. */
+export const HQ_FALLBACK_DRY_MARGIN = 4;
+export const HQ_FALLBACK_SLOPE = 15;
+/**
+ * High-ground policy: forts may sit at most this far above sea level on
+ * flat maps, or at most `HQ_HIGH_FRACTION` of the map's total relief on
+ * mountainous ones — whichever is roomier, so flat battle maps accept
+ * their gentle swells while ridge/plateau maps reject their peaks.
+ */
+export const HQ_HIGH_BASELINE = 50;
+export const HQ_HIGH_FRACTION = 0.6;
+/** Hall-corridor cells checked toward the map center (exit offset in cells). */
+export const HQ_HALL_CELLS = 12;
+/**
+ * End-band columns searched per side (outermost first): island shores step
+ * the fort inward off the surf instead of beaching it, while inland maps
+ * still take the outermost column.
+ */
+export const HQ_END_BAND = 16;
+
+/**
+ * Highest height above sea level a fort may sit at: the roomier of the
+ * flat-map baseline and the map-relative fraction of total relief. Pure —
+ * the same map always yields the same cap, so seeded regens stay stable.
+ */
+export function hqMaxAboveSea(field: HqField): number {
+  let max = field.seaLevel;
+  for (let i = 0; i < field.heights.length; i++) {
+    const h = field.heights[i] ?? 0;
+    if (h > max) max = h;
+  }
+  const relief = max - field.seaLevel;
+  if (!(relief > 0)) return HQ_HIGH_BASELINE;
+  return Math.max(HQ_HIGH_BASELINE, relief * HQ_HIGH_FRACTION);
+}
+
+/** Single-cell slope (max-min over the +x/+z corner triple), exported for tests. */
+export function hqCellSlope(field: HqField, x: number, z: number): number {
+  return cellSlope(field, x, z);
+}
+
+/**
+ * Strict factory ground: dry with margin, below the high-ground cap, and
+ * gentle enough for the wide slab. The hall corridor gets its own check
+ * (`hqHallClear`) — this is just the anchor cell.
+ */
+export function isHqGround(field: HqField, x: number, z: number, maxAboveSea: number): boolean {
+  const h = field.heights[z * field.width + x] ?? 0;
+  if (h <= field.seaLevel + HQ_DRY_MARGIN) return false;
+  if (h > field.seaLevel + maxAboveSea) return false;
+  if (cellSlope(field, x, z) > HQ_MAX_SLOPE) return false;
+  return true;
+}
+
+/**
+ * The hall runs ~11 cells from the anchor toward the map center and
+ * reinforcements spawn at its mouth: every corridor cell must be dry land
+ * (relaxed margin — the mouth may sit closer to shore than the slab) or
+ * the fort would launch hulls into the surf. Pure, deterministic.
+ */
+export function hqHallClear(field: HqField, cellX: number, cellZ: number, team: TeamId): boolean {
+  const dir = team === 0 ? 1 : -1;
+  for (let i = 0; i <= HQ_HALL_CELLS; i++) {
+    const x = cellX + dir * i;
+    if (x < 0 || x >= field.width) return false;
+    const h = field.heights[cellZ * field.width + x] ?? 0;
+    if (h <= field.seaLevel + HQ_FALLBACK_DRY_MARGIN) return false;
+  }
+  return true;
+}
+
+/**
+ * Deterministically site one factory per team at its map end: a band of
+ * end columns (outermost preferred, so the fort still reads as the map-end
+ * works), nearest dry gentle LOW ground to the middle row (seed offsets
+ * the scan start so regens vary). Low ground wins within the allowed
+ * band — the old scorer preferred higher cells, which marched forts up
+ * every ridge. Pure, no rng draws — replays match exactly.
+ *
+ * Two passes over the band: a strict valley-floor pass (margin + cap +
+ * gentle + clear hall), then a relaxed pass (shore margin, steeper, cap +
+ * headroom) so cramped maps still find honest ground. An island fallback
+ * sweeps the team's half toward a valley-floor target, and a last resort
+ * takes the lowest gentle hall-clear ground in the half with no cap — so
+ * all-high halves (Ashen Pass east is all plateau) still get their valley
+ * floor instead of their peak, and no fort ever beaches while dry ground
+ * exists anywhere in its half.
  */
 export function placeHqs(field: HqField, seed: number): HqSite[] {
+  const cap = hqMaxAboveSea(field);
   return TEAM_IDS.map((team) => {
-    const cellX = Math.min(Math.max(hqCellX(field.width, team), 0), field.width - 1);
+    const endX = Math.min(Math.max(hqCellX(field.width, team), 0), field.width - 1);
+    const band: number[] = [];
+    for (let k = 0; k < HQ_END_BAND; k++) {
+      const x = endX + (team === 0 ? k : -k);
+      if (x < 0 || x >= field.width) break;
+      band.push(x);
+    }
     const mid = field.height >> 1;
     const start = (mid + (seed >>> 0)) % Math.max(field.height, 1);
-    let best = { cellZ: mid, score: -Infinity };
-    for (let n = 0; n < field.height; n++) {
-      const cellZ = (start + n) % field.height;
-      const h = field.heights[cellZ * field.width + cellX] ?? 0;
-      if (h <= field.seaLevel + 4) continue;
-      const slope = cellSlope(field, cellX, cellZ);
-      if (slope > 15) continue;
-      // Prefer the middle row (a central gate reads as the map-end fort),
-      // secondarily higher ground.
-      const score = h - Math.abs(cellZ - mid) * 4 - slope * 2;
-      if (score > best.score) best = { cellZ, score };
+    const scoreCell = (x: number, cellZ: number): number => {
+      const h = field.heights[cellZ * field.width + x] ?? 0;
+      const slope = cellSlope(field, x, cellZ);
+      // Outermost column first (map-end fort), then the central gate,
+      // then gentle, then LOW: factories sit on the valley floor.
+      const colOffset = Math.abs(x - endX);
+      return -colOffset * 50 - Math.abs(cellZ - mid) * 4 - slope * 2 - (h - field.seaLevel) * 0.25;
+    };
+    let best = { cellX: -1, cellZ: -1, score: -Infinity };
+    for (const x of band) {
+      for (let n = 0; n < field.height; n++) {
+        const cellZ = (start + n) % field.height;
+        if (!isHqGround(field, x, cellZ, cap)) continue;
+        if (!hqHallClear(field, x, cellZ, team)) continue;
+        const score = scoreCell(x, cellZ);
+        if (score > best.score) best = { cellX: x, cellZ, score };
+      }
     }
-    return { team, cellX, cellZ: best.cellZ };
+    if (best.cellZ >= 0) return { team, cellX: best.cellX, cellZ: best.cellZ };
+    // Relaxed: shore margin, cliff edge, cap headroom — still dry, still
+    // hall-clear, still deterministic.
+    let soft = { cellX: -1, cellZ: -1, score: -Infinity };
+    for (const x of band) {
+      for (let n = 0; n < field.height; n++) {
+        const cellZ = (start + n) % field.height;
+        const h = field.heights[cellZ * field.width + x] ?? 0;
+        if (h <= field.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
+        if (h > field.seaLevel + cap + 20) continue;
+        if (cellSlope(field, x, cellZ) > HQ_FALLBACK_SLOPE) continue;
+        if (!hqHallClear(field, x, cellZ, team)) continue;
+        const score = scoreCell(x, cellZ);
+        if (score > soft.score) soft = { cellX: x, cellZ, score };
+      }
+    }
+    if (soft.cellZ >= 0) return { team, cellX: soft.cellX, cellZ: soft.cellZ };
+    // Island fallback: sweep the team's whole half (map end → middle) so
+    // wide island shores still find honest ground instead of beaching.
+    // Outermost still wins, so inland maps never reach this pass.
+    const halfLo = team === 0 ? 0 : Math.floor(field.width / 2);
+    const halfHi = team === 0 ? Math.ceil(field.width / 2) : field.width - 1;
+    let far = { cellX: -1, cellZ: -1, score: -Infinity };
+    const x0 = team === 0 ? halfLo : halfHi;
+    const x1 = team === 0 ? halfHi : halfLo;
+    const step = x0 <= x1 ? 1 : -1;
+    // Valley-floor target: when the whole map end is a plateau (or the
+    // sea), height honesty outweighs map-end pride — score closeness to a
+    // low valley floor (~20 above sea: dry with margin, below every cap)
+    // instead of raw lowness, so the fort takes the pass, not the beach
+    // nor the peak. The end column still wins ties.
+    const valleyH = field.seaLevel + 20;
+    for (let x = x0; ; x += step) {
+      for (let n = 0; n < field.height; n++) {
+        const cellZ = (start + n) % field.height;
+        const h = field.heights[cellZ * field.width + x] ?? 0;
+        if (h <= field.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
+        if (h > field.seaLevel + cap + 20) continue;
+        const slope = cellSlope(field, x, cellZ);
+        if (slope > HQ_FALLBACK_SLOPE) continue;
+        if (!hqHallClear(field, x, cellZ, team)) continue;
+        const score =
+          -Math.abs(x - endX) * 1 - Math.abs(cellZ - mid) * 4 - slope * 2 - Math.abs(h - valleyH) * 1;
+        if (score > far.score) far = { cellX: x, cellZ, score };
+      }
+      if (x === x1) break;
+    }
+    if (far.cellZ >= 0) return { team, cellX: far.cellX, cellZ: far.cellZ };
+    // Last resort: lowest gentle hall-clear ground in the half — no cap.
+    // All-high halves (Ashen Pass east is all plateau) still get their
+    // valley floor instead of their peak: height leads, slope follows.
+    let dry = { cellX: endX, cellZ: -1, score: -Infinity };
+    for (let x = x0; ; x += step) {
+      for (let n = 0; n < field.height; n++) {
+        const cellZ = (start + n) % field.height;
+        const h = field.heights[cellZ * field.width + x] ?? 0;
+        if (h <= field.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
+        if (!hqHallClear(field, x, cellZ, team)) continue;
+        const score =
+          -(h - field.seaLevel) * 2 -
+          cellSlope(field, x, cellZ) * 3 -
+          Math.abs(cellZ - mid) * 1 -
+          Math.abs(x - endX) * 0.5;
+        if (score > dry.score) dry = { cellX: x, cellZ, score };
+      }
+      if (x === x1) break;
+    }
+    if (dry.cellZ >= 0) return { team, cellX: dry.cellX, cellZ: dry.cellZ };
+    return { team, cellX: endX, cellZ: mid };
   });
 }
 

@@ -51,6 +51,45 @@ describe("buildHq", () => {
     expect(HQ_DOOR_H).toBeLessThan(HQ_WALL_H);
   });
 
+  it("reads as a factory: halls, stacks, silo, annex, framed door", () => {
+    for (const team of [0, 1] as const) {
+      const group = buildHq(team);
+      // Twin chimney stacks with caps.
+      const stacks = group.children.filter((c) => c.name === "hq-chimney");
+      expect(stacks, "twin chimney stacks").toHaveLength(2);
+      // Silo tank + workshop annex + monitor roof crown.
+      expect(group.getObjectByName("hq-silo")).not.toBeNull();
+      expect(group.getObjectByName("hq-annex")).not.toBeNull();
+      expect(group.getObjectByName("hq-monitor")).not.toBeNull();
+      // Factory massing: well beyond the old pillbox box count.
+      const solids = group.children.filter((c) => c.type === "Mesh").length;
+      expect(solids).toBeGreaterThan(18);
+      // Every factory-built surface is a shared-style Lambert (the team
+      // ring keeps its own marker material) with the highlight guard.
+      group.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.type !== "Mesh") return;
+        if (child.name !== "team-ring") {
+          expect(mesh.material).toBeInstanceOf(THREE.MeshLambertMaterial);
+        }
+        expect(child.userData.noHighlight).toBe(true);
+      });
+    }
+  });
+
+  it("topples the stacks exactly once with the wreck", () => {
+    const group = buildHq(0);
+    const stacks = group.children.filter((c) => c.name === "hq-chimney") as THREE.Mesh[];
+    expect(stacks.length).toBe(2);
+    const seatY = stacks[0]!.position.y;
+    poseHqWreck(group);
+    expect(stacks[0]!.position.y).toBeLessThan(seatY);
+    expect(stacks[0]!.rotation.z).toBeCloseTo(0.14, 6);
+    const again = stacks[0]!.position.y;
+    poseHqWreck(group);
+    expect(stacks[0]!.position.y).toBe(again);
+  });
+
   it("wrecks in place, idempotently", () => {
     const group = buildHq(1);
     const door = getHqDoor(group)!;

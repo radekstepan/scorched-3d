@@ -3,17 +3,29 @@ import {
   applyBlastToHqs,
   createHqDamage,
   createHqSpawns,
+  HQ_DRY_MARGIN,
+  HQ_FALLBACK_DRY_MARGIN,
+  HQ_FALLBACK_SLOPE,
+  HQ_HIGH_BASELINE,
+  HQ_HIGH_FRACTION,
+  HQ_MAX_SLOPE,
   HQ_MAX_SPAWNS,
   HQ_SPAWN_CYCLE,
   HQ_SPAWN_INTERVAL,
   hqAnchor,
+  hqCellSlope,
   hqCellX,
+  hqHallClear,
+  hqMaxAboveSea,
   isHqDestroyed,
+  isHqGround,
   placeHqs,
   spawnKindFor,
   tickHqSpawn,
   HQ_HIT_DAMAGE,
 } from "./hq.js";
+import { generateMap } from "../terrain/generate.js";
+import type { MapPreset } from "../terrain/types.js";
 
 function flatField(width = 64, height = 64, h = 40, seaLevel = 10) {
   return {
@@ -37,16 +49,19 @@ describe("placeHqs", () => {
     expect(sites[0]!.cellZ).toBe(32);
   });
 
-  it("is deterministic per seed and varies across seeds", () => {
+  it("is deterministic per seed and steps inward off flooded shores", () => {
     const a = placeHqs(flatField(), 11);
     const b = placeHqs(flatField(), 11);
     expect(a).toEqual(b);
     // The seed offsets the scan start, but flat ground still prefers mid —
-    // vary the terrain instead: a flooded west column pushes the site over.
+    // vary the terrain instead: a flooded west column steps the site one
+    // cell inward onto dry ground instead of beaching in it.
     const field = flatField();
     for (let z = 0; z < 64; z++) field.heights[z * 64 + hqCellX(64, 0)] = 0;
     const wet = placeHqs(field, 11);
-    expect(wet[0]).toEqual({ team: 0, cellX: hqCellX(64, 0), cellZ: 32 });
+    expect(wet[0]!.cellX).toBe(hqCellX(64, 0) + 1);
+    const h = field.heights[wet[0]!.cellZ * 64 + wet[0]!.cellX]!;
+    expect(h).toBeGreaterThan(field.seaLevel + HQ_FALLBACK_DRY_MARGIN);
   });
 
   it("anchors to world space like unit anchors", () => {
@@ -58,6 +73,107 @@ describe("placeHqs", () => {
     expect(b.x).toBeGreaterThan(0);
     expect(a.y).toBe(80);
     expect(b.y).toBe(80);
+  });
+
+  it("caps high ground relative to the map instead of preferring peaks", () => {
+    // Mountainous relief: the cap is the roomier of the flat baseline and
+    // the relief fraction, so peaks above it are rejected.
+    const width = 64;
+    const height = 64;
+    const seaLevel = 10;
+    const heights = new Uint8Array(width * height).fill(30);
+    // One soaring peak column cell plus a valley alternative in the same
+    // end column: the fort must take the valley, not the peak.
+    const cx = hqCellX(width, 0);
+    for (let z = 0; z < height; z++) heights[z * width + cx] = 30;
+    heights[10 * width + cx] = 200;
+    const field = { heights, width, height, seaLevel };
+    const cap = hqMaxAboveSea(field);
+    expect(cap).toBeCloseTo(
+      Math.max(HQ_HIGH_BASELINE, (200 - seaLevel) * HQ_HIGH_FRACTION),
+      6,
+    );
+    expect(isHqGround(field, cx, 10, cap)).toBe(false);
+    expect(isHqGround(field, cx, 40, cap)).toBe(true);
+    const sites = placeHqs(field, 5);
+    expect(sites[0]!.cellZ).not.toBe(10);
+    const h = heights[sites[0]!.cellZ * width + cx]!;
+    expect(h).toBeLessThanOrEqual(seaLevel + cap);
+  });
+
+  it("rejects water with margin, steep slopes, and wet hall corridors", () => {
+    const width = 32;
+    const height = 32;
+    const seaLevel = 75;
+    const heights = new Uint8Array(width * height).fill(seaLevel + 20);
+    const field = { heights, width, height, seaLevel };
+    const cap = hqMaxAboveSea(field);
+    const cx = hqCellX(width, 0);
+    // Shore water with the old +4 margin would pass; the +8 margin rejects.
+    heights[8 * width + cx] = seaLevel + HQ_DRY_MARGIN - 1;
+    expect(isHqGround(field, cx, 8, cap)).toBe(false);
+    // Steep cliff next to the anchor rejects.
+    heights[9 * width + cx] = seaLevel + 20;
+    heights[9 * width + cx + 1] = seaLevel + 20 + HQ_MAX_SLOPE + 1;
+    expect(hqCellSlope(field, cx, 9)).toBeGreaterThan(HQ_MAX_SLOPE);
+    expect(isHqGround(field, cx, 9, cap)).toBe(false);
+    // A wet hall corridor (water under the mouth) rejects the site.
+    const dir = 1;
+    for (let i = 0; i <= 12; i++) heights[20 * width + cx + dir * i] = seaLevel + 20;
+    heights[20 * width + cx + 6] = seaLevel + HQ_FALLBACK_DRY_MARGIN - 1;
+    expect(hqHallClear(field, cx, 20, 0)).toBe(false);
+  });
+
+  it("sites every preset off water, off peaks, and on gentle hall-clear ground", () => {
+    const presets: MapPreset[] = [
+      "greenreach",
+      "archipelago",
+      "highpass",
+      "caldera",
+      "rivercross",
+      "dustplains",
+    ];
+    for (const preset of presets) {
+      for (const seed of [1, 7, 42]) {
+        const map = generateMap(preset, seed);
+        const cap = hqMaxAboveSea(map);
+        const sites = placeHqs(map, map.seed);
+        expect(sites).toHaveLength(2);
+        for (const site of sites) {
+          const h = map.heights[site.cellZ * map.width + site.cellX] ?? 0;
+          // Dry with margin (strict) or at worst the relaxed shore
+          // margin — never beached, never submerged.
+          expect(
+            h,
+            `${preset} seed ${seed} team ${site.team} in water (h=${h} sea=${map.seaLevel})`,
+          ).toBeGreaterThan(map.seaLevel + HQ_FALLBACK_DRY_MARGIN);
+          // Below the high-ground cap (with headroom) — or, on all-high
+          // halves like Ashen Pass east, within 10 of the lowest dry
+          // hall-clear ground in the team's half (valley floor, not peak).
+          const halfLo = site.team === 0 ? 0 : Math.floor(map.width / 2);
+          const halfHi = site.team === 0 ? Math.ceil(map.width / 2) : map.width - 1;
+          let halfMin = Infinity;
+          for (let x = halfLo; x <= halfHi; x++) {
+            for (let z = 0; z < map.height; z++) {
+              const hh = map.heights[z * map.width + x] ?? 0;
+              if (hh <= map.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
+              if (!hqHallClear(map, x, z, site.team)) continue;
+              if (hh < halfMin) halfMin = hh;
+            }
+          }
+          expect(
+            h,
+            `${preset} seed ${seed} team ${site.team} on a peak (h=${h} cap=${map.seaLevel + cap + 20} halfMin=${halfMin})`,
+          ).toSatisfy(
+            (v) => v <= map.seaLevel + cap + 20 || v <= halfMin + 10,
+          );
+          expect(hqCellSlope(map, site.cellX, site.cellZ)).toBeLessThanOrEqual(
+            HQ_FALLBACK_SLOPE,
+          );
+          expect(hqHallClear(map, site.cellX, site.cellZ, site.team)).toBe(true);
+        }
+      }
+    }
   });
 });
 

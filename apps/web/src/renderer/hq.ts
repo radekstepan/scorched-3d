@@ -3,15 +3,25 @@ import { TEAM_DEFS, type TeamId } from "@scorched-3d/core";
 import { buildTeamRing } from "./units";
 
 /**
- * Team HQ structures: one fortified bunker per side at its map end, with a
- * sliding front door and an open hall running toward the map center that
- * reinforcements drive out of. Built from plain Lambert boxes (no new
- * materials per frame — everything is created once in `buildHq`), so the
- * door animation is a single position write per tick and the wreck pose is
- * a one-time recolor.
+ * Team HQ factory structures: one fortified works per side at its map end,
+ * with a sliding front door and an open hall running toward the map center
+ * that reinforcements drive out of. The massing reads as a factory, not a
+ * pillbox: a walled production hall under a monitor (clerestory) roof with
+ * vents and a skylight, twin chimney stacks + caps at the back corners, a
+ * silo tank and a side workshop annex on the slab, and a framed sectional
+ * door with gate lamps under a canopy. Built from plain Lambert boxes and
+ * cylinders (no new materials per frame — everything is created once in
+ * `buildHq`), so the door animation is a single position write per tick
+ * and the wreck pose is a one-time recolor.
  *
  * Local frame: the door faces +X. The canvas mirrors team 1 (east) so its
  * door faces the map center (-X world).
+ *
+ * Nanolathe inspiration (adapted): retail TA-style factories keep the
+ * front (+Z) exit lane clear of buildings over its full width and deliver
+ * products at the factory exit; here the open hall + hall mouth serve the
+ * same role — a clear lane toward the map center where each reinforcement
+ * appears facing out, then drives through the normal movement pipeline.
  */
 
 /** Bunker base footprint, world units (fits easily inside a map-end column). */
@@ -62,9 +72,29 @@ function hqBox(
   return mesh;
 }
 
+function hqStack(
+  parent: THREE.Group,
+  rTop: number,
+  rBottom: number,
+  h: number,
+  x: number,
+  y: number,
+  z: number,
+  color: number,
+): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(rTop, rBottom, h, 12),
+    new THREE.MeshLambertMaterial({ color }),
+  );
+  mesh.position.set(x, y, z);
+  parent.add(mesh);
+  return mesh;
+}
+
 /**
- * Build one HQ bunker + hall for `team`, door facing local +X. The sliding
- * door carries the name `hq-door` (see `getHqDoor` / `setDoorLift`); every
+ * Build one HQ factory + hall for `team`, door facing local +X. The
+ * sliding door carries the name `hq-door` (see `getHqDoor` / `setDoorLift`);
+ * chimneys carry `hq-chimney` so the wreck pose can topple them; every
  * mesh is tagged `userData.noHighlight` so damage-charring passes (which
  * only ever visit unit bodies) could never touch the structure anyway.
  */
@@ -93,9 +123,45 @@ export function buildHq(team: TeamId): THREE.Group {
     tag(hqBox(group, 8, HQ_WALL_H, 17, 44, wallY, s * 25.5, HQ_DARK));
   }
   tag(hqBox(group, HQ_BASE_W, 5, HQ_BASE_D, 0, 4 + HQ_WALL_H + 2.5, 0, HQ_CONCRETE));
+  // Factory roof furniture: a monitor (clerestory) hall crown with vents
+  // and a skylight strip, so the roofline reads as works sheds.
+  const monitor = hqBox(group, 56, 7, 22, -4, 4 + HQ_WALL_H + 5 + 3.5, 0, HQ_DARK);
+  monitor.name = "hq-monitor";
+  tag(monitor);
+  tag(hqBox(group, 40, 1.5, 8, -4, 4 + HQ_WALL_H + 5 + 7.75, 0, HQ_CONCRETE));
+  for (const vx of [-24, 18]) {
+    tag(hqBox(group, 8, 5, 8, vx, 4 + HQ_WALL_H + 5 + 2.5, vx > 0 ? -14 : 14, HQ_CONCRETE));
+  }
+  // Twin chimney stacks at the back corners, with dark caps.
+  for (const s of [-1, 1]) {
+    const stack = hqStack(group, 4, 5, 36, -38, 4 + 18, s * 28, HQ_CONCRETE);
+    stack.name = "hq-chimney";
+    tag(stack);
+    tag(hqStack(group, 5.5, 5.5, 2, -38, 4 + 36 + 1, s * 28, HQ_DARK));
+  }
+  // Silo tank + side workshop annex on the slab (kept inside the base so
+  // the whole works sits on seated ground).
+  const silo = hqStack(group, 9, 9, 30, 18, 4 + 15, -28, HQ_CONCRETE);
+  silo.name = "hq-silo";
+  tag(silo);
+  tag(hqStack(group, 9.5, 9.5, 2, 18, 4 + 30 + 1, -28, HQ_DARK));
+  const annex = hqBox(group, 30, 14, 24, -20, 4 + 7, 24, HQ_DARK);
+  annex.name = "hq-annex";
+  tag(annex);
+  tag(hqBox(group, 32, 2, 26, -20, 4 + 14 + 1, 24, HQ_CONCRETE));
   // Team trim stripe across the front, above the door.
   const trim = hqBox(group, 4, 3, HQ_BASE_D, 45, 4 + HQ_WALL_H - 1.5, 0, TEAM_DEFS[team]?.color ?? 0xffffff);
   tag(trim);
+
+  // Sliding sectional door: thin shutter in the front opening, base seated
+  // on the slab, framed by jambs + lintel with team gate lamps and a
+  // canopy over the hall mouth.
+  for (const s of [-1, 1]) {
+    tag(hqBox(group, 4, HQ_WALL_H, 3, 44, 4 + HQ_WALL_H / 2, s * 18.5, HQ_CONCRETE));
+    tag(hqBox(group, 2, 2, 2, 46.5, 12, s * 21, TEAM_DEFS[team]?.color ?? 0xffffff));
+  }
+  tag(hqBox(group, 4, 4, 40, 44, 4 + HQ_WALL_H + 1, 0, HQ_CONCRETE));
+  tag(hqBox(group, 14, 2, 44, 53, 4 + HQ_WALL_H + 2, 0, HQ_DARK));
 
   // Sliding door: thin shutter in the front opening, base seated on the slab.
   const door = hqBox(group, 3, HQ_DOOR_H, HQ_DOOR_W, 46, 4 + HQ_DOOR_H / 2, 0, HQ_DARK);
@@ -141,8 +207,9 @@ export function doorLiftOf(group: THREE.Group): number {
 
 /**
  * Wreck an HQ in place (idempotent): char every Lambert surface toward
- * near-black, slam the door crooked, and drop the roof — the husk reads as
- * a breached fort while keeping its roster slot, like every other wreck.
+ * near-black, slam the door crooked, drop the roof, and lean the chimney
+ * stacks — the husk reads as a breached works while keeping its roster
+ * slot, like every other wreck.
  */
 export function poseHqWreck(group: THREE.Group): void {
   if (group.userData.hqWrecked) return;
@@ -168,5 +235,13 @@ export function poseHqWreck(group: THREE.Group): void {
   if (roof) {
     roof.position.y -= 6;
     roof.rotation.z = 0.05;
+  }
+  // Chimney stacks lean and sink a little — breached works, not a clean
+  // pillbox. Guarded by the wrecked flag above, so this runs exactly once.
+  for (const child of group.children) {
+    if (child.name === "hq-chimney") {
+      child.position.y -= 3;
+      child.rotation.z = 0.14;
+    }
   }
 }
