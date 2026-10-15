@@ -15,6 +15,7 @@ import {
   THREAT_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
   acquireHunt,
+  advanceMemory,
   clearThreat,
   hasThreat,
   notifyThreat,
@@ -328,6 +329,73 @@ describe("pursuit driving", () => {
     };
     const dropped = advanceMover("stump", retaliated, route, 1, 1, null, null, foes);
     expect(hasThreat(dropped)).toBe(false);
+  });
+});
+
+describe("advanceMemory", () => {
+  it("points at a position with no roster grudge on the hunt leash", () => {
+    const memory = advanceMemory(1300, -50);
+    expect(memory).toMatchObject({
+      attacker: -1,
+      x: 1300,
+      z: -50,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: HUNT_LEASH_RADIUS,
+    });
+  });
+
+  it("refuses non-finite positions", () => {
+    expect(advanceMemory(Number.NaN, 0)).toBeNull();
+    expect(advanceMemory(0, Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  it("keeps driving toward the spot past the disengage bound (it cannot flee)", () => {
+    const route = flatRoute();
+    // 1300 sits past the 1250 disengage bound but inside the hunt leash of
+    // the anchor, so a live grudge would give up here while the position
+    // memory keeps steering.
+    const memory = advanceMemory(THREAT_DISENGAGE_RADIUS + 50, 0)!;
+    const advancing: Mover = { ...initMover(route, 0), hull: 0, threat: memory };
+    const start = Math.hypot(advancing.x - memory.x, advancing.z - memory.z);
+    const next = advanceMover("stump", advancing, route, 1);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat?.attacker).toBe(-1);
+    expect(Math.hypot(next.x - memory.x, next.z - memory.z)).toBeLessThan(start);
+  });
+
+  it("still gives up past the anchor leash and on expiry", () => {
+    const route = flatRoute();
+    const far: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: -1, x: HUNT_LEASH_RADIUS + 200, z: 0, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS },
+    };
+    expect(hasThreat(advanceMover("stump", far, route, 1))).toBe(false);
+    const stale: Mover = { ...initMover(route, 0), hull: 0, threat: advanceMemory(500, 0)! };
+    const expired = advanceMover("stump", stale, route, THREAT_MEMORY_DURATION + 1);
+    expect(hasThreat(expired)).toBe(false);
+    expect("threat" in expired).toBe(false);
+  });
+
+  it("keeps the carried leash across drive ticks (wide chases stay wide)", () => {
+    const route = flatRoute();
+    const hunted: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: 1, x: THREAT_LEASH_RADIUS + 150, z: 0, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS },
+    };
+    const foes = [
+      { x: 0, z: 0 },
+      { x: THREAT_LEASH_RADIUS + 150, z: 0 },
+    ];
+    // Past the retaliation leash: the first step already steers (covered
+    // above), and the refreshed memory keeps the wide leash so the second
+    // step still pursues instead of collapsing to the tight anchor guard.
+    const first = advanceMover("stump", hunted, route, 1, 1, null, null, foes);
+    expect(hasThreat(first)).toBe(true);
+    expect(first.threat?.leash).toBe(HUNT_LEASH_RADIUS);
+    const second = advanceMover("stump", { ...first, hull: first.hull }, route, 1, 1, null, null, foes);
+    expect(hasThreat(second)).toBe(true);
   });
 });
 

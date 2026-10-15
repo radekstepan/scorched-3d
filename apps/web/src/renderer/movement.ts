@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   acquireStrategicHunt,
+  advanceMemory,
   advanceMovers,
   clearThreat,
   findWorldPath,
@@ -8,12 +9,15 @@ import {
   hasOrder,
   hasThreat,
   HULL_TILT_SLEW,
+  HUNT_LEASH_RADIUS,
   initMover,
   notifyThreat,
   orderMover,
   seekEngage,
+  shouldHold,
   slewTilt,
   snappedFormationTargets,
+  squadFocus,
   stunMover,
   type CrushContext,
   type HullSeat,
@@ -80,6 +84,15 @@ export class UnitMovement {
    * through a wreck — but wrecks themselves never move.
    */
   private destroyed: boolean[] = [];
+  /**
+   * Sticky per-team contact: the last-known live enemy position each side
+   * has found (refreshed from the squad focus while any teammate pursues a
+   * live enemy, kept after contact is lost). A side that has found the
+   * enemy keeps pushing that way — idle hulls advance toward the contact
+   * instead of guarding their patrol loop (see `sweepHunt`). Null until a
+   * side first engages, so unblooded sides patrol exactly as before.
+   */
+  private teamContact = new Map<number, { x: number; z: number }>();
   /**
    * Per-unit accumulated damage 0..1, fed from combat once per tick (see
    * `setDamage`): the strategic layer reads remaining health from it, so
@@ -259,12 +272,25 @@ export class UnitMovement {
     * alone into a group — and quarries are chosen, not just nearest: hulls
     * join their squad's focus and prefer wounded enemies (see `strategy.ts`).
     * Memories pointing at wrecks clear first (survivors stop guarding corpses
-    * and may acquire a live enemy the same tick). Ordered, holding, stunned,
-    * threatened, and wrecked hulls are untouched, and the sweep costs one
-    * O(n) scan per hull on a 6-roster, before the drive step so hunts steer
-    * same-tick. In-progress pursuits that turn suicidal hold in place inside
-    * the drive itself (tactics ride `advanceMovers`), so the sweep only
-    * acquires.
+    * and may acquire a live enemy the same tick); position memories
+    * (attacker -1: HQ seeks and team advances) survive the clear — a
+    * structure is never a dead roster row. Ordered, holding, threatened, and
+    * wrecked hulls are untouched, and the sweep costs one O(n) scan per hull
+    * on a 6-roster, before the drive step so hunts steer same-tick.
+    * In-progress pursuits that turn suicidal hold in place inside the drive
+    * itself (tactics ride `advanceMovers`), so the sweep only acquires.
+    *
+    * Team advance: the sweep first records each side's contact (its squad
+    * focus's live position — being shot counts as discovery, since the
+    * victim's retaliation memory points back at a live enemy) and keeps it
+    * after contact is lost. A free hull whose side knows the enemy direction
+    * but sees nothing itself advances toward the contact (core
+    * `advanceMemory`: a -1 position memory on the hunt leash, so the push
+    * stays local) instead of guarding its loop — while a side with no
+    * contact ever keeps patrolling. Advances refuse exactly like hunts
+    * (ordered/holding hulls, no live enemy left anywhere, an outnumbered
+    * hull waiting for backup, a contact past the leash), and a hull carrying
+    * an advance still upgrades to a live hunt the tick one appears.
    */
   sweepHunt(): void {
     if (this.movers.length === 0) return;
@@ -279,18 +305,87 @@ export class UnitMovement {
       m.threat && m.threat.ttl > 0 ? { ...m.threat } : undefined,
     );
     const hp = this.health();
+    // Record what each side has found: the squad focus names the live enemy
+    // most teammates pursue, so its position is the enemy direction. Sticky
+    // — a side keeps pushing there after contact is lost.
+    const seen = new Set<number>();
+    for (let i = 0; i < this.movers.length; i++) {
+      const team = teams[i];
+      if (team === undefined || seen.has(team)) continue;
+      seen.add(team);
+      const focus = squadFocus(team, threats, teams, alive);
+      if (focus >= 0) {
+        const at = foes[focus];
+        if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) {
+          this.teamContact.set(team, { x: at.x, z: at.z });
+        }
+      }
+    }
     for (let i = 0; i < this.movers.length; i++) {
       let mover = this.movers[i]!;
       const attacker = mover.threat?.attacker;
       if (
         mover.threat &&
-        (attacker === undefined || attacker < 0 || attacker >= this.movers.length || this.destroyed[attacker])
+        (attacker === undefined ||
+          attacker >= this.movers.length ||
+          (attacker >= 0 && this.destroyed[attacker]))
       ) {
         mover = clearThreat(mover);
       }
       const anchor = this.routes[i]?.[0] ?? null;
-      this.movers[i] = acquireStrategicHunt(mover, i, teams, foes, alive, anchor, threats, hp ?? undefined);
+      // A hull carrying only an advance still upgrades: clear the position
+      // memory for the acquisition attempt so a live enemy in notice takes
+      // over the push the same tick.
+      const free = mover.threat?.attacker === -1 ? clearThreat(mover) : mover;
+      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined);
+      if (!next.threat || next.threat.ttl <= 0) {
+        next = this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined);
+      }
+      this.movers[i] = next;
     }
+  }
+
+  /**
+   * Point a free hull at its side's last-known enemy position (see
+   * `teamContact`): the guard-to-attack fallback when the hunt sweep finds
+   * nothing. Refuses exactly like a hunt — ordered/holding hulls (player
+   * orders win), sides with no contact ever, no live enemy left anywhere,
+   * contacts past the hunt leash of the patrol anchor, and outnumbered
+   * hulls that should wait for backup instead of pushing alone. Pure per
+   * tick: returns the mover with a fresh position memory, or untouched.
+   */
+  private advanceTowardContact(
+    mover: Mover,
+    self: number,
+    teams: readonly (number | undefined)[],
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+    anchor: { x: number; z: number } | null,
+    hp?: readonly number[] | null,
+  ): Mover {
+    if (mover.threat && mover.threat.ttl > 0) return mover;
+    if (mover.hold || hasOrder(mover)) return mover;
+    if (!alive[self] || this.destroyed[self]) return mover;
+    const team = teams[self];
+    if (team === undefined) return mover;
+    const contact = this.teamContact.get(team);
+    if (!contact) return mover;
+    if (anchor && Math.hypot(contact.x - anchor.x, contact.z - anchor.z) > HUNT_LEASH_RADIUS) return mover;
+    let enemyAlive = false;
+    for (let j = 0; j < foes.length; j++) {
+      if (j === self || !alive[j] || this.destroyed[j]) continue;
+      const side = teams[j];
+      if (side === undefined || side === team) continue;
+      const at = foes[j];
+      if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) continue;
+      enemyAlive = true;
+      break;
+    }
+    if (!enemyAlive) return mover;
+    if (shouldHold(self, foes, teams, alive, hp ?? undefined)) return mover;
+    const memory = advanceMemory(contact.x, contact.z);
+    if (!memory) return mover;
+    return { ...mover, threat: memory };
   }
 
   /**

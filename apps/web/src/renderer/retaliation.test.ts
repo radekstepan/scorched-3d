@@ -459,6 +459,151 @@ describe("UnitMovement hunt", () => {
   });
 });
 
+describe("UnitMovement team advance", () => {
+  /** A (team 0) guards its loop while B (team 0) bloodies C (team 1). */
+  function makeAdvanceMovement(): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 11, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 12, cellZ: 10, rotation: Math.PI, team: 1 },
+    ];
+    const spawns = [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(1000, 100, 0),
+      new THREE.Vector3(1200, 100, 0),
+    ];
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("advances toward the squad's last-known contact after notice is lost", () => {
+    const { movement } = makeAdvanceMovement();
+    movement.update(1 / 60);
+    // B (200 from C) notices and commits; A (1200 from C, past the hunt
+    // engage gate) sees nothing yet and its side has no contact either.
+    expect(movement.moverState(1)?.threat?.attacker).toBe(2);
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.update(1 / 60);
+    // B's live pursuit is the squad focus, so the side knows the enemy
+    // direction: A advances on a position memory (attacker -1, never a
+    // grudge against a mate) instead of guarding its loop.
+    const issued = movement.moverState(0)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(movement.hasThreat(0)).toBe(true);
+    const distAtIssue = Math.hypot(issued.x - 1200, issued.z - 0);
+    // The push visibly closes on the enemy side instead of patrolling home.
+    for (let n = 0; n < 240; n++) movement.update(1 / 60);
+    const after = movement.moverState(0)!;
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(after.x).toBeGreaterThan(issued.x);
+    expect(Math.hypot(after.x - 1200, after.z - 0)).toBeLessThan(distAtIssue);
+    movement.dispose();
+  });
+
+  it("keeps patrolling when its side has never made contact", () => {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 12, cellZ: 10, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(3000, 100, 0)]) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const movement = new UnitMovement(
+      group,
+      [
+        [
+          { x: 0, z: 0 },
+          { x: 0, z: 400 },
+          { x: 400, z: 400 },
+          { x: 400, z: 0 },
+        ],
+        [
+          { x: 3000, z: 0 },
+          { x: 3000, z: 400 },
+          { x: 3400, z: 400 },
+          { x: 3400, z: 0 },
+        ],
+      ],
+      { groundY: () => 100 },
+    );
+    // Far past notice and past the leash: no contact ever, no advance.
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.dispose();
+  });
+
+  it("lets player orders win over the team advance", () => {
+    const { movement } = makeAdvanceMovement();
+    movement.orderUnit(0, { x: -500, z: -500 });
+    for (let n = 0; n < 3; n++) movement.update(1 / 60);
+    // The side still finds the enemy (B commits) but the ordered hull stays
+    // on its order instead of pushing.
+    expect(movement.moverState(1)?.threat?.attacker).toBe(2);
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.dispose();
+  });
+
+  it("waits for backup instead of advancing alone into a column", () => {
+    const group = new THREE.Group();
+    const spawns = [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(900, 100, 0),
+      new THREE.Vector3(500, 100, 0),
+      new THREE.Vector3(530, 100, 10),
+      new THREE.Vector3(560, 100, 20),
+    ];
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 11, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 12, cellZ: 10, rotation: Math.PI, team: 1 },
+      { kind: "flash", cellX: 13, cellZ: 10, rotation: Math.PI, team: 1 },
+      { kind: "flash", cellX: 14, cellZ: 10, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const movement = new UnitMovement(
+      group,
+      spawns.map((s) => [
+        { x: s.x, z: s.z },
+        { x: s.x, z: s.z + 400 },
+        { x: s.x + 400, z: s.z + 400 },
+        { x: s.x + 400, z: s.z },
+      ]),
+      { groundY: () => 100 },
+    );
+    // B is bloodied by the column (forced retaliation memory inside the
+    // engage gate), so team 0 knows the enemy direction…
+    movement.threatenUnit(1, 2, 500, 0);
+    expect(movement.hasThreat(1)).toBe(true);
+    movement.update(1 / 60);
+    // …but A faces three fresh hulls alone: it waits instead of advancing.
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.dispose();
+  });
+});
+
 describe("waypoint pursuit display", () => {
   it("promises the chase in rose, hiding the patrol loop", () => {
     const routeSet = routes();

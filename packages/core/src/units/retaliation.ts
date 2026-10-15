@@ -266,6 +266,32 @@ export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; h
 }
 
 /**
+ * Team-advance position memory: point an idle/patrolling hull at a team's
+ * last-known enemy position (see `advanceMemory`), so a side that has found
+ * the enemy keeps pushing that way instead of guarding its patrol loop after
+ * contact is lost. Drives the same threat/pursuit pipeline retaliation uses
+ * (stand-off hold, anchor leash, memory expiry — see `pursueStep`), with two
+ * deliberate differences:
+ *
+ * - `attacker` is always -1 (a position, not a roster grudge — the same
+ *   convention as an HQ structure seek): the drive falls back to the stored
+ *   (`x`, `z`), and the memory never feeds squad focus or gun grudges.
+ * - The disengage gate does not apply (see `pursueStep`): a last-known
+ *   position cannot flee, so distance from it is the reason to advance, not
+ *   a reason to give up. The patrol-anchor leash and memory expiry still
+ *   release the hull, and the issue-side leash gate keeps the push local.
+ * - Ordered/holding movers ignore the advance (player orders win), wrecks
+ *   never carry it, and the strategic layer still gates cowardly commits
+ *   (the renderer refuses advances while `shouldHold`).
+ *
+ * Pure: no rng, no clocks.
+ */
+export function advanceMemory(x: number, z: number): ThreatMemory | null {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { attacker: -1, x, z, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS };
+}
+
+/**
  * Tick a threat countdown by `dt` seconds, dropping the key at expiry so
  * post-pursuit snapshots compare equal with never-threatened ones. Pure;
  * a non-positive step leaves the mover untouched.

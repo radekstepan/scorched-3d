@@ -547,8 +547,9 @@ function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: numb
  * attacker index, else the last-known memory) through the same
  * `driveToward` patrol uses — turn caps, grip, drag, slope gating — with
  * the patrol leg frozen. Returns null on give-up (memory expired,
- * attacker past the disengage bound, or threat past the leash from the
- * patrol anchor) so the caller drops the memory and resumes patrol.
+ * live attacker past the disengage bound, or threat past the leash from
+ * the patrol anchor — position memories skip the disengage bound, see
+ * below) so the caller drops the memory and resumes patrol.
  * Inside weapons-range stand-off the hull holds and faces the threat while
  * the memory stays fresh; pinned against a slope it holds like an ordered
  * hull instead of skipping its frozen leg away. With `tactics`, a hull
@@ -577,14 +578,26 @@ function pursueStep(
   if (!(Number.isFinite(tx) && Number.isFinite(tz))) return null;
   // Disengage (hysteresis side): an engaged hull tolerates more distance
   // than a fresh one, but past this the attacker got away — let go.
-  if (Math.hypot(tx - mover.x, tz - mover.z) > THREAT_DISENGAGE_RADIUS) return null;
+  // Position memories (attacker -1: a last-known spot or an HQ structure)
+  // are exempt — the quarry cannot flee, so distance from the spot is the
+  // reason to advance, not a reason to give up. The anchor leash and the
+  // memory expiry below still release the hull.
+  if (threat.attacker >= 0 && Math.hypot(tx - mover.x, tz - mover.z) > THREAT_DISENGAGE_RADIUS) return null;
   // Leash to the post: the threat must sit near the patrol anchor (route
   // waypoint 0, the spawn) or the chase would drag the hull across the map.
   // The memory carries its own leash — retaliation holds the tight anchor
-  // guard, hunt acquisitions range wider (see `retaliation.ts`).
+  // guard, hunt acquisitions and team advances range wider (see
+  // `retaliation.ts`) — and the refreshed memory keeps it, so a wide leash
+  // survives every tick of the chase instead of collapsing after one step.
   const anchor = route.length > 0 ? (route[0] as RoutePoint) : { x: mover.x, z: mover.z };
   if (Math.hypot(tx - anchor.x, tz - anchor.z) > (threat.leash ?? THREAT_LEASH_RADIUS)) return null;
-  const memory: ThreatMemory = { attacker: threat.attacker, x: tx, z: tz, ttl };
+  const memory: ThreatMemory = {
+    attacker: threat.attacker,
+    x: tx,
+    z: tz,
+    ttl,
+    ...(threat.leash !== undefined ? { leash: threat.leash } : {}),
+  };
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });
   // Outnumbered: hold facing the threat and wait for backup instead of
