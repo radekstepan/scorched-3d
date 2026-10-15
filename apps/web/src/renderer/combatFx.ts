@@ -359,10 +359,10 @@ export const SHOT_GLOW_PEAK = 1800;
 export const SHOT_GLOW_DISTANCE = 600;
 /** Height above the dirt over which the glow fades to zero. */
 export const SHOT_GLOW_RANGE = 380;
-/** Ground-blob disc radius at full strength (order of a scorch radius). */
-export const SHOT_GLOW_RADIUS = 70;
+/** Ground-blob disc radius at full strength (subtle highlight, under scorch scale). */
+export const SHOT_GLOW_RADIUS = 32;
 /** Ground-blob peak opacity (additive, seated like the blast glow). */
-export const SHOT_GLOW_OPACITY = 0.4;
+export const SHOT_GLOW_OPACITY = 0.22;
 
 /**
  * Glow strength 0..1 for a projectile `height` above the dirt: full at the
@@ -375,6 +375,16 @@ export function projectileGlowFalloff(height: number): number {
   if (height <= 0) return 1;
   if (height >= SHOT_GLOW_RANGE) return 0;
   return 1 - height / SHOT_GLOW_RANGE;
+}
+
+/**
+ * Ground-blob disc radius for a glow `falloff` 0..1 (clamped): shrinks
+ * toward 60% as the round climbs, so high flight reads smaller as well as
+ * fainter. Pure for tests.
+ */
+export function projectileGlowRadius(falloff: number): number {
+  const f = Math.min(Math.max(falloff, 0), 1);
+  return Math.max(SHOT_GLOW_RADIUS * (0.6 + 0.4 * f), 1);
 }
 /** Scratch yaw quaternion for scorch instance orientation (no per-mark alloc). */
 const _yawQuat = new THREE.Quaternion();
@@ -2238,7 +2248,7 @@ export class CombatFx {
       light.intensity = SHOT_GLOW_PEAK * falloff;
       blob.visible = true;
       blob.position.set(pos.x, ground + 1.4, pos.z);
-      blob.scale.setScalar(Math.max(SHOT_GLOW_RADIUS * (0.6 + 0.4 * falloff), 1));
+      blob.scale.setScalar(projectileGlowRadius(falloff));
       mat.opacity = SHOT_GLOW_OPACITY * falloff;
     }
   }

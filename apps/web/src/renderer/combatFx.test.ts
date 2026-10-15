@@ -16,10 +16,12 @@ import {
   impactPoint,
   muzzlePoint,
   projectileGlowFalloff,
+  projectileGlowRadius,
   SHOT_GLOW_LIGHTS,
   SHOT_GLOW_OPACITY,
   SHOT_GLOW_PEAK,
   SHOT_GLOW_RANGE,
+  SHOT_GLOW_RADIUS,
   TURRET_RECOIL_DURATION,
   TURRET_RECOIL_KICK,
   wreckPopVelocity,
@@ -1751,6 +1753,46 @@ describe("CombatFx projectile glow", () => {
     for (let i = fx.shotGlowCount; i < SHOT_GLOW_LIGHTS; i++) {
       expect(fx.shotGlowIntensityAt(i)).toBe(0);
       expect(fx.shotGlowOpacityAt(i)).toBe(0);
+    }
+    fx.dispose();
+  });
+
+  it("keeps the ground highlight small and subtle (radius + opacity caps)", () => {
+    // Regression: the in-flight ground blob used to stamp a radius-70 disc
+    // at 0.4 opacity — far wider than any scorch mark. It now stays under
+    // the smallest scorch radius and peaks faint.
+    expect(SHOT_GLOW_RADIUS).toBeLessThanOrEqual(34);
+    expect(SHOT_GLOW_OPACITY).toBeLessThanOrEqual(0.25);
+    // Pure radius math: full strength hits the cap, climbs shrink it, and
+    // out-of-range falloff clamps instead of collapsing the disc.
+    expect(projectileGlowRadius(1)).toBeCloseTo(SHOT_GLOW_RADIUS, 5);
+    expect(projectileGlowRadius(0)).toBeCloseTo(SHOT_GLOW_RADIUS * 0.6, 5);
+    expect(projectileGlowRadius(0.5)).toBeCloseTo(SHOT_GLOW_RADIUS * 0.8, 5);
+    expect(projectileGlowRadius(-2)).toBeCloseTo(projectileGlowRadius(0), 5);
+    expect(projectileGlowRadius(9)).toBeCloseTo(projectileGlowRadius(1), 5);
+    let prev = -Infinity;
+    for (let f = 0; f <= 1.001; f += 0.1) {
+      const r = projectileGlowRadius(f);
+      expect(r).toBeGreaterThanOrEqual(prev);
+      prev = r;
+    }
+  });
+
+  it("seats small faint ground blobs under live rounds", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    stepToShot(fx);
+    expect(fx.shotGlowCount).toBeGreaterThan(0);
+    const blobs = glowBlobs(scene);
+    const live = blobs.filter((b) => b.visible);
+    expect(live.length).toBe(fx.shotGlowCount);
+    for (const blob of live) {
+      // Seated on the dirt, scaled to the subtle highlight — never the old
+      // oversized stamp.
+      expect(blob.position.y).toBeCloseTo(100 + 1.4, 5);
+      expect(blob.scale.x).toBeGreaterThan(0);
+      expect(blob.scale.x).toBeLessThanOrEqual(SHOT_GLOW_RADIUS + 1e-6);
     }
     fx.dispose();
   });
