@@ -25,9 +25,14 @@ const FEATURE_TABLE: FeatureRecord[] = [
 
 const VARIANTS_PER_KIND = 6;
 
+/** Attribute-grid width in 16-pixel cells (world extent 319 × 16 = 5104 units). */
+export const MAP_WIDTH = 320;
+/** Attribute-grid height in 16-pixel cells (world extent 255 × 16 = 4080 units). */
+export const MAP_HEIGHT = 256;
+
 export function generateMap(preset: MapPreset, seed: number): TNTMap {
-  const width = 160;
-  const height = 128;
+  const width = MAP_WIDTH;
+  const height = MAP_HEIGHT;
   const seaLevel = preset === "highpass" ? 0 : 75;
   const heights = new Uint8Array(width * height);
   const features = new Uint16Array(width * height);

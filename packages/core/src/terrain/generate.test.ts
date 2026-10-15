@@ -3,26 +3,34 @@ import {
   featureName,
   generateMap,
   heightAt,
+  MAP_HEIGHT,
+  MAP_WIDTH,
   worldSize,
 } from "./generate.js";
 import { FEATURE_EMPTY, TNT_VERSION } from "./types.js";
 
 /** Guards the terrain pipeline after the move into @scorched-3d/core. */
 describe("generateMap", () => {
-  it("builds the 160x128 attribute grid for every preset", () => {
+  it("builds the 320x256 attribute grid for every preset", () => {
     for (const preset of ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const) {
       const map = generateMap(preset, 0xa11ce);
-      expect(map.width).toBe(160);
-      expect(map.height).toBe(128);
+      expect(map.width).toBe(MAP_WIDTH);
+      expect(map.height).toBe(MAP_HEIGHT);
       expect(map.version).toBe(TNT_VERSION);
-      expect(map.heights).toHaveLength(160 * 128);
-      expect(map.features).toHaveLength(160 * 128);
-      expect(map.tileMap).toHaveLength(80 * 64);
+      expect(map.heights).toHaveLength(MAP_WIDTH * MAP_HEIGHT);
+      expect(map.features).toHaveLength(MAP_WIDTH * MAP_HEIGHT);
+      expect(map.tileMap).toHaveLength((MAP_WIDTH / 2) * (MAP_HEIGHT / 2));
       expect(map.tiles.length).toBeGreaterThan(0);
       expect(map.minimap.width).toBe(252);
       expect(map.minimap.height).toBe(252);
       expect(map.minimap.pixels).toHaveLength(252 * 252);
     }
+  });
+
+  it("spans double the classic world extent", () => {
+    const map = generateMap("greenreach", 0xa11ce);
+    // 2x the classic 160x128 grid: (320-1)*16 by (256-1)*16 world units.
+    expect(worldSize(map)).toEqual({ worldW: 5104, worldD: 4080 });
   });
 
   it("is deterministic for the same preset and seed", () => {

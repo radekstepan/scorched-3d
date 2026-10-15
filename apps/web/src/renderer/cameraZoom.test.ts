@@ -242,4 +242,10 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     // tick must re-clamp it to the map after controls.update().
     expect(canvasSource).toContain("clampPanTarget(controls.target");
   });
+
+  it("scales the orbit ceiling to the doubled map", () => {
+    // 320x256 cells ≈ 5104 world units wide: the zoom-out ceiling sits at
+    // twice the classic 4200 so the whole battlefield stays frameable.
+    expect(canvasSource).toMatch(/controls\.maxDistance\s*=\s*8400/);
+  });
 });

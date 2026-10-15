@@ -35,8 +35,8 @@ export interface CameraPose {
 export const START_BEYOND_EDGE = 350;
 /**
  * Camera height above the start anchor's ground, as a fraction of the larger
- * map dimension. For the standard 160x128 map (2544 world units wide) this is
- * ~636, matching the previous hard-coded eye height.
+ * map dimension. For the standard 320x256 map (5104 world units wide) this is
+ * ~1276, matching twice the previous hard-coded eye height.
  */
 export const START_HEIGHT_FACTOR = 0.25;
 /** World units per attribute cell (matches core CELL_PIXELS; kept local). */

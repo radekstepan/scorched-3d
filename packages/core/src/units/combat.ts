@@ -93,8 +93,8 @@ export function clampElevation(elevation: number): number {
  * test, spec 06 §3.3): bolts fly straight, shells are ballistically
  * solvable far — but doctrine caps both well below the physical limits so
  * guns hold fire across the map instead of lobbing the enemy HQ from their
- * own half. The caps sit under half a battle-map width (160 cells × 16 =
- * 2560): only attackers that push deep into the far half can shell its HQ.
+ * own half. The caps sit well under half a battle-map width (320 cells × 16 =
+ * 5120): only attackers that push deep into the far half can shell its HQ.
  */
 export const WEAPON_MAX_RANGE: Record<UnitKind, number> = {
   flash: 900,

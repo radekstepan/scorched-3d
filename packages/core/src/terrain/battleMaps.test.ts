@@ -67,8 +67,12 @@ describe("battle maps", () => {
     let walkable = 0;
     let water = 0;
     let total = 0;
-    for (let z = 8; z < map.height - 8; z++) {
-      for (let x = 8; x < map.width - 8; x++) {
+    // Proportional insets (same normalized survey window at any grid size)
+    // so the edge-sea ring outside the playable interior never leaks in.
+    const mx = Math.round(map.width * 0.05);
+    const mz = Math.round(map.height * 0.0625);
+    for (let z = mz; z < map.height - mz; z++) {
+      for (let x = mx; x < map.width - mx; x++) {
         total++;
         const h = map.heights[z * map.width + x] ?? 0;
         if (h <= map.seaLevel) water++;

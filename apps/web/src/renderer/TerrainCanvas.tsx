@@ -149,7 +149,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.dampingFactor = 0.06;
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.minDistance = 80;
-    controls.maxDistance = 4200;
+    controls.maxDistance = 8400;
     controls.panSpeed = clampPanSpeed(options.panSpeed);
     controls.zoomSpeed = clampZoomSpeed(options.zoomSpeed);
     // Cursor-anchored zoom: wheel/pinch dolly toward the ground point under
@@ -161,8 +161,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.target.set(startPose.target.x, startPose.target.y, startPose.target.z);
 
     const fogColor = new THREE.Color(0x8eb4c8);
-    const fogNear = 1800;
-    const fogFar = 6200;
+    const fogNear = 3600;
+    const fogFar = 12400;
 
     const albedoData = composeAlbedo(map);
     const heightData = composeHeight(map);
@@ -213,7 +213,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       transparent: true,
       depthWrite: false,
     });
-    const waterGeo = new THREE.PlaneGeometry(worldW, worldD, 96, 72);
+    const waterGeo = new THREE.PlaneGeometry(worldW, worldD, 192, 144);
     waterGeo.rotateX(-Math.PI / 2);
     const water = new THREE.Mesh(waterGeo, waterMat);
     water.position.y = map.seaLevel * options.exaggeration + 0.6;
