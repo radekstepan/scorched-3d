@@ -46,6 +46,7 @@ import {
   writeTreePose,
 } from "./features";
 import { UnitMovement } from "./movement";
+import { WaypointFx } from "./waypoints";
 import {
   PAN_SPEED_FACTOR,
   applyPan,
@@ -293,7 +294,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // hulls so the kick restore never snaps a driving unit backward. Hulls
     // crush through standing trees at a crawl (felling them into the
     // decaying `fallen` set) instead of pinning on wood.
-    const movement = new UnitMovement(units, planRoutes(map, map.units, map.seed), {
+    const routes = planRoutes(map, map.units, map.seed);
+    const movement = new UnitMovement(units, routes, {
       groundY,
       seat,
       onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
@@ -308,6 +310,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       },
     });
     combat.setExternalHull(true);
+    // Waypoint overlay (View menu): static patrol loops per regen plus the
+    // live remaining order path per unit, re-seated with the terrain.
+    const waypoints = new WaypointFx(scene, routes, { groundY });
+    waypoints.setVisible(optsRef.current.showWaypoints);
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
     // spinning/bobbing chevron beacon above the hull, with a subtle hull
@@ -620,6 +626,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         combat.clearTransients();
         fire.clearTransients();
         movement.resnap();
+        waypoints.resnap();
         combat.reseatScorch();
       }
 
@@ -652,6 +659,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       controls.update();
 
       movement.update(dt);
+      waypoints.setVisible(opt.showWaypoints);
+      waypoints.update(movement, units.children.length);
       combat.update(dt);
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
@@ -726,6 +735,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       cancelAnimationFrame(raf);
       ro.disconnect();
       movement.dispose();
+      waypoints.dispose();
       combat.dispose();
       fire.dispose();
       selectionRef.current?.([]);

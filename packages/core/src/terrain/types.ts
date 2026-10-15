@@ -106,4 +106,6 @@ export interface ViewOptions {
   showWire: boolean;
   showContours: boolean;
   pixelFilter: boolean;
+  /** Overlay each unit's patrol loop + live move-order path. */
+  showWaypoints: boolean;
 }
