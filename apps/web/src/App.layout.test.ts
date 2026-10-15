@@ -54,3 +54,19 @@ describe("right-rail clearance over header diagnostics", () => {
     }
   });
 });
+
+describe("Units panel roster without patrol status text", () => {
+  it("drops the Patrolling TA status line", () => {
+    expect(source).not.toContain("Patrolling");
+    expect(source).not.toContain("re-routed on every regen");
+  });
+
+  it("still lists per-kind unit entries with selection + minimap dots", () => {
+    expect(source).toContain("<Label>Units</Label>");
+    expect(source).toContain("UNIT_KINDS.map");
+    expect(source).toContain("def.unitName");
+    expect(source).toContain("liveUnits.map");
+    expect(source).toContain("selected.includes");
+    expect(source).toContain("MINIMAP_SELECTED_OUTLINE");
+  });
+});
