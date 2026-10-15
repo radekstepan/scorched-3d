@@ -4,16 +4,20 @@ import {
   DEFAULT_ZOOM_SPEED,
   MAX_ZOOM_DISTANCE,
   MIN_ZOOM_DISTANCE,
+  PAN_BASE_SPEED,
   PAN_EDGE_MARGIN,
   PAN_SPEED_FACTOR,
   PAN_SPEED_MAX,
   PAN_SPEED_MIN,
+  ZOOM_BASE_SPEED,
   ZOOM_SPEED_MAX,
   ZOOM_SPEED_MIN,
   applyPan,
   clampPanSpeed,
   clampPanTarget,
   clampZoomSpeed,
+  effectivePanSpeed,
+  effectiveZoomSpeed,
   isPanKey,
   panInputFromCodes,
   panOffset,
@@ -160,24 +164,33 @@ describe("shouldIgnoreKeyEvent", () => {
 });
 
 describe("camera speed sliders", () => {
-  it("exposes a sane 0.2x–3x slider range around the defaults (pan 3x, zoom 2x)", () => {
-    expect(DEFAULT_PAN_SPEED).toBe(3);
-    expect(DEFAULT_ZOOM_SPEED).toBe(2);
+  it("defaults both sliders to 1x inside the 0.2x–3x range", () => {
+    expect(DEFAULT_PAN_SPEED).toBe(1);
+    expect(DEFAULT_ZOOM_SPEED).toBe(1);
     expect(PAN_SPEED_MIN).toBe(0.2);
     expect(PAN_SPEED_MAX).toBe(3);
     expect(ZOOM_SPEED_MIN).toBe(0.2);
     expect(ZOOM_SPEED_MAX).toBe(3);
   });
 
+  it("carries the absolute feel in base speeds (pan 3x, zoom 4x)", () => {
+    // Pan 1x preserves the old 3x default; zoom 1x doubles the old 2x
+    // default, so the slider reads 1x while zooming 2x faster than before.
+    expect(PAN_BASE_SPEED).toBe(3);
+    expect(ZOOM_BASE_SPEED).toBe(4);
+    expect(effectivePanSpeed(DEFAULT_PAN_SPEED)).toBe(3);
+    expect(effectiveZoomSpeed(DEFAULT_ZOOM_SPEED)).toBe(4);
+  });
+
   it("clamps pan speed into range", () => {
-    expect(clampPanSpeed(3)).toBe(3);
+    expect(clampPanSpeed(1)).toBe(1);
     expect(clampPanSpeed(0.2)).toBe(0.2);
     expect(clampPanSpeed(3)).toBe(3);
     expect(clampPanSpeed(-5)).toBe(PAN_SPEED_MIN);
     expect(clampPanSpeed(99)).toBe(PAN_SPEED_MAX);
   });
 
-  it("clamps zoom speed into range around the 2x default", () => {
+  it("clamps zoom speed into range around the 1x default", () => {
     expect(clampZoomSpeed(2)).toBe(2);
     expect(clampZoomSpeed(1)).toBe(1);
     expect(clampZoomSpeed(-5)).toBe(ZOOM_SPEED_MIN);
@@ -189,23 +202,35 @@ describe("camera speed sliders", () => {
     expect(clampPanSpeed(Infinity)).toBe(DEFAULT_PAN_SPEED);
     expect(clampZoomSpeed(NaN)).toBe(DEFAULT_ZOOM_SPEED);
     expect(clampZoomSpeed(-Infinity)).toBe(DEFAULT_ZOOM_SPEED);
-    expect(DEFAULT_ZOOM_SPEED).toBe(2);
+    expect(DEFAULT_ZOOM_SPEED).toBe(1);
+  });
+
+  it("scales effective speeds linearly with the slider after clamping", () => {
+    expect(effectivePanSpeed(2)).toBeCloseTo(effectivePanSpeed(1) * 2, 10);
+    expect(effectivePanSpeed(0.5)).toBeCloseTo(effectivePanSpeed(1) * 0.5, 10);
+    expect(effectiveZoomSpeed(2)).toBeCloseTo(effectiveZoomSpeed(1) * 2, 10);
+    expect(effectiveZoomSpeed(0.5)).toBeCloseTo(effectiveZoomSpeed(1) * 0.5, 10);
+    expect(effectivePanSpeed(99)).toBe(PAN_SPEED_MAX * PAN_BASE_SPEED);
+    expect(effectivePanSpeed(-1)).toBe(PAN_SPEED_MIN * PAN_BASE_SPEED);
+    expect(effectiveZoomSpeed(99)).toBe(ZOOM_SPEED_MAX * ZOOM_BASE_SPEED);
+    expect(effectiveZoomSpeed(-1)).toBe(ZOOM_SPEED_MIN * ZOOM_BASE_SPEED);
+    expect(effectivePanSpeed(NaN)).toBe(DEFAULT_PAN_SPEED * PAN_BASE_SPEED);
+    expect(effectiveZoomSpeed(NaN)).toBe(DEFAULT_ZOOM_SPEED * ZOOM_BASE_SPEED);
   });
 
   it("scales the keyboard pan step linearly with the speed multiplier", () => {
     const base = panStepDistance(1000, 0.016, 1);
-    expect(base).toBeCloseTo(1000 * PAN_SPEED_FACTOR * 0.016, 10);
+    expect(base).toBeCloseTo(1000 * PAN_SPEED_FACTOR * PAN_BASE_SPEED * 0.016, 10);
     expect(panStepDistance(1000, 0.016, 2)).toBeCloseTo(base * 2, 10);
     expect(panStepDistance(1000, 0.016, 0.5)).toBeCloseTo(base * 0.5, 10);
   });
 
-  it("ships a 3x default pan step versus the old 1x feel", () => {
-    // The default multiplier tripled (1 → 3); the base factor is untouched
-    // so the whole gain comes from the default sitting at the slider max.
-    expect(DEFAULT_PAN_SPEED).toBe(3);
+  it("keeps the old 3x pan feel at the new 1x default", () => {
+    // The base factor is untouched; the whole 3x lives in PAN_BASE_SPEED
+    // so keyboard and right-drag panning scale together exactly as before.
+    expect(DEFAULT_PAN_SPEED).toBe(1);
     expect(PAN_SPEED_FACTOR).toBe(1.2);
-    const oldFeel = panStepDistance(1000, 0.016, 1);
-    expect(panStepDistance(1000, 0.016, DEFAULT_PAN_SPEED)).toBeCloseTo(oldFeel * 3, 10);
+    expect(panStepDistance(1000, 0.016, DEFAULT_PAN_SPEED)).toBeCloseTo(1000 * 1.2 * 3 * 0.016, 10);
   });
 
   it("clamps out-of-range speeds before stepping", () => {

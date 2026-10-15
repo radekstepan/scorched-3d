@@ -52,8 +52,8 @@ export default function App() {
     pixelFilter: true,
     showWaypoints: false,
     showHealth: true,
-    panSpeed: 3,
-    zoomSpeed: 2,
+    panSpeed: 1,
+    zoomSpeed: 1,
   });
 
   // Cache selection-tray thumbnails on load (one idle-chunked 3D render

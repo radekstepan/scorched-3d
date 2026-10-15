@@ -61,9 +61,9 @@ import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
 import {
   applyPan,
-  clampPanSpeed,
   clampPanTarget,
-  clampZoomSpeed,
+  effectivePanSpeed,
+  effectiveZoomSpeed,
   isPanKey,
   MAX_ZOOM_DISTANCE,
   MIN_ZOOM_DISTANCE,
@@ -162,8 +162,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.minDistance = MIN_ZOOM_DISTANCE;
     controls.maxDistance = MAX_ZOOM_DISTANCE;
-    controls.panSpeed = clampPanSpeed(options.panSpeed);
-    controls.zoomSpeed = clampZoomSpeed(options.zoomSpeed);
+    controls.panSpeed = effectivePanSpeed(options.panSpeed);
+    controls.zoomSpeed = effectiveZoomSpeed(options.zoomSpeed);
     // Cursor-anchored zoom: wheel/pinch dolly toward the ground point under
     // the cursor instead of the screen center, so zooming feels like leaning
     // into the spot being looked at. Stock OrbitControls behavior otherwise
@@ -923,11 +923,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
       // View-menu sliders: OrbitControls reads panSpeed/zoomSpeed live, so
       // re-sync every tick (options arrive via ref, not effect re-runs).
-      if (controls.panSpeed !== clampPanSpeed(opt.panSpeed)) {
-        controls.panSpeed = clampPanSpeed(opt.panSpeed);
+      if (controls.panSpeed !== effectivePanSpeed(opt.panSpeed)) {
+        controls.panSpeed = effectivePanSpeed(opt.panSpeed);
       }
-      if (controls.zoomSpeed !== clampZoomSpeed(opt.zoomSpeed)) {
-        controls.zoomSpeed = clampZoomSpeed(opt.zoomSpeed);
+      if (controls.zoomSpeed !== effectiveZoomSpeed(opt.zoomSpeed)) {
+        controls.zoomSpeed = effectiveZoomSpeed(opt.zoomSpeed);
       }
 
       // Minimap click-to-move: translate target + camera by the same

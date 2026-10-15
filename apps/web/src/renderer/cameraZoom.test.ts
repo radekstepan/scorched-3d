@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE } from "./cameraPan";
+import { DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, effectiveZoomSpeed } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -184,18 +184,22 @@ describe("cursor-anchored wheel zoom", () => {
     expect(before!.distanceTo(after!)).toBeGreaterThan(10);
   });
 
-  it("ships a 2x default zoom speed within the 0.2x–3x slider range", () => {
-    expect(DEFAULT_ZOOM_SPEED).toBe(2);
-    expect(DEFAULT_ZOOM_SPEED).toBeGreaterThan(0.2);
+  it("defaults the zoom slider to 1x with a 4x absolute speed", () => {
+    // 1x on the slider reads as 4x stock OrbitControls speed: twice the
+    // old 2x default, inside the unchanged 0.2x–3x slider range.
+    expect(DEFAULT_ZOOM_SPEED).toBe(1);
+    expect(ZOOM_BASE_SPEED).toBe(4);
+    expect(effectiveZoomSpeed(DEFAULT_ZOOM_SPEED)).toBe(4);
+    expect(DEFAULT_ZOOM_SPEED).toBeGreaterThanOrEqual(0.2);
     expect(DEFAULT_ZOOM_SPEED).toBeLessThanOrEqual(3);
   });
 
-  it("dollies roughly twice as far per wheel tick at 2x than at 1x", () => {
+  it("dollies roughly twice as far per wheel tick at the new default than at the old 2x", () => {
     const startDist = (rig: ZoomRig): number => distanceOf(rig.camera, rig.controls.target);
     const slow = makeRig(true);
-    slow.controls.zoomSpeed = 1;
+    slow.controls.zoomSpeed = 2;
     const fast = makeRig(true);
-    fast.controls.zoomSpeed = DEFAULT_ZOOM_SPEED;
+    fast.controls.zoomSpeed = effectiveZoomSpeed(DEFAULT_ZOOM_SPEED);
     const d0 = startDist(slow);
     expect(startDist(fast)).toBeCloseTo(d0, 6);
     slow.fireWheel(CX, CY, -120);

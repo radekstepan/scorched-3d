@@ -21,9 +21,17 @@ export interface PanInput {
 /** World units the target travels per second, relative to camera distance. */
 export const PAN_SPEED_FACTOR = 1.2;
 
-/** Default orbit multipliers (pan ships at 3x; zoom ships at 2x). */
-export const DEFAULT_PAN_SPEED = 3;
-export const DEFAULT_ZOOM_SPEED = 2;
+/** Default slider positions: both ship at 1x — the base speeds below carry
+ * the absolute feel, so the View-menu readouts open at 1.0x. */
+export const DEFAULT_PAN_SPEED = 1;
+export const DEFAULT_ZOOM_SPEED = 1;
+
+/** Absolute speeds behind slider 1x (OrbitControls units for the drag /
+ * wheel paths, multiplier on PAN_SPEED_FACTOR for keyboard panning).
+ * Pan preserves the task-88 3x default feel; zoom doubles the task-87 2x
+ * default, so 1x on the slider is 2x faster than the old zoom default. */
+export const PAN_BASE_SPEED = 3;
+export const ZOOM_BASE_SPEED = 4;
 
 /** Slider bounds for the View-menu pan/zoom speed controls. */
 export const PAN_SPEED_MIN = 0.2;
@@ -172,9 +180,27 @@ export function clampZoomSpeed(value: number): number {
 }
 
 /**
+ * Absolute OrbitControls pan speed for a slider position: the clamped
+ * slider value scaled by PAN_BASE_SPEED, so 1x reads as the old 3x default.
+ */
+export function effectivePanSpeed(value: number): number {
+  return clampPanSpeed(value) * PAN_BASE_SPEED;
+}
+
+/**
+ * Absolute OrbitControls zoom speed for a slider position: the clamped
+ * slider value scaled by ZOOM_BASE_SPEED, so 1x reads as 4x stock speed —
+ * twice the old 2x default.
+ */
+export function effectiveZoomSpeed(value: number): number {
+  return clampZoomSpeed(value) * ZOOM_BASE_SPEED;
+}
+
+/**
  * Frame step for keyboard panning: zoom-proportional, frame-rate
- * independent, and scaled by the View-menu pan-speed multiplier.
+ * independent, and scaled by the View-menu pan-speed slider through
+ * effectivePanSpeed (1x = the old 3x default feel).
  */
 export function panStepDistance(distance: number, dt: number, speed: number): number {
-  return distance * PAN_SPEED_FACTOR * clampPanSpeed(speed) * dt;
+  return distance * PAN_SPEED_FACTOR * effectivePanSpeed(speed) * dt;
 }
