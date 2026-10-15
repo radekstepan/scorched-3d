@@ -692,3 +692,50 @@ describe("trunk keepout in pathing", () => {
     }
   });
 });
+
+describe("forest through-vs-around choice", () => {
+  /** Grid with a tree stand over columns x0–x1 and rows z0–z1. */
+  function forestGrid(x0: number, x1: number, z0: number, z1: number): PathGrid {
+    const w = 24;
+    const h = 12;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) features[z * w + x] = 0;
+    }
+    return { width: w, height: h, heights, seaLevel: 50, features };
+  }
+
+  function treeCells(grid: PathGrid, path: { cellX: number; cellZ: number }[]): number {
+    return path.filter((c) => isTreeCell(grid, c.cellX, c.cellZ)).length;
+  }
+
+  it("crushes through a narrow thicket when both flanks are longer", () => {
+    // A 2-wide × 10-deep stand astride the lane: slipping around either end
+    // costs ~8 extra cells of open running, while crushing the two lane
+    // cells pays the wood price twice — so the lane through wins overall
+    // and the search takes it instead of wandering to the far end.
+    const grid = forestGrid(11, 12, 1, 10);
+    const start = { cellX: 2, cellZ: 5 };
+    const goal = { cellX: 21, cellZ: 5 };
+    const path = findCellPath(grid, start, goal)!;
+    expect(path).not.toBeNull();
+    for (const c of path) expect(isWalkable(grid, c.cellX, c.cellZ)).toBe(true);
+    expect(treeCells(grid, path)).toBeGreaterThan(0);
+    expect(findCellPath(grid, start, goal)).toEqual(path);
+  });
+
+  it("ploughs through only when the forest spans the lane", () => {
+    // No flank exists: every lane row is wood, so the cheapest route crushes
+    // a lane straight through — arriving slowly still beats never arriving,
+    // and the drive fells the lane it takes (see `movement.ts` crush).
+    const grid = forestGrid(8, 15, 0, 11);
+    const start = { cellX: 2, cellZ: 5 };
+    const goal = { cellX: 21, cellZ: 5 };
+    const path = findCellPath(grid, start, goal)!;
+    expect(path).not.toBeNull();
+    for (const c of path) expect(isWalkable(grid, c.cellX, c.cellZ)).toBe(true);
+    expect(treeCells(grid, path)).toBeGreaterThan(0);
+    expect(findCellPath(grid, start, goal)).toEqual(path);
+  });
+});

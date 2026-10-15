@@ -752,6 +752,25 @@ export function rollTreeStick(
 }
 
 /**
+ * Probability a flight crossing `crossedCount` standing trees gets stuck /
+ * detonates early instead of reaching its aimed impact: `1 − (1−p)ⁿ` over
+ * the per-kind stick chance. The per-tree rolls in `rollTreeStick` are what
+ * the guns actually pay; this closed form is the quotable number for
+ * firing-lane and advance decisions — e.g. a bolt crossing 3 crowns sticks
+ * with ~0.91 probability, which is why closing through a forest reads as
+ * "harder for projectiles to get through" and going around the wood is
+ * usually the better path even before drive time is counted. Pure;
+ * non-positive counts read as open ground (0).
+ */
+export function flightStickChance(crossedCount: number, kind: UnitKind): number {
+  const chance = treeStickChance(kind);
+  const n = Math.floor(crossedCount);
+  if (!(n > 0) || !(chance > 0)) return 0;
+  if (chance >= 1) return 1;
+  return 1 - Math.pow(1 - chance, n);
+}
+
+/**
  * Terrain collision for projectiles (flat tracers + ballistic shells).
  * Shots previously flew their analytic arc straight to the aimed impact and
  * only ever checked trees mid-flight, so any ridge between the muzzle and

@@ -13,6 +13,7 @@ import {
   ELEVATION_MIN,
   flightClearsTerrain,
   flightClearsTrees,
+  flightStickChance,
   flightTerrainHit,
   FLIGHT_MAX_TIME,
   flightDuration,
@@ -462,6 +463,33 @@ describe("tree interception", () => {
     expect(rollTreeStick([], "flash", rng)).toBe(-1);
     // A roll above the chance flies on through every tree.
     expect(rollTreeStick([1, 2], "flash", () => 0.999)).toBe(-1);
+  });
+
+  it("quotes the whole-flight stick chance as 1-(1-p)^n", () => {
+    // Open ground never sticks, whatever the gun.
+    expect(flightStickChance(0, "flash")).toBe(0);
+    expect(flightStickChance(0, "hammer")).toBe(0);
+    expect(flightStickChance(-3, "flash")).toBe(0);
+    // One tree reads the per-kind chance exactly.
+    expect(flightStickChance(1, "flash")).toBeCloseTo(treeStickChance("flash"), 12);
+    expect(flightStickChance(1, "hammer")).toBeCloseTo(treeStickChance("hammer"), 12);
+    // Closed form over three crowns: bolts strand far more often than lobbed
+    // shells (0.55 vs 0.35 per tree), which is the number that makes forests
+    // read as projectile cover for firing-lane decisions.
+    expect(flightStickChance(3, "flash")).toBeCloseTo(1 - Math.pow(0.45, 3), 12);
+    expect(flightStickChance(3, "hammer")).toBeCloseTo(1 - Math.pow(0.65, 3), 12);
+    expect(flightStickChance(3, "flash")).toBeGreaterThan(flightStickChance(3, "hammer"));
+    // Monotonic in cover: more wood between muzzle and mark always sticks
+    // more rounds, saturating toward (never past) certainty.
+    let prev = flightStickChance(1, "flash");
+    for (let n = 2; n <= 10; n++) {
+      const next = flightStickChance(n, "flash");
+      expect(next).toBeGreaterThan(prev);
+      expect(next).toBeLessThanOrEqual(1);
+      prev = next;
+    }
+    // Pure: same query, same answer (no rng inside).
+    expect(flightStickChance(4, "stump")).toBe(flightStickChance(4, "stump"));
   });
 });
 

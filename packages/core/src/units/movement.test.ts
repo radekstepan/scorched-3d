@@ -878,6 +878,45 @@ describe("rough-terrain drag", () => {
     expect(felled.length).toBeLessThan(10);
   });
 
+  it("drives a pathfound order through a spanning forest, felling its lane", () => {
+    // No flank anywhere: the search can only route through the wood, and the
+    // hull crushes the lane it takes — arriving late (canopy drag plus the
+    // fell-on-contact crawl), but arriving, with the lane felled behind it.
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    const points: { x: number; z: number }[] = [];
+    for (let cz = 0; cz < h; cz++) {
+      for (let cx = 5; cx < w - 5; cx++) {
+        features[cz * w + cx] = 0;
+        points.push({
+          x: (cx - (w - 1) / 2) * CELL_PIXELS,
+          z: (cz - (h - 1) / 2) * CELL_PIXELS,
+        });
+      }
+    }
+    const field: SeatField = { width: w, height: h, heights, seaLevel: 0, features };
+    const z = (11 - (h - 1) / 2) * CELL_PIXELS;
+    const from = { x: worldX(field, 2), z };
+    const to = { x: worldX(field, 37), z };
+    const path = findWorldPath(field, from, to);
+    expect(path.length).toBeGreaterThan(0);
+    expect(findWorldPath(field, from, to)).toEqual(path);
+    const damage = createDamageField(points.length, 0);
+    const felled: number[] = [];
+    const crush: CrushContext = { field: damage, points, onCrush: (f) => felled.push(...f) };
+    let mover: Mover = { x: from.x, z: from.z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, path);
+    let ticks = 0;
+    while (hasOrder(mover) && ticks < 12000) {
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field, crush);
+      ticks++;
+    }
+    expect(hasOrder(mover)).toBe(false);
+    expect(felled.length).toBeGreaterThan(0);
+  });
+
   it("crushes out a spawn parked on a trunk instead of grinding", () => {
     // An isolated trunk under the spawn (relaxed placement permits it):
     // the hull simply drives out, felling the trunk beneath it — no
