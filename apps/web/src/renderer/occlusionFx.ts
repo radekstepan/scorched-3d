@@ -274,7 +274,7 @@ function cloneSilhouette(
 
 export class OcclusionFx {
   private scene: THREE.Scene;
-  private kinds: readonly UnitKind[];
+  private kinds: readonly UnitKind[] = [];
   private ghosts: THREE.Group[] = [];
   private pairs: PosePair[][] = [];
   private edgeGeos: THREE.BufferGeometry[][] = [];
@@ -284,11 +284,19 @@ export class OcclusionFx {
 
   constructor(scene: THREE.Scene, kinds: readonly UnitKind[]) {
     this.scene = scene;
-    this.kinds = kinds;
     this.group.name = "occlusion-ghosts";
     this.scene.add(this.group);
-    kinds.forEach((kind) => {
-      void kind;
+    this.setKinds(kinds);
+  }
+
+  /**
+   * Grow the ghost roster for reinforcements (regen never shrinks — a fresh
+   * instance is built per map). Existing ghosts are untouched, so mid-battle
+   * growth never rebuilds live mirrors.
+   */
+  setKinds(kinds: readonly UnitKind[]): void {
+    this.kinds = kinds;
+    for (let i = this.ghosts.length; i < kinds.length; i++) {
       const ghost = new THREE.Group();
       ghost.name = "occlusion-ghost";
       ghost.visible = false;
@@ -299,7 +307,7 @@ export class OcclusionFx {
       this.pairs.push([]);
       this.edgeGeos.push([]);
       this.childCounts.push(-1);
-    });
+    }
   }
 
   /** Ghost count (one per roster unit). */

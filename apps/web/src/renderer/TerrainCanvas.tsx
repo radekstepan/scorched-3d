@@ -14,15 +14,19 @@ import {
   composeAlbedo,
   composeHeight,
   featureName,
+  hqAnchor,
   igniteTree,
   planRoutes,
+  placeHqs,
   sampleHeightBilinear,
   seatHull,
+  THREAT_ENGAGE_RADIUS,
   tickDamage,
   worldSize,
   type BlastSlope,
   type Crater,
   type HoverInfo,
+  type PlacedUnit,
   type TNTMap,
   type TreeStand,
   type UnitKind,
@@ -36,8 +40,9 @@ import {
   waterFragment,
   waterVertex,
 } from "./shaders";
-import { buildUnits } from "./units";
+import { buildUnits, buildSpawnedUnit } from "./units";
 import { CombatFx } from "./combatFx";
+import { HqFx, type HqStatus } from "./hqFx";
 import { applyCraters } from "./craters";
 import { FireFx } from "./fireFx";
 import {
@@ -94,19 +99,23 @@ interface Props {
   onSelection?: (indices: number[]) => void;
   /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay. */
   onPositions?: (positions: { x: number; z: number; alive: boolean }[]) => void;
+  /** Live HQ status broadcast (~4 Hz) for minimap markers + Units box. */
+  onHq?: (hqs: HqStatus[]) => void;
 }
 
-export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
   const hoverRef = useRef(onHover);
   const selectionRef = useRef(onSelection);
   const positionsRef = useRef(onPositions);
+  const hqRef = useRef(onHq);
   optsRef.current = options;
   hoverRef.current = onHover;
   selectionRef.current = onSelection;
   positionsRef.current = onPositions;
+  hqRef.current = onHq;
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -334,6 +343,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const dirtyStands = (): void => {
       standsCache = null;
     };
+    // HQ structures (assigned below, after movement exists): ambient guns
+    // shell live enemy HQs inside admitted range, and every blast splashes
+    // them through the HQ damage state. Guarded — combat ticks before the
+    // assignment only on regen teardown, never with live shots.
+    let hq: HqFx | null = null;
     const combat = new CombatFx(scene, units, Math.random, {
       groundY,
       slopeAt: (x, z) => blastSlopeAt(map, x, z),
@@ -362,6 +376,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           dirtyStands();
         }
       },
+      // Structure fire: live enemy HQs draw aimed volleys inside admitted
+      // range (range caps keep cross-map lobs impossible), and every blast
+      // — aimed or collateral — splashes them through the HQ damage state.
+      hqTargets: () => hq?.targets() ?? [],
+      damageStructures: (at, kind, shooter) => {
+        hq?.splash(at.x, at.z, kind, shooter);
+      },
     });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets
@@ -386,6 +407,75 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       },
     });
     combat.setExternalHull(true);
+    // Team HQs: one fortified bunker per side at its map end (Blue west,
+    // Orange east, doors facing the map center). Each live HQ slides its
+    // door up every interval and releases a reinforcement from the hall
+    // mouth that drives out to join the hunt; enemy fire — aimed volleys
+    // inside admitted range plus honest splash from any nearby blast — can
+    // wreck the fort, which stops the clock and leaves a charred husk.
+    hq = new HqFx(
+      scene,
+      placeHqs(map, map.seed).map((site) => ({
+        ...hqAnchor(map, site, optsRef.current.exaggeration),
+        team: site.team,
+      })),
+      {
+        groundY,
+        onSpawn: (team, kind, x, z) => {
+          // New hull, same systems as the mustered roster: body + selection
+          // marker, placement entry (team/kind for targeting + HUD), mover
+          // on a short hall-to-staging patrol (the hunt sweep acquires
+          // enemies same-tick), and roster growth for bars/ghosts/trails.
+          const yaw = team === 0 ? Math.PI / 2 : -Math.PI / 2;
+          const body = buildSpawnedUnit(kind, team, x, z, yaw, groundY);
+          const marker = buildSelectionMarker();
+          updateSelectionMarker(marker, 0, false);
+          body.add(marker);
+          units.add(body);
+          const placed = units.userData.units as PlacedUnit[];
+          placed.push({
+            kind,
+            team,
+            cellX: Math.min(Math.max(Math.round(x / CELL_PIXELS + (map.width - 1) / 2), 0), map.width - 1),
+            cellZ: Math.min(Math.max(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0), map.height - 1),
+            rotation: yaw,
+          });
+          const staging = { x: x + (team === 0 ? 320 : -320), z };
+          movement.addUnit(x, z, yaw, [{ x, z }, staging], kind);
+          health.setCount(units.children.length);
+          occlusion.setKinds(placed.map((u) => u.kind));
+          waypoints.setRoutes(routes);
+        },
+        onKilled: (index) => {
+          // Epic burst at the fort through the shared stack (non-hostile, so
+          // survivors hesitate but blame nobody) — the wreck pose + clock
+          // stop already landed in the splash.
+          const p = hq?.positionAt(index);
+          if (p) combat.detonateStructure(new THREE.Vector3(p.x, p.y + 10, p.z), "hammer");
+        },
+        onDamaged: (index, shooter) => {
+          // The garrison rallies: live same-team hulls near the shelled fort
+          // are pointed at the shooter through the retaliation pipeline
+          // (ordered/holding hulls still refuse — player orders win).
+          if (shooter === null || shooter === undefined) return;
+          const fort = hq?.positionAt(index);
+          const spots = movement.positions();
+          const gun = spots[shooter];
+          if (!fort || !gun) return;
+          const placed = units.userData.units as PlacedUnit[];
+          const side = hq?.status()[index]?.team;
+          for (let i = 0; i < units.children.length; i++) {
+            if (placed[i]?.team !== side) continue;
+            if (combat.isDestroyedAt(i)) continue;
+            const s = spots[i];
+            if (!s) continue;
+            if (Math.hypot(s.x - fort.x, s.z - fort.z) <= THREAT_ENGAGE_RADIUS) {
+              movement.threatenUnit(i, shooter, gun.x, gun.z);
+            }
+          }
+        },
+      },
+    );
     // Fading track trails: driving hulls stamp a subtle compressed-dust
     // trace (per-kind tread width, capped pool, fading over seconds).
     // Renderer-side only — movers never see the marks.
@@ -741,6 +831,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         combat.clearTransients();
         fire.clearTransients();
         movement.resnap();
+        hq?.resnap();
         tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
@@ -794,6 +885,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       health.update(combat, units.children, camera);
       occlusion.update(camera.position, units.children, { groundY, stands: getStands() }, combat);
       combat.update(dt);
+      // HQ clocks, door slides, and releases run after combat so a kill and
+      // a due release on the same tick resolve the wreck first.
+      hq?.update(dt);
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
       // the transient flame/smoke views from the persistent field.
@@ -843,6 +937,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         positionsRef.current?.(
           movement.positions().map((p, i) => ({ ...p, alive: !combat.isDestroyedAt(i) })),
         );
+        hqRef.current?.(hq?.status() ?? []);
       }
 
       if (hovering) {
@@ -863,6 +958,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       cancelAnimationFrame(raf);
       ro.disconnect();
       movement.dispose();
+      hq?.dispose();
       tracks.dispose();
       waypoints.dispose();
       health.dispose();
@@ -872,6 +968,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       fire.dispose();
       selectionRef.current?.([]);
       positionsRef.current?.([]);
+      hqRef.current?.([]);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

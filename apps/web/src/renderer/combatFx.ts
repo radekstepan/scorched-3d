@@ -26,6 +26,7 @@ import {
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
   MAX_SHOTS,
+  maxRangeFor,
   muzzleForward,
   muzzleHeight,
   muzzleYaw,
@@ -270,6 +271,13 @@ const WRECK_POP_UP = 150;
 const WRECK_POP_OUT = 95;
 /** Turret tumble rate in flight, rad/s (frozen on landing). */
 const WRECK_TUMBLE = 5.2;
+/**
+ * Ambient structure-fire share: about one volley in four answers a live
+ * enemy HQ instead of a hull — enough that pushed-in guns visibly shell the
+ * fort, rare enough that hull duels still dominate. The exact muzzle range
+ * gate still runs, so only guns inside admitted range ever fire.
+ */
+export const HQ_TARGET_CHANCE = 0.25;
 /** Rest height of landed turret litter above the ground, world units. */
 const WRECK_DEBRIS_REST = 2;
 /** Breached turret-ring seat height per kind (matches the build poses). */
@@ -448,6 +456,25 @@ export interface CombatEnv {
    * letting the cannon clip through it). Absent, barrels never fell.
    */
   fellTree?: (fid: number) => void;
+  /**
+   * Live HQ structures for ambient structure fire, when the canvas fields
+   * HQs: guns deliberately shell a live enemy HQ once it is inside their
+   * admitted range (the range caps in core keep cross-map lobs impossible).
+   * Absent reads as no structures (legacy behavior: every round aims at a
+   * hull, and every blast splashes hulls only).
+   */
+  hqTargets?: () => { x: number; y: number; z: number; team: number }[];
+  /**
+   * A blast that also chips HQ structures at world (x, z): the canvas routes
+   * it into the HQ damage state (splash + wreck + defender rally). Absent,
+   * structures never take damage.
+   */
+  damageStructures?: (
+    at: { x: number; y: number; z: number },
+    kind: UnitKind,
+    shooter: number | null,
+    hostile: boolean,
+  ) => void;
 }
 
 export class CombatFx {
@@ -478,6 +505,8 @@ export class CombatFx {
   private aim: { hull: number; turret: number }[] = [];
   /** Attacker → target traverse goals, slewed every frame until aimed. */
   private pending = new Map<number, number>();
+  /** Attacker → HQ-team traverse goals for ambient structure fire. */
+  private pendingHq = new Map<number, number>();
   private boltGeo = new THREE.BoxGeometry(3, 3, 18);
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
@@ -891,6 +920,7 @@ export class CombatFx {
     }
     this.nudges.clear();
     this.pending.clear();
+    this.pendingHq.clear();
     for (const light of this.lights) light.intensity = 0;
     // In-flight glow goes dark with the shots (persistent scorch, kill
     // flags, and wreck dressing are untouched — glow is transient).
@@ -1353,6 +1383,19 @@ export class CombatFx {
     }
   }
 
+  /** Bearing from one unit body to a world point on the X/Z plane. */
+  private bearingToPoint(from: number, x: number, z: number): number | null {
+    const a = this.units.children[from] as THREE.Group | undefined;
+    if (!a) return null;
+    return yawToTarget({ x: a.position.x, z: a.position.z }, { x, z });
+  }
+
+  /** Live HQ aim point of a team, or null when it is wrecked/absent. */
+  private hqTargetOf(team: number): { x: number; y: number; z: number; team: number } | null {
+    const targets = this.env?.hqTargets?.() ?? [];
+    return targets.find((t) => t.team === team) ?? null;
+  }
+
   /** Bearing from one unit body to another on the X/Z plane. */
   private bearing(from: number, to: number): number | null {
     const a = this.units.children[from] as THREE.Group | undefined;
@@ -1366,7 +1409,8 @@ export class CombatFx {
    * rates and apply the pose. Hulls do the gross turn, turrets the clamped
    * refine — so traverse motion is visible even before any shot fires. In
    * external-hull mode (patrol movement) the hull stays on its travel
-   * heading and only the turret slews the clamped remainder.
+   * heading and only the turret slews the clamped remainder. Structure
+   * goals slew the same way, against the live HQ position by team.
    */
   private slewPending(dt: number): void {
     for (const [attacker, target] of this.pending) {
@@ -1379,6 +1423,32 @@ export class CombatFx {
       const want = this.bearing(attacker, target);
       if (!body || !kind || want === null) {
         this.pending.delete(attacker);
+        continue;
+      }
+      const pose = this.aim[attacker];
+      if (!pose) continue;
+      if (this.externalHull) {
+        const slewRate = TURRET_SLEW_RATE[kind] ?? 2.4;
+        const wantRel = clampTurret(kind, wrapAngle(want - pose.hull));
+        pose.turret = stepAngle(pose.turret, wantRel, slewRate * dt);
+      } else {
+        const next = aimStep(kind, pose.hull, pose.turret, want, dt);
+        pose.hull = next.hull;
+        pose.turret = next.turret;
+      }
+      setUnitAim(body, pose.hull, pose.turret);
+    }
+    for (const [attacker, hqTeam] of this.pendingHq) {
+      if (this.destroyed[attacker]) {
+        this.pendingHq.delete(attacker);
+        continue;
+      }
+      const hq = this.hqTargetOf(hqTeam);
+      const body = this.units.children[attacker] as THREE.Group | undefined;
+      const kind = this.unitKind(attacker);
+      const want = hq ? this.bearingToPoint(attacker, hq.x, hq.z) : null;
+      if (!body || !kind || want === null) {
+        this.pendingHq.delete(attacker);
         continue;
       }
       const pose = this.aim[attacker];
@@ -1464,27 +1534,117 @@ export class CombatFx {
    * Pick a skirmish pair and fire only when the attacker is aimed: hull
    * faced at the target (or, in external-hull mode, on its patrol heading
    * with the turret slewed onto the target), turret inside its traverse,
-   * muzzle down the turret line. Returns true when a shot left (or the
-   * roster/caps made firing impossible, to keep the ambient schedule); false
-   * defers while the attacker is still traversing. Wrecks neither fire nor
-   * draw fire and friendlies never draw fire: pairs are drawn from live hulls
-   * across team lines only, and fewer than two live enemies means silence
-   * (still true, to keep the schedule idle).
+   * muzzle down the turret line. About one volley in four instead answers a
+   * live enemy HQ inside admitted range (see `pickHqShot`); structure shots
+   * traverse, range-gate, solve, and splash through the same path, with the
+   * blast routed into the HQ damage state. Returns true when a shot left (or
+   * the roster/caps made firing impossible, to keep the ambient schedule);
+   * false defers while the attacker is still traversing. Wrecks neither fire
+   * nor draw fire and friendlies never draw fire: pairs are drawn from live
+   * hulls across team lines only, and fewer than two live enemies means
+   * silence (still true, to keep the schedule idle).
    */
   private tryFire(): boolean {
     const count = this.units.children.length;
     if (count < 2) return true;
     if (this.shots.length >= MAX_SHOTS) return true;
+    const hqPick = this.pickHqShot();
+    if (hqPick) {
+      const hq = this.hqTargetOf(hqPick.team);
+      if (!hq) return true;
+      return this.fireAtHq(hqPick.attacker, hq);
+    }
     const pair = this.pickLivePair();
     if (!pair) return true;
-    const attacker = this.units.children[pair.attacker] as THREE.Group | undefined;
-    const target = this.units.children[pair.target] as THREE.Group | undefined;
-    const kind = this.unitKind(pair.attacker);
-    const pose = this.aim[pair.attacker];
+    return this.fireAtUnit(pair.attacker, pair.target);
+  }
+
+  /**
+   * Draw an (attacker, HQ-team) structure shot: a live hull firing on a live
+   * enemy HQ. Null most volleys (`HQ_TARGET_CHANCE`), when no HQ is fielded
+   * (legacy headless groups), when every HQ is wrecked, or when no live
+   * enemy hull is even near admitted range — so structure fire only ever
+   * answers push-ins, never cross-map pairs. Consumes rng only when it
+   * proceeds, so hull-duel streams replay untouched without HQs.
+   */
+  private pickHqShot(): { attacker: number; team: number } | null {
+    const targets = this.env?.hqTargets?.() ?? [];
+    if (targets.length === 0) return null;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    if (!placed) return null;
+    if (this.rng() >= HQ_TARGET_CHANCE) return null;
+    const pairs: { attacker: number; team: number }[] = [];
+    for (const t of targets) {
+      for (let i = 0; i < this.units.children.length; i++) {
+        if (this.destroyed[i]) continue;
+        const side = placed[i]?.team;
+        if (side === undefined || side === t.team) continue;
+        const body = this.units.children[i] as THREE.Group | undefined;
+        if (!body) continue;
+        const kind = this.unitKind(i);
+        if (!kind) continue;
+        // Body-distance pre-gate (the exact muzzle gate runs in `fireAtHq`):
+        // guns parked across the map never draw structure fire.
+        const d = Math.hypot(body.position.x - t.x, body.position.z - t.z);
+        if (d > maxRangeFor(kind) + 50) continue;
+        pairs.push({ attacker: i, team: t.team });
+      }
+    }
+    if (pairs.length === 0) return null;
+    return pairs[Math.floor(this.rng() * pairs.length)] ?? null;
+  }
+
+  /** Fire a hull-vs-hull volley through the shared launch path. */
+  private fireAtUnit(attackerIdx: number, targetIdx: number): boolean {
+    const attacker = this.units.children[attackerIdx] as THREE.Group | undefined;
+    const target = this.units.children[targetIdx] as THREE.Group | undefined;
+    const kind = this.unitKind(attackerIdx);
+    const pose = this.aim[attackerIdx];
     if (!attacker || !target || !kind || !pose) return true;
-    this.pending.set(pair.attacker, pair.target);
-    const want = this.bearing(pair.attacker, pair.target);
+    this.pending.set(attackerIdx, targetIdx);
+    const want = this.bearing(attackerIdx, targetIdx);
     if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
+    return this.launchShot(attackerIdx, attacker, kind, pose, impactPoint(target.position, this.rng), targetIdx);
+  }
+
+  /** Fire a hull-vs-HQ volley through the shared launch path. */
+  private fireAtHq(
+    attackerIdx: number,
+    hq: { x: number; y: number; z: number; team: number },
+  ): boolean {
+    const attacker = this.units.children[attackerIdx] as THREE.Group | undefined;
+    const kind = this.unitKind(attackerIdx);
+    const pose = this.aim[attackerIdx];
+    if (!attacker || !kind || !pose) return true;
+    this.pendingHq.set(attackerIdx, hq.team);
+    const want = this.bearingToPoint(attackerIdx, hq.x, hq.z);
+    if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
+    return this.launchShot(
+      attackerIdx,
+      attacker,
+      kind,
+      pose,
+      impactPoint({ x: hq.x, y: hq.y, z: hq.z }, this.rng),
+      -1,
+    );
+  }
+
+  /**
+   * Shared launch path for hull and structure volleys: seed the muzzle from
+   * the flat math, aim the barrel at the firing solution, re-solve from the
+   * live barrel-tip muzzle, and spawn the analytic shot. `target` is the
+   * roster index (-1 for a structure — downstream only the shooter is ever
+   * read back). Returns true when the round left, false while still
+   * traversing or out of admitted range (retry on a new pair).
+   */
+  private launchShot(
+    attackerIdx: number,
+    attacker: THREE.Group,
+    kind: UnitKind,
+    pose: { hull: number; turret: number },
+    impact: { x: number; y: number; z: number },
+    target: number,
+  ): boolean {
     const profile = WEAPON_PROFILES[kind];
 
     const gunYaw = muzzleYaw(pose.hull, pose.turret);
@@ -1492,7 +1652,6 @@ export class CombatFx {
     // solution and re-read the exact live muzzle (barrel-tip world matrix,
     // so turret yaw + barrel pitch + hull grade pose all contribute).
     const approx = muzzlePoint(attacker.position, gunYaw, kind);
-    const impact = impactPoint(target.position, this.rng);
     const approxDist = Math.hypot(
       impact.x - approx.x,
       impact.y - approx.y,
@@ -1554,14 +1713,14 @@ export class CombatFx {
       age: 0,
       dur: sol.duration,
       kind,
-      attacker: pair.attacker,
-      target: pair.target,
+      attacker: attackerIdx,
+      target,
     });
     this.fired += 1;
 
     this.spawnMuzzle(start, profile.color, profile.flashTime);
     this.kickLight(start, profile.color);
-    this.kickRecoil(pair.attacker, attacker, barrelDir);
+    this.kickRecoil(attackerIdx, attacker, barrelDir);
     return true;
   }
 
@@ -1664,6 +1823,16 @@ export class CombatFx {
     // blames nobody (non-hostile), so survivors do not pursue each other
     // over a cook-off.
     this.explode(at, 0xff8a3c, "hammer", true, null, false);
+  }
+
+  /**
+   * Detonate a structure-class blast (HQ death): the full epic stack at the
+   * fort — scorch, dent, unit splash, and the structures hook (already
+   * wrecked, so the hook is a no-op for the dead HQ itself). Non-hostile, so
+   * survivors hesitate at the cook-off but blame nobody.
+   */
+  detonateStructure(at: THREE.Vector3, kind: UnitKind): void {
+    this.explode(at, 0xff8a3c, kind, true, null, false);
   }
 
   /**
@@ -1836,8 +2005,12 @@ export class CombatFx {
       glowRadius: shape.radius * radiusScale,
     });
     this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
-    this.scarGround(at, kind, slope);
+    this.scarGround(at, kind, slope ?? undefined);
     this.damageUnits(at, kind, slope, shooter, hostile);
+    // Structures share every blast: an HQ near the impact takes honest
+    // splash through the canvas-owned damage state (collateral even when the
+    // volley aimed at a hull).
+    this.env?.damageStructures?.({ x: at.x, y: at.y, z: at.z }, kind, shooter, hostile);
   }
 
   /**

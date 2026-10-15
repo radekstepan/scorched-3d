@@ -9,6 +9,7 @@ export * from "./units/combat.js";
 export * from "./units/retaliation.js";
 export * from "./units/destruction.js";
 export * from "./units/unitDamage.js";
+export * from "./units/hq.js";
 export * from "./units/impact.js";
 export * from "./units/facing.js";
 export * from "./units/locomotion.js";

@@ -35,6 +35,7 @@ import {
   treeStickChance,
   trunksOnBarrel,
   type TreeStand,
+  WEAPON_MAX_RANGE,
   WEAPON_PROFILES,
 } from "./combat.js";
 import { UNIT_KINDS } from "./types.js";
@@ -279,20 +280,23 @@ describe("ballisticPosition / ballisticVelocity", () => {
 });
 
 describe("ranges", () => {
-  it("limits shells ballistically, bolts by flight time", () => {
-    expect(maxRangeFor("hammer")).toBeCloseTo((520 * 520) / GRAVITY);
-    expect(maxRangeFor("flash")).toBe(1300 * FLIGHT_MAX_TIME);
-    expect(maxRangeFor("stump")).toBe(1050 * FLIGHT_MAX_TIME);
-    expect(maxRangeFor("commander")).toBe(900 * FLIGHT_MAX_TIME);
+  it("caps every kind below half a battle-map width (HQs are lob-proof)", () => {
+    // Doctrine caps (not the physical limits): nothing reaches across the
+    // map, so an HQ only takes aimed fire from deep push-ins.
+    expect(maxRangeFor("flash")).toBe(900);
+    expect(maxRangeFor("stump")).toBe(850);
+    expect(maxRangeFor("hammer")).toBe(1000);
+    expect(maxRangeFor("commander")).toBe(800);
+    expect(WEAPON_MAX_RANGE.hammer).toBeLessThan((520 * 520) / GRAVITY);
   });
 
   it("gates fire inside [MIN_RANGE, maxRange]", () => {
     expect(inRange("hammer", MIN_RANGE - 1)).toBe(false);
     expect(inRange("hammer", MIN_RANGE)).toBe(true);
-    expect(inRange("hammer", 1500)).toBe(true);
-    expect(inRange("hammer", 2500)).toBe(false);
-    expect(inRange("flash", 3000)).toBe(true);
-    expect(inRange("flash", 5000)).toBe(false);
+    expect(inRange("hammer", 900)).toBe(true);
+    expect(inRange("hammer", 1100)).toBe(false);
+    expect(inRange("flash", 800)).toBe(true);
+    expect(inRange("flash", 1000)).toBe(false);
   });
 
   it("clamps barrel elevation to the mount limits", () => {

@@ -192,6 +192,23 @@ describe("OcclusionFx ghost policy", () => {
     }
   });
 
+  it("grows the ghost roster for reinforcements without touching live ghosts", () => {
+    const scene = new THREE.Scene();
+    const fx = new OcclusionFx(scene, kinds);
+    try {
+      expect(fx.count).toBe(2);
+      fx.setKinds([...kinds, "hammer"]);
+      expect(fx.count).toBe(3);
+      // Shrinking never happens mid-battle (regen builds a fresh instance).
+      fx.setKinds([...kinds, "hammer"]);
+      expect(fx.count).toBe(3);
+      expect(fx.isShown(2)).toBe(false);
+    } finally {
+      fx.dispose();
+      disposeOcclusionAssets();
+    }
+  });
+
   it("ghosts damaged and wrecked hulls alike, hiding only fully-gone husks", () => {
     const scene = new THREE.Scene();
     const fx = new OcclusionFx(scene, kinds);

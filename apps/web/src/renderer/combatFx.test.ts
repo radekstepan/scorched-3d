@@ -1796,3 +1796,80 @@ describe("CombatFx projectile glow", () => {
     expect(glowBlobs(scene).length).toBe(0);
   });
 });
+
+describe("CombatFx structure fire (HQ forts)", () => {
+  function hqDuel(hqX: number) {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    // Attacker (team 0 hammer) vs a far teammate-less enemy: the hull duel
+    // holds fire at 2500 units, so any volley must answer the HQ.
+    group.userData.units = [
+      { kind: "hammer", team: 0, cellX: 1, cellZ: 1, rotation: 0 },
+      { kind: "flash", team: 1, cellX: 2, cellZ: 2, rotation: Math.PI },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(2500, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const splashes: { x: number; z: number; shooter: number | null }[] = [];
+    const fx = new CombatFx(scene, group, mulberry32(99), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      hqTargets: () => [{ x: hqX, y: 110, z: 0, team: 1 }],
+      damageStructures: (at, _kind, shooter) => {
+        splashes.push({ x: at.x, z: at.z, shooter });
+      },
+    });
+    return { fx, splashes };
+  }
+
+  it("shells a live enemy HQ inside admitted range", () => {
+    const { fx, splashes } = hqDuel(600);
+    for (let n = 0; n < 60 * 40 && splashes.length === 0; n++) fx.update(1 / 60);
+    // Aimed structure volleys left the barrel and splashed the fort.
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(splashes.length).toBeGreaterThan(0);
+    for (const s of splashes) {
+      expect(Math.hypot(s.x - 600, s.z)).toBeLessThan(120);
+      expect(s.shooter).toBe(0);
+    }
+    fx.dispose();
+  });
+
+  it("holds structure fire across the map (range caps lob-proof the HQ)", () => {
+    const { fx, splashes } = hqDuel(2000);
+    for (let n = 0; n < 1200; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBe(0);
+    expect(splashes).toHaveLength(0);
+    fx.dispose();
+  });
+
+  it("detonates structure-class bursts through the shared epic stack", () => {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "flash", team: 0, cellX: 1, cellZ: 1, rotation: 0 }];
+    const body = new THREE.Group();
+    body.position.set(0, 100, 0);
+    group.add(body);
+    const splashes: number[] = [];
+    const fx = new CombatFx(scene, group, mulberry32(5), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      damageStructures: () => {
+        splashes.push(1);
+      },
+    });
+    const before = fx.scorchCount;
+    fx.detonateStructure(new THREE.Vector3(600, 110, 0), "hammer");
+    expect(fx.explosionCount).toBe(1);
+    expect(fx.scorchCount).toBe(before + 1);
+    // The burst routes into the structures hook (the canvas wrecks the HQ).
+    expect(splashes).toHaveLength(1);
+    fx.dispose();
+  });
+});

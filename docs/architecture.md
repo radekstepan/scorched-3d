@@ -15,8 +15,8 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 
 | File | Responsibility |
 | --- | --- |
-| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers, team + unit legend, probe readout. |
-| `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, hover picking. |
+| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers and HQ fort squares, team + HQ + unit legend, probe readout. |
+| `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, team HQ forts with reinforcements, hover picking. |
 | `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, team ground rings, and exaggeration re-snapping. |
 | `apps/web/src/renderer/camo.ts` | Subtle procedural hull camo: one shared near-white grayscale texture per kind bound as hull-material map (hue-preserving, no hull tint), deterministic bake. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
@@ -28,7 +28,10 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/units/terrain.ts` | Bilinear seating, hull pitch/roll, and step blocking for movers. |
 | `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
-| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission), plus cross-team pair picking. |
+| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission capped under half the map so HQs never take cross-map lobs), plus cross-team pair picking. |
+| `packages/core/src/units/hq.ts` | Team HQ forts: deterministic map-end siting, honest blast splash, and the reinforcement clock (interval + per-side cap + kind cycle). |
+| `apps/web/src/renderer/hq.ts` | HQ bunker view (walls, sliding door, exit hall, team ring) with wreck pose. |
+| `apps/web/src/renderer/hqFx.ts` | HQ manager: damage, spawn clocks, door-slide animation, release/kill/damage hooks. |
 | `packages/core/src/units/destruction.ts` | Blast scorch + graduated collateral damage (tree burn states, rock levels, spread). |
 | `apps/web/src/renderer/features.ts` | Tree/rock instanced posing per damage state, re-snap preserving. |
 | `apps/web/src/renderer/fireFx.ts` | Transient instanced flame/smoke views over the damage field. |

@@ -77,6 +77,15 @@ describe("Units panel roster without patrol status text", () => {
     expect(source).toContain("TEAM_DEFS[team].color");
   });
 
+  it("shows HQ forts on the minimap and in the Units box", () => {
+    expect(source).toContain("onHq={setHqs}");
+    expect(source).toContain("hqs.map");
+    expect(source).toContain("hq-${h.team}");
+    expect(source).toContain("HQ {def.name}");
+    expect(source).toContain("standing");
+    expect(source).toContain("destroyed");
+  });
+
   it("shows a bottom selection tray with pre-rendered icons, counts, and team top borders", () => {
     expect(source).toContain("selectedGroups");
     expect(source).toContain("groupSelection(map.units, selected)");
@@ -93,5 +102,19 @@ describe("Units panel roster without patrol status text", () => {
     expect(canvas).toContain("static");
     const fx = readFileSync(join(here, "renderer", "selectionFx.ts"), "utf8");
     expect(fx).toContain("SELECTION_CHEVRON_YAW");
+  });
+
+  it("fields map-end HQ forts with spawn, damage, and broadcast wiring", () => {
+    const canvas = readFileSync(join(here, "renderer", "TerrainCanvas.tsx"), "utf8");
+    expect(canvas).toContain("placeHqs(map, map.seed)");
+    expect(canvas).toContain("new HqFx");
+    expect(canvas).toContain("onSpawn");
+    expect(canvas).toContain("buildSpawnedUnit");
+    expect(canvas).toContain("movement.addUnit");
+    expect(canvas).toContain("damageStructures");
+    expect(canvas).toContain("detonateStructure");
+    expect(canvas).toContain("hq?.update(dt)");
+    expect(canvas).toContain("hq?.resnap()");
+    expect(canvas).toContain("hqRef.current?.(hq?.status()");
   });
 });

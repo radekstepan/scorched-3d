@@ -548,4 +548,28 @@ describe("UnitMovement wrecks", () => {
     expect(movement.isDestroyed(1)).toBe(false);
     movement.dispose();
   });
+
+  it("registers HQ reinforcements mid-battle on a hall-to-staging patrol", () => {
+    const units = makeGroup();
+    const rs = routes();
+    const movement = new UnitMovement(units, rs, { groundY: () => 100 });
+    expect(movement.unitCount).toBe(2);
+    const idx = movement.addUnit(900, 100, Math.PI / 2, [{ x: 900, z: 100 }, { x: 600, z: 100 }], "stump");
+    expect(idx).toBe(2);
+    expect(movement.unitCount).toBe(3);
+    expect(movement.kindAt(2)).toBe("stump");
+    expect(movement.teamAt(2)).toBeUndefined();
+    const mover = movement.moverState(2)!;
+    expect(mover.x).toBe(900);
+    expect(mover.z).toBe(100);
+    // The release drives its patrol leg (toward staging) on the next ticks.
+    const body = new THREE.Group();
+    body.position.set(900, 100, 100);
+    units.add(body);
+    for (let n = 0; n < 600; n++) movement.update(1 / 60);
+    const driven = movement.moverState(2)!;
+    expect(Math.hypot(driven.x - 900, driven.z - 100)).toBeGreaterThan(50);
+    expect(units.children.length).toBe(3);
+    movement.dispose();
+  });
 });

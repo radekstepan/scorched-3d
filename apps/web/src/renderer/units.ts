@@ -234,6 +234,29 @@ export function getTurret(body: THREE.Group): THREE.Group | null {
   return (body.userData.turret as THREE.Group | undefined) ?? null;
 }
 
+/**
+ * Build one reinforcement body at world (x, z), yawed `yaw`: hull + camo +
+ * team ring, seated flat on `groundY`. The movement re-snap seats the grade
+ * tilt on the next tick; the hull drives out of the HQ hall from here.
+ */
+export function buildSpawnedUnit(
+  kind: UnitKind,
+  team: TeamId,
+  x: number,
+  z: number,
+  yaw: number,
+  groundY: (x: number, z: number) => number,
+): THREE.Group {
+  const body = new THREE.Group();
+  buildBody(kind, body);
+  applyCamo(body, kind);
+  body.add(buildTeamRing(team));
+  body.rotation.order = "YXZ";
+  body.rotation.y = yaw;
+  body.position.set(x, groundY(x, z) + 0.5, z);
+  return body;
+}
+
 /** Elevating barrel pivot of a unit body, or null (commander, plain groups). */
 export function getBarrel(body: THREE.Group): THREE.Group | null {
   const turret = getTurret(body);

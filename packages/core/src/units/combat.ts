@@ -54,9 +54,10 @@ export const WEAPON_PROFILES: Record<UnitKind, WeaponProfile> = {
 /**
  * Gravity for ballistic shells, world units/s² (retail reads a gravity
  * global in its §3.3 solver; here one constant for the single shell weapon).
- * With the hammer's 520 u/s muzzle velocity the level-ground max range is
- * V²/g ≈ 1931 units — about one map width (128 cells × 16), so artillery
- * reaches most of the field but not every corner-to-corner pair.
+ * With the hammer's 520 u/s muzzle velocity the level-ground ballistic max
+ * is V²/g ≈ 1931 units, but doctrine admits only `WEAPON_MAX_RANGE.hammer`
+ * (see below), so artillery duels stay readable and map-end HQs are safe
+ * from cross-map lobs.
  */
 export const GRAVITY = 140;
 
@@ -89,14 +90,25 @@ export function clampElevation(elevation: number): number {
 
 /**
  * Max engagement range per kind, world units (retail's admission range
- * test, spec 06 §3.3): shells are ballistically limited to V²/g on level
- * ground; bolts fly straight, limited only by the flight-time safety net.
+ * test, spec 06 §3.3): bolts fly straight, shells are ballistically
+ * solvable far — but doctrine caps both well below the physical limits so
+ * guns hold fire across the map instead of lobbing the enemy HQ from their
+ * own half. The caps sit under half a battle-map width (160 cells × 16 =
+ * 2560): only attackers that push deep into the far half can shell its HQ.
  */
+export const WEAPON_MAX_RANGE: Record<UnitKind, number> = {
+  flash: 900,
+  stump: 850,
+  hammer: 1000,
+  commander: 800,
+};
+
 export function maxRangeFor(kind: UnitKind): number {
   const profile = WEAPON_PROFILES[kind];
   if (!profile) return 0;
-  if (profile.shot === "shell") return (profile.speed * profile.speed) / GRAVITY;
-  return profile.speed * FLIGHT_MAX_TIME;
+  const cap = WEAPON_MAX_RANGE[kind] ?? 0;
+  if (profile.shot === "shell") return Math.min((profile.speed * profile.speed) / GRAVITY, cap);
+  return Math.min(profile.speed * FLIGHT_MAX_TIME, cap);
 }
 
 /** True when a muzzle-to-impact shot at `distance` may leave the barrel. */

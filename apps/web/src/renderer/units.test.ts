@@ -3,6 +3,7 @@ import * as THREE from "three";
 import type { TNTMap } from "@scorched-3d/core";
 import {
   barrelElevation,
+  buildSpawnedUnit,
   buildTeamRing,
   buildUnits,
   getBarrel,
@@ -408,5 +409,20 @@ describe("team ground rings", () => {
     // Re-snapping moves origins/tilt only; the ring rides along.
     expect(getTeamRing(body)).not.toBeNull();
     expect(getTeamRing(body)!.position.y).toBeGreaterThan(0);
+  });
+
+  it("builds reinforcement bodies seated flat with team rings", () => {
+    const body = buildSpawnedUnit("hammer", 1, 500, -300, -Math.PI / 2, () => 100);
+    expect(body.rotation.order).toBe("YXZ");
+    expect(body.rotation.y).toBe(-Math.PI / 2);
+    expect(body.position.x).toBe(500);
+    expect(body.position.z).toBe(-300);
+    expect(body.position.y).toBe(100.5);
+    // Full hull: turret subgroup + wheels + team ring, no selection marker
+    // (the canvas adds that, like the mustered roster).
+    expect(getTurret(body)).not.toBeNull();
+    expect(getWheels(body).length).toBeGreaterThan(0);
+    expect(getTeamRing(body)).not.toBeNull();
+    expect(body.getObjectByName("select-marker")).toBeFalsy();
   });
 });

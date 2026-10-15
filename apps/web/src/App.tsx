@@ -15,6 +15,7 @@ import {
   type ViewOptions,
 } from "@scorched-3d/core";
 import TerrainCanvas from "./renderer/TerrainCanvas";
+import type { HqStatus } from "./renderer/hqFx";
 import {
   MINIMAP_SELECTED_GLOW,
   MINIMAP_SELECTED_OUTLINE,
@@ -34,6 +35,7 @@ export default function App() {
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
   const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean }[]>([]);
+  const [hqs, setHqs] = useState<HqStatus[]>([]);
   const [options, setOptions] = useState<ViewOptions>({
     exaggeration: 2.0,
     showWater: true,
@@ -81,6 +83,7 @@ export default function App() {
         onHover={setHover}
         onSelection={setSelected}
         onPositions={setLiveUnits}
+        onHq={setHqs}
       />
 
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(3,8,12,0.55)_100%)]" />
@@ -178,6 +181,26 @@ export default function App() {
                 }}
               />
             )}
+            {hqs.map((h) => {
+              // Fort markers: team-colored squares (grey when wrecked), so
+              // the map-end forts read apart from the round hull dots.
+              const teamColor = `#${TEAM_DEFS[h.team].color.toString(16).padStart(6, "0")}`;
+              return (
+                <span
+                  key={`hq-${h.team}`}
+                  title={`Team ${TEAM_DEFS[h.team].name} HQ${h.alive ? "" : " (destroyed)"}`}
+                  className="absolute -translate-x-1/2 -translate-y-1/2 border border-black/70"
+                  style={{
+                    left: `${(h.x / worldW + 0.5) * 100}%`,
+                    top: `${(h.z / worldD + 0.5) * 100}%`,
+                    width: 9,
+                    height: 9,
+                    background: h.alive ? teamColor : "#57534e",
+                    opacity: h.alive ? 1 : 0.55,
+                  }}
+                />
+              );
+            })}
           </div>
           <p className="mt-1 text-center font-mono text-[9px] tracking-[0.2em] text-slate-500">
             MINIMAP · 252×252 · LIVE
@@ -264,6 +287,23 @@ export default function App() {
             })}
           </div>
           <div className="mt-2 space-y-1.5">
+            {hqs.map((h) => {
+              const def = TEAM_DEFS[h.team];
+              return (
+                <div key={`hq-${h.team}`} className="flex items-center gap-2 text-[11px]">
+                  <span
+                    className="inline-block h-2.5 w-2.5 border border-black/60"
+                    style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
+                  />
+                  <span className="text-slate-200">HQ {def.name}</span>
+                  <span className="ml-auto font-mono text-[10px] text-slate-400">
+                    {h.alive ? "standing" : "destroyed"} · +{h.spawned} sent
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 space-y-1.5">
             {UNIT_KINDS.map((k) => {
               const def = UNIT_DEFS[k];
               const count = map.units.filter((u) => u.kind === k).length;
@@ -283,7 +323,11 @@ export default function App() {
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
             Blue holds the west, Orange the east — team rings circle every
-            hull in 3D and ring its minimap dot. Dark-brown patches
+            hull in 3D and ring its minimap dot. Each side fields a map-end
+            HQ fort (square on the minimap) that slides its door up to send
+            out reinforcements while it stands — and goes silent as a charred
+            wreck under enough enemy fire. Guns only reach about half the map
+            now, so forts take aimed fire only from deep push-ins. Dark-brown patches
             are blast scorch — old impact scars, not mud. Selected units carry
             a static white/cyan ring + beacon; hulls keep their normal paint —
             selection never tints the hull. The Waypoints overlay traces the
