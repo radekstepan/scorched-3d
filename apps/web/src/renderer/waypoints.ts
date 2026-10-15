@@ -156,6 +156,12 @@ export class WaypointFx {
   private lastKinds: UnitKind[] = [];
   private lastTime = 0;
   private disposed = false;
+  /**
+   * Reusable per-line vertex buffers for the live order/trail lines (see
+   * `paintLine`): steady-state ticks rewrite in place instead of
+   * disposing + reallocating a `BufferGeometry` per unit per frame.
+   */
+  private lineBuffers = new WeakMap<THREE.Line, Float32Array>();
 
   constructor(scene: THREE.Scene, routes: RoutePoint[][], env: WaypointEnv) {
     this.scene = scene;
@@ -171,8 +177,9 @@ export class WaypointFx {
     const line = this.orders[index]?.line;
     if (!line || !line.visible) return [];
     const pos = line.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const n = Math.min(line.geometry.drawRange.count, pos.count);
     const out: RoutePoint[] = [];
-    for (let i = 0; i < pos.count; i++) out.push({ x: pos.getX(i), z: pos.getZ(i) });
+    for (let i = 0; i < n; i++) out.push({ x: pos.getX(i), z: pos.getZ(i) });
     return out;
   }
 
@@ -181,8 +188,9 @@ export class WaypointFx {
     const line = this.trails[index];
     if (!line || !line.visible) return [];
     const pos = line.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const n = Math.min(line.geometry.drawRange.count, pos.count);
     const out: RoutePoint[] = [];
-    for (let i = 0; i < pos.count; i++) out.push({ x: pos.getX(i), z: pos.getZ(i) });
+    for (let i = 0; i < n; i++) out.push({ x: pos.getX(i), z: pos.getZ(i) });
     return out;
   }
 
@@ -483,15 +491,27 @@ export class WaypointFx {
 
   /** Fill a live line's geometry from a path, re-seated on the terrain. */
   private paintLine(line: THREE.Line, pts: RoutePoint[], lift: number): void {
-    const positions = new Float32Array(pts.length * 3);
-    pts.forEach((p, j) => {
-      positions[j * 3] = p.x;
-      positions[j * 3 + 1] = this.env.groundY(p.x, p.z) + lift;
-      positions[j * 3 + 2] = p.z;
-    });
-    line.geometry.dispose();
-    line.geometry = new THREE.BufferGeometry();
-    line.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    // Hot path (every tick per live unit): reuse the line's buffer across
+    // frames instead of disposing + reallocating a geometry per tick. The
+    // buffer only grows (never shrinks mid-session); shorter paths just
+    // draw a prefix via `setDrawRange`, so steady-state ticks allocate only
+    // the predicted-point list itself.
+    let buf = this.lineBuffers.get(line);
+    if (!buf || buf.length < pts.length * 3) {
+      buf = new Float32Array(Math.max(pts.length * 3, 24));
+      this.lineBuffers.set(line, buf);
+      line.geometry.dispose();
+      line.geometry = new THREE.BufferGeometry();
+      line.geometry.setAttribute("position", new THREE.BufferAttribute(buf, 3));
+    }
+    for (let j = 0; j < pts.length; j++) {
+      const p = pts[j]!;
+      buf[j * 3] = p.x;
+      buf[j * 3 + 1] = this.env.groundY(p.x, p.z) + lift;
+      buf[j * 3 + 2] = p.z;
+    }
+    line.geometry.setDrawRange(0, pts.length);
+    (line.geometry.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
     line.visible = true;
   }
 

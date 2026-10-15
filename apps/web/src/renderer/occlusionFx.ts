@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import {
   HULL_FOOTPRINT,
-  treesOnSegment,
+  treesIntersectSegment,
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
@@ -19,7 +19,7 @@ import { HEALTH_BAR_RENDER_ORDER } from "./healthBars";
  * - Pure sampling math (`segmentBlockedByTerrain` / `unitOcclusion`): the
  *   camera→hull ray is tested at a few hull taps (low/mid/high) against the
  *   live `groundY` heightfield plus the standing-tree volumes from core
- *   (`treesOnSegment`: crown sphere + trunk cylinder, felled/stump/snag/gone
+ *   (`treesIntersectSegment`: crown sphere + trunk cylinder, felled/stump/snag/gone
  *   wood never intercepts). A unit counts as occluded when *any* tap is
  *   blocked, so a hull nose-down behind a ridge still ghosts.
  * - `OcclusionFx`: one silhouette ghost per roster unit. Each ghost mirrors
@@ -34,7 +34,8 @@ import { HEALTH_BAR_RENDER_ORDER } from "./healthBars";
  *
  * Perf: per tick each unit tests OCCLUSION_TAPS taps × OCCLUSION_SAMPLES
  * terrain samples (one bilinear `groundY` each) plus one broadphase
- * `treesOnSegment` per tap. Rosters are ~6 hulls, so a tick costs a few
+ * `treesIntersectSegment` boolean probe per tap (early-out, no fid list).
+ * Rosters are ~6 hulls, so a tick costs a few
  * thousand cheap rejects — no raycaster, no per-pixel work, no allocations
  * past the caller-owned stands array. Pose sync copies transforms only
  * (no geometry rebuilds unless the body hierarchy changes shape).
@@ -112,6 +113,7 @@ export function segmentBlockedByTerrain(
 /**
  * True when live wood hides `target` from `cam` (standing crowns/trunks
  * only — felled wood never intercepts, matching projectile rules). Pure.
+ * Boolean probe (no fid list), so the per-tap check never allocates.
  */
 export function segmentBlockedByTrees(
   cam: Vec3Like,
@@ -119,8 +121,11 @@ export function segmentBlockedByTrees(
   stands: readonly TreeStand[],
 ): boolean {
   if (stands.length === 0) return false;
-  return treesOnSegment(cam, target, stands).length > 0;
+  return treesIntersectSegment(cam, target, stands);
 }
+
+/** Scratch tap reused by `unitOcclusion` so the per-tick probe allocates nothing. */
+const _tap: Vec3Like = { x: 0, y: 0, z: 0 };
 
 /**
  * Occlusion of one body origin: each `OCCLUSION_TAPS` tap is tested against
@@ -136,10 +141,12 @@ export function unitOcclusion(
   let blocked = 0;
   const total = OCCLUSION_TAPS.length;
   for (const lift of OCCLUSION_TAPS) {
-    const target = { x: body.x, y: body.y + lift, z: body.z };
+    _tap.x = body.x;
+    _tap.y = body.y + lift;
+    _tap.z = body.z;
     if (
-      segmentBlockedByTerrain(cam, target, env.groundY) ||
-      segmentBlockedByTrees(cam, target, env.stands)
+      segmentBlockedByTerrain(cam, _tap, env.groundY) ||
+      segmentBlockedByTrees(cam, _tap, env.stands)
     ) {
       blocked++;
     }

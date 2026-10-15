@@ -99,6 +99,18 @@ describe("unitOcclusion (terrain + trees)", () => {
     const res = unitOcclusion(cam, { x: 0, y: 10, z: 0 }, { groundY: flat, stands: trees });
     expect(res.occluded).toBe(false);
   });
+
+  it("reuses its tap scratch safely across consecutive calls", () => {
+    // The per-tap probe target is a shared scratch (hot-loop sweep): results
+    // must never leak from one call into the next.
+    const env = { groundY: flat, stands: [] as TreeStand[] };
+    expect(unitOcclusion(cam, { x: 0, y: 10, z: 0 }, env).occluded).toBe(false);
+    expect(unitOcclusion(cam, { x: 50, y: 10, z: 40 }, env).occluded).toBe(false);
+    expect(unitOcclusion(cam, { x: 0, y: 10, z: 0 }, { groundY: ridge, stands: [] }).occluded).toBe(
+      true,
+    );
+    expect(unitOcclusion(cam, { x: 0, y: 10, z: 0 }, env).occluded).toBe(false);
+  });
 });
 
 describe("ghostBoxFor", () => {

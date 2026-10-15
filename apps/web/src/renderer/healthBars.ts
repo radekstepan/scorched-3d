@@ -122,10 +122,16 @@ export class HealthBars {
   /**
    * Per-tick refresh: re-seat each bar above its body, billboard it toward
    * `camera`, and refill from live damage. Wrecks (destroyed or gone husks)
-   * show nothing.
+   * show nothing. While the toggle is off every bar is hidden up front and
+   * the re-seat/billboard work is skipped — same hidden result, no per-tick
+   * transform churn.
    */
   update(source: HealthSource, bodies: readonly THREE.Object3D[], camera: THREE.Camera): void {
     if (this.disposed) return;
+    if (!this.visible) {
+      for (let i = 0; i < this.bars.length; i++) this.bars[i]!.group.visible = false;
+      return;
+    }
     for (let i = 0; i < this.bars.length; i++) {
       const bar = this.bars[i]!;
       const body = bodies[i];

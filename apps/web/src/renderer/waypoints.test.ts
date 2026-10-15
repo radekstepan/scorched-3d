@@ -344,4 +344,34 @@ describe("WaypointFx", () => {
     expect(flow.position.y).toBeCloseTo(250 + 5, 9);
     fx.dispose();
   });
+
+  it("reuses live-line geometry across ticks instead of reallocating", () => {
+    // Hot-loop sweep: repainting the driven lines every tick used to dispose
+    // + rebuild a BufferGeometry per unit per frame. Steady-state ticks now
+    // rewrite the same buffer in place (draw-range prefix for shorter paths).
+    const { fx } = makeFx();
+    const view = fx as unknown as { orders: { line: THREE.Line }[]; trails: THREE.Line[] };
+    const ordered = orderMover(moverAt(0, 0), [
+      { x: 100, z: 0 },
+      { x: 200, z: 0 },
+    ]);
+    fx.update(fakeMovement([ordered, moverAt(600, 600)]), 2, 1.5);
+    expect(fx.orderPoints(0).length).toBeGreaterThan(3);
+    expect(fx.trailPoints(1).length).toBeGreaterThan(3);
+    const orderGeo = view.orders[0]!.line.geometry;
+    const trailGeo = view.trails[1]!.geometry;
+    const ordered2 = orderMover(moverAt(30, 0), [
+      { x: 100, z: 0 },
+      { x: 200, z: 0 },
+    ]);
+    fx.update(fakeMovement([ordered2, moverAt(600, 600)]), 2, 2.5);
+    expect(view.orders[0]!.line.geometry).toBe(orderGeo);
+    expect(view.trails[1]!.geometry).toBe(trailGeo);
+    // Same buffers, fresh content: the repainted order starts at the new hull.
+    const after = fx.orderPoints(0);
+    expect(after.length).toBeGreaterThan(3);
+    expect(after[0]!.x).toBeCloseTo(30, 9);
+    expect(after[0]!.z).toBeCloseTo(0, 9);
+    fx.dispose();
+  });
 });

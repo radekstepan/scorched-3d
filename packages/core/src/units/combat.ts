@@ -435,6 +435,90 @@ export function treesOnSegment(
 }
 
 /**
+ * Boolean twin of `treesOnSegment` for per-tick occlusion/aim checks: true
+ * when any standing tree's wood enters the segment `a`→`b`, with the same
+ * broadphase + exact crown/trunk tests but an early `true` instead of
+ * collecting the fid list — no per-call array when nothing (or something)
+ * is hit. Pure; results agree with `treesOnSegment(a, b, trees).length > 0`.
+ */
+export function treesIntersectSegment(
+  a: CombatVec3,
+  b: CombatVec3,
+  trees: readonly TreeStand[],
+): boolean {
+  const minX = Math.min(a.x, b.x) - TREE_CANOPY_RADIUS;
+  const maxX = Math.max(a.x, b.x) + TREE_CANOPY_RADIUS;
+  const minZ = Math.min(a.z, b.z) - TREE_CANOPY_RADIUS;
+  const maxZ = Math.max(a.z, b.z) + TREE_CANOPY_RADIUS;
+  const minY = Math.min(a.y, b.y) - TREE_CANOPY_RADIUS;
+  const maxY = Math.max(a.y, b.y) + TREE_CANOPY_RADIUS;
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  for (let i = 0; i < trees.length; i++) {
+    const tree = trees[i]!;
+    if (!tree.standing) continue;
+    if (tree.x < minX || tree.x > maxX || tree.z < minZ || tree.z > maxZ) continue;
+    const cy = tree.groundY + TREE_CANOPY_LIFT;
+    if (cy < minY || cy > maxY) continue;
+    let struck = false;
+    // Crown: segment-sphere intersection.
+    if (len2 > 1e-9) {
+      const ox = a.x - tree.x;
+      const oy = a.y - cy;
+      const oz = a.z - tree.z;
+      const t = Math.min(Math.max(-(ox * abx + oy * aby + oz * abz) / len2, 0), 1);
+      const px = a.x + abx * t - tree.x;
+      const py = a.y + aby * t - cy;
+      const pz = a.z + abz * t - tree.z;
+      const r = TREE_CANOPY_RADIUS;
+      struck = px * px + py * py + pz * pz <= r * r;
+    } else {
+      struck = pointInTree(a.x, a.y, a.z, tree);
+    }
+    // Trunk: XZ slab crossing while the segment's Y overlaps the bole.
+    if (!struck) {
+      const tr = TREE_TRUNK_RADIUS;
+      const segMinX = Math.min(a.x, b.x) - tr;
+      const segMaxX = Math.max(a.x, b.x) + tr;
+      const segMinZ = Math.min(a.z, b.z) - tr;
+      const segMaxZ = Math.max(a.z, b.z) + tr;
+      if (
+        tree.x >= segMinX && tree.x <= segMaxX &&
+        tree.z >= segMinZ && tree.z <= segMaxZ &&
+        Math.min(a.y, b.y) <= tree.groundY + TREE_TRUNK_HEIGHT &&
+        Math.max(a.y, b.y) >= tree.groundY
+      ) {
+        // Closest XZ approach of the segment to the trunk axis.
+        const abx2 = b.x - a.x;
+        const abz2 = b.z - a.z;
+        const xz2 = abx2 * abx2 + abz2 * abz2;
+        let cx = a.x;
+        let cz = a.z;
+        let cySeg = a.y;
+        if (xz2 > 1e-9) {
+          const t = Math.min(
+            Math.max(((tree.x - a.x) * abx2 + (tree.z - a.z) * abz2) / xz2, 0),
+            1,
+          );
+          cx = a.x + abx2 * t;
+          cz = a.z + abz2 * t;
+          cySeg = a.y + aby * t;
+        }
+        const ddx = cx - tree.x;
+        const ddz = cz - tree.z;
+        struck =
+          ddx * ddx + ddz * ddz <= tr * tr &&
+          cySeg >= tree.groundY &&
+          cySeg <= tree.groundY + TREE_TRUNK_HEIGHT;
+      }
+    }
+    if (struck) return true;
+  }
+  return false;
+}
+/**
  * True when the whole flight `start` + `velocity` under `gravity` for
  * `duration` seconds avoids every standing tree. Samples the analytic arc
  * every `CANOPY_SAMPLE_STEP` world units (plus the endpoint), testing short
@@ -453,7 +537,7 @@ export function flightClearsTrees(
   let prev = { ...start };
   for (let s = 1; s <= steps; s++) {
     const p = ballisticPosition(start, velocity, (duration * s) / steps, gravity);
-    if (treesOnSegment(prev, p, trees).length > 0) return false;
+    if (treesIntersectSegment(prev, p, trees)) return false;
     prev = p;
   }
   return true;

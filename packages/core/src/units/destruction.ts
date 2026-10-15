@@ -566,6 +566,15 @@ export function craterDepthAt(craters: readonly Crater[], x: number, z: number):
     const dx = x - c.x;
     const dz = z - c.z;
     const skew = c.skew ?? 0;
+    if (skew > 0) {
+      // Wash stretches the bowl downhill by at most 1/(1-skew) (see
+      // `effectiveBlastDist`), so anything past radius·(1+skew) is past the
+      // rim (t ≥ 1 → falloff 0) without needing the sqrt below.
+      const bound = c.radius * (1 + skew);
+      if (dx * dx + dz * dz >= bound * bound) continue;
+    } else if (dx * dx + dz * dz >= c.radius * c.radius) {
+      continue;
+    }
     const t =
       skew > 0
         ? effectiveBlastDist(dx, dz, { sx: c.sx ?? 0, sz: c.sz ?? 0, skew }) / c.radius

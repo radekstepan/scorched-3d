@@ -114,8 +114,25 @@ describe("HealthBars", () => {
     bars.dispose();
   });
 
-  it("hides bars past the roster and disposes cleanly", () => {
-    const scene = new THREE.Scene();
+  it("skips re-seating while toggled off (same hidden result, no transform churn)", () => {
+    // Hot-loop sweep: the hidden path used to re-seat + billboard every bar
+    // per tick before hiding it. Bars now hide up front and hold their pose.
+    const { bars, camera } = makeBars(1);
+    const [body] = bodies(1, 12);
+    bars.update(source([0]), [body!], camera);
+    const bar = bars.group.children[0]!;
+    const y = bar.position.y;
+    expect(y).toBe(12 + HEALTH_BAR_LIFT);
+    bars.setVisible(false);
+    body!.position.set(999, 888, 777);
+    bars.update(source([0]), [body!], camera);
+    expect(bars.isShown(0)).toBe(false);
+    expect(bar.position.y).toBe(y);
+    expect(bar.position.x).not.toBe(999);
+    bars.dispose();
+  });
+
+  it("hides bars past the roster and disposes cleanly", () => {    const scene = new THREE.Scene();
     const bars = new HealthBars(scene, 2);
     const camera = new THREE.PerspectiveCamera();
     bars.update(source([0]), bodies(1), camera);

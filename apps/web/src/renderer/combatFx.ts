@@ -291,6 +291,12 @@ const HALO_PEAK = 0.4;
 const UP = new THREE.Vector3(0, 1, 0);
 /** Scratch yaw quaternion for scorch instance orientation (no per-mark alloc). */
 const _yawQuat = new THREE.Quaternion();
+/** Scratch shot velocity for per-tick orientation (no per-shot alloc). */
+const _shotVel = new THREE.Vector3();
+/** Scratch impact point for shot resolution (consumed synchronously). */
+const _shotAt = new THREE.Vector3();
+/** Scratch look target for bolt orientation (no per-shot clone). */
+const _shotLook = new THREE.Vector3();
 
 /** Muzzle world position for a unit body at `pos` yawed by `rotationY`. */
 export function muzzlePoint(
@@ -454,6 +460,8 @@ export class CombatFx {
   onUnitStunned: ((index: number, damageAdd: number) => void) | null = null;
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
+  /** Reused husk-decay fractions for `poseHusks` (no per-tick array). */
+  private huskDecayCache: number[] = [];
   /** Deterministic clock for damage smoke/ember phase (no rng per frame). */
   private elapsed = 0;
   private env: CombatEnv | null;
@@ -1046,7 +1054,11 @@ export class CombatFx {
    */
   private poseHusks(): number[] {
     const bodies = this.units.children;
-    const decay: number[] = new Array<number>(bodies.length).fill(0);
+    // Reuse the decay scratch (resized + zeroed, never reallocated in the
+    // steady state): the caller consumes it synchronously in `update`.
+    const decay = this.huskDecayCache;
+    decay.length = bodies.length;
+    decay.fill(0);
     for (let i = 0; i < bodies.length; i++) {
       if (!this.destroyed[i]) continue;
       const d = huskDecay(this.huskAgeAt(i));
@@ -1603,8 +1615,9 @@ export class CombatFx {
   }
 
   private advanceShots(dt: number): void {
+    // No rounds in flight: skip the stands fetch + scratch work entirely.
+    if (this.shots.length === 0) return;
     const done: Shot[] = [];
-    const vel = new THREE.Vector3();
     const stands = this.env?.treeStands?.() ?? null;
     for (const shot of this.shots) {
       shot.age += dt;
@@ -1635,7 +1648,8 @@ export class CombatFx {
         const crossed = treesOnSegment(q, p, stands);
         const stuckFid = crossed.length > 0 ? rollTreeStick(crossed, shot.kind, this.rng) : -1;
         if (stuckFid >= 0) {
-          const at = new THREE.Vector3(p.x, p.y, p.z);
+          _shotAt.set(p.x, p.y, p.z);
+          const at = _shotAt;
           const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
           this.scene.remove(shot.mesh);
           (shot.mesh.material as THREE.Material).dispose();
@@ -1661,14 +1675,16 @@ export class CombatFx {
         t,
         shot.gravity,
       );
-      vel.set(v.x, v.y, v.z);
-      if (vel.lengthSq() > 1e-6) {
-        shot.mesh.lookAt(shot.mesh.position.clone().add(vel));
+      _shotVel.set(v.x, v.y, v.z);
+      if (_shotVel.lengthSq() > 1e-6) {
+        _shotLook.copy(shot.mesh.position).add(_shotVel);
+        shot.mesh.lookAt(_shotLook);
       }
       if (shot.age >= shot.dur) done.push(shot);
     }
     for (const shot of done) {
-      const at = shot.mesh.position.clone();
+      _shotAt.copy(shot.mesh.position);
+      const at = _shotAt;
       const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
       this.scene.remove(shot.mesh);
       (shot.mesh.material as THREE.Material).dispose();

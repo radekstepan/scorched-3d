@@ -295,6 +295,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         glowFire(fid);
       }
       for (const i of rockChanged) poseRock(i);
+      if (treeRes.flattened.length > 0) dirtyStands();
     };
     // Shallow visual crater per impact (≤0.6 height units each, oldest evicted
     // with the scorch cap so the bowl count never grows unbounded). On graded
@@ -321,6 +322,17 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           standing: state === "intact" || state === "burning" || state === "smouldering",
         };
       });
+    // Per-tick stands snapshot, shared by the occlusion x-ray and the
+    // combat tree-interception rolls: one `liveStands()` build per tick
+    // (N groundY probes, one per tree) instead of one per reader per tick.
+    // Mutators that flip `standing` mid-tick (blast flattens, hull crushes)
+    // dirty it so later readers in the same tick still see live wood;
+    // ignitions never dirty it (burning still stands, heights unchanged).
+    let standsCache: TreeStand[] | null = null;
+    const getStands = (): TreeStand[] => (standsCache ??= liveStands());
+    const dirtyStands = (): void => {
+      standsCache = null;
+    };
     const combat = new CombatFx(scene, units, Math.random, {
       groundY,
       slopeAt: (x, z) => blastSlopeAt(map, x, z),
@@ -332,7 +344,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // no crown left to catch — only standing trees intercept. The same
       // stands feed the occlusion x-ray below, so view-blocking wood and
       // round-blocking wood can never disagree.
-      treeStands: liveStands,
+      treeStands: getStands,
       strikeTree: (fid: number) => {
         if (igniteTree(damage, fid)) {
           poseTree(fid);
@@ -359,6 +371,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           poseTree(fid);
           fallen.add(fid);
         }
+        if (fids.length > 0) dirtyStands();
       },
     });
     combat.setExternalHull(true);
@@ -682,6 +695,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = clock.elapsedTime;
       const opt = optsRef.current;
+      // Fresh stands snapshot for this tick (built lazily on first read,
+      // shared by occlusion + combat — see `getStands`).
+      standsCache = null;
 
       if (opt.exaggeration !== lastExag) {
         // Keep the view geometry while the terrain re-snaps: shift camera and
@@ -757,7 +773,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       waypoints.update(movement, units.children.length, t);
       health.setVisible(opt.showHealth);
       health.update(combat, units.children, camera);
-      occlusion.update(camera.position, units.children, { groundY, stands: liveStands() }, combat);
+      occlusion.update(camera.position, units.children, { groundY, stands: getStands() }, combat);
       combat.update(dt);
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
@@ -772,6 +788,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         poseTree(r.index);
         fallen.add(r.index);
       }
+      if (dmgEv.resolved.length > 0) dirtyStands();
       for (const fid of dmgEv.decayed) {
         poseTree(fid);
         fallen.delete(fid);
