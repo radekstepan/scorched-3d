@@ -6,7 +6,6 @@ import {
   MINIMAP_SELECTED_GLOW,
   MINIMAP_SELECTED_OUTLINE,
   SCORCH_RENDER_ORDER,
-  SELECTION_BODY_GLOW,
   SELECTION_CHEVRON_HEIGHT,
   SELECTION_CORE,
   SELECTION_OUTER,
@@ -26,6 +25,7 @@ import {
   updateSelectionMarker,
 } from "./selectionFx";
 import { boxSelect, clickSelect } from "./selection";
+import { applyUnitDamageTint } from "./unitDamageFx";
 
 /** Darkest scorch on the field: hammer impacts at intensity 0.8. */
 const SCORCH_DARKEST = rgbToHex(scorchToneRGB(0.8));
@@ -181,8 +181,8 @@ describe("selection-state to style mapping (single, toggle, box multi)", () => {
   });
 });
 
-describe("hull emissive lift", () => {
-  it("lifts Lambert hulls while selected and restores on deselect", () => {
+describe("hull paint preserved (highlight never tints the hull blue)", () => {
+  it("setBodyHighlight touches neither hull color nor emissive, pristine or charred", () => {
     const body = new THREE.Group();
     const hull = new THREE.Mesh(
       new THREE.BoxGeometry(4, 2, 3),
@@ -191,14 +191,37 @@ describe("hull emissive lift", () => {
     body.add(hull);
     const marker = buildSelectionMarker();
     body.add(marker);
-    setBodyHighlight(body, true);
-    expect((hull.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(
-      SELECTION_BODY_GLOW,
-    );
-    // The marker's own Basic materials have no emissive channel to corrupt.
-    setBodyHighlight(body, false);
-    expect((hull.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(0x000000);
-    disposeSelectionAssets();
+    try {
+      const mat = hull.material as THREE.MeshLambertMaterial;
+      const pristineColor = mat.color.getHex();
+      const pristineEmissive = mat.emissive.getHex();
+      setBodyHighlight(body, true);
+      expect(mat.color.getHex()).toBe(pristineColor);
+      expect(mat.emissive.getHex()).toBe(pristineEmissive);
+      // Charred hulls keep their charring under highlight too.
+      applyUnitDamageTint(body, 0.8);
+      const charred = mat.color.getHex();
+      expect(charred).not.toBe(pristineColor);
+      setBodyHighlight(body, true);
+      expect(mat.color.getHex()).toBe(charred);
+      expect(mat.emissive.getHex()).toBe(pristineEmissive);
+      setBodyHighlight(body, false);
+      expect(mat.color.getHex()).toBe(charred);
+      expect(mat.emissive.getHex()).toBe(pristineEmissive);
+    } finally {
+      disposeSelectionAssets();
+    }
+  });
+
+  it("selection markers stay tagged so damage charring skips them", () => {
+    const marker = buildSelectionMarker();
+    try {
+      for (const name of ["select-outer", "select-core", "select-chevron"]) {
+        expect(marker.getObjectByName(name)!.userData.noHighlight).toBe(true);
+      }
+    } finally {
+      disposeSelectionAssets();
+    }
   });
 });
 

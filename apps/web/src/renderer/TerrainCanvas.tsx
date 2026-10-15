@@ -76,7 +76,6 @@ import {
   buildSelectionMarker,
   disposeSelectionAssets,
   markerVisibility,
-  setBodyHighlight,
   updateSelectionMarker,
 } from "./selectionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
@@ -361,10 +360,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     health.setVisible(optsRef.current.showHealth);
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
-    // spinning/bobbing chevron beacon above the hull, with a subtle hull
-    // emissive lift (see selectionFx for the contrast policy: the old amber
-    // ring was hue-camouflaged among amber fire on ember-brown scorch, went
-    // edge-on at glancing angles, and hid under smoke/toppled trunks). The
+    // spinning/bobbing chevron beacon above the hull (see selectionFx for
+    // the contrast policy: the old amber ring was hue-camouflaged among
+    // amber fire on ember-brown scorch, went edge-on at glancing angles, and
+    // hid under smoke/toppled trunks). The hull itself is never tinted — it
+    // keeps its normal paint including damage charring, so a highlighted
+    // unit never runs blue; the ring + beacon (+ minimap dot) carry the
+    // signal alone. The
     // marker is a child of the body group so it rides motion and
     // exaggeration re-snaps for free; rings/beacon ignore depth and composite
     // above the scorch layer. Shared geometries/materials, one set per
@@ -385,7 +387,6 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       units.children.forEach((child, i) => {
         const marker = child.getObjectByName("select-marker");
         if (marker) marker.visible = vis[i] ?? false;
-        setBodyHighlight(child, vis[i] ?? false);
       });
       selectionRef.current?.([...selection]);
     };

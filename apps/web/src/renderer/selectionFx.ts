@@ -17,8 +17,11 @@ import { scorchDisplayRGB } from "@scorched-3d/core";
  * on every dark ground, cyan is hue-opposite to ember orange so it survives
  * fire glow and is blue/orange-separable for most color-vision deficiency),
  * a slow pulse + spinning/bobbing chevron beacon above the hull (visible at
- * glancing angles and through smoke), depth-test-off compositing above the
- * scorch layer, and a subtle hull emissive lift. Shared geometries/materials
+ * glancing angles and through smoke), and depth-test-off compositing above
+ * the scorch layer. The hull itself is never tinted: it keeps its normal
+ * paint, including progressive damage charring, so a highlighted unit never
+ * runs blue — selection reads from the ring + beacon (+ minimap dot) alone.
+ * Shared geometries/materials
  * (one set per canvas, no per-frame allocations); the tick only mutates
  * scale/rotation/position of visible markers.
  *
@@ -38,8 +41,6 @@ export const SELECTION_PULSE_AMP = 0.07;
 export const SELECTION_RENDER_ORDER = 10;
 /** Scorch decal render order in `CombatFx` (kept in sync by test). */
 export const SCORCH_RENDER_ORDER = 2;
-/** Hull emissive lift while selected (subtle cyan-black, Lambert only). */
-export const SELECTION_BODY_GLOW = 0x0a3540;
 /** Chevron rest height above the body origin (clears the commander antenna). */
 export const SELECTION_CHEVRON_HEIGHT = 52;
 /** Chevron bob amplitude. */
@@ -202,8 +203,8 @@ export function disposeSelectionAssets(): void {
  * Build one selection marker: white outer halo + cyan core ground rings and
  * a spinning/bobbing chevron beacon above the hull. Starts hidden; the body
  * group owns it so it rides patrol/order motion and exaggeration re-snaps
- * for free. Marker meshes carry `userData.noHighlight` so the hull emissive
- * lift never touches them.
+ * for free. Marker meshes carry `userData.noHighlight` so damage charring
+ * (`applyUnitDamageTint`) never touches them.
  */
 export function buildSelectionMarker(): THREE.Group {
   const assets = getSelectionAssets();
@@ -252,17 +253,13 @@ export function updateSelectionMarker(marker: THREE.Group, t: number, selected: 
 }
 
 /**
- * Subtle hull emissive lift while selected (Lambert bodies only; marker
- * meshes and anything without an emissive channel are skipped). Mutates in
- * place — no allocations — and restores clean black on deselect.
+ * Selection highlight entry point. Intentionally a no-op for the hull:
+ * highlight is conveyed by the ring/beacon marker (plus the minimap dot)
+ * only, so the hull keeps its normal paint — including damage charring — and
+ * a highlighted unit never runs blue. Kept as a named function (rather than
+ * deleting it) so call sites and tests pin the no-tint policy instead of
+ * drifting back to emissive tricks.
  */
-export function setBodyHighlight(body: THREE.Object3D, on: boolean): void {
-  body.traverse((child) => {
-    if (child.userData.noHighlight) return;
-    const mesh = child as THREE.Mesh;
-    const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
-    if (mat && "emissive" in mat) {
-      mat.emissive.setHex(on ? SELECTION_BODY_GLOW : 0x000000);
-    }
-  });
+export function setBodyHighlight(_body: THREE.Object3D, _on: boolean): void {
+  // No hull mutation by design (see above).
 }
