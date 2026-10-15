@@ -3,6 +3,8 @@ import { mulberry32 } from "../terrain/noise.js";
 import {
   ballisticPosition,
   ballisticVelocity,
+  barrelSegment,
+  BARREL_MOUNT,
   clampElevation,
   ELEVATION_MAX,
   ELEVATION_MIN,
@@ -30,6 +32,7 @@ import {
   solveShotClearing,
   treesOnSegment,
   treeStickChance,
+  trunksOnBarrel,
   type TreeStand,
   WEAPON_PROFILES,
 } from "./combat.js";
@@ -396,5 +399,93 @@ describe("tree interception", () => {
     expect(rollTreeStick([], "flash", rng)).toBe(-1);
     // A roll above the chance flies on through every tree.
     expect(rollTreeStick([1, 2], "flash", () => 0.999)).toBe(-1);
+  });
+});
+
+describe("barrelSegment", () => {
+  it("throws the tube forward from the mount pivot (flash, flat, facing +Z)", () => {
+    const mount = BARREL_MOUNT.flash!;
+    const seg = barrelSegment({ x: 0, y: 100, z: 0 }, 0, 0, 0, "flash")!;
+    // Pivot rides 3 ahead of the hull center at pivot height.
+    expect(seg.a.x).toBeCloseTo(0, 9);
+    expect(seg.a.y).toBeCloseTo(100 + mount.pivotY, 9);
+    expect(seg.a.z).toBeCloseTo(mount.pivotZ, 9);
+    // Flat tube: tip one tube length further along +Z at pivot height.
+    expect(seg.b.x).toBeCloseTo(0, 9);
+    expect(seg.b.y).toBeCloseTo(100 + mount.pivotY, 9);
+    expect(seg.b.z).toBeCloseTo(mount.pivotZ + mount.length, 9);
+  });
+
+  it("follows hull + turret yaw and climbs with elevation", () => {
+    const mount = BARREL_MOUNT.stump!;
+    // Hull east (+X), turret back west-relative: absolute faces +X.
+    const seg = barrelSegment({ x: 10, y: 50, z: -20 }, Math.PI / 2, 0, 0.5, "stump")!;
+    const horizontal = Math.cos(0.5) * mount.length;
+    expect(seg.b.x - seg.a.x).toBeCloseTo(horizontal, 9);
+    expect(seg.b.z - seg.a.z).toBeCloseTo(0, 9);
+    expect(seg.b.y - seg.a.y).toBeCloseTo(Math.sin(0.5) * mount.length, 9);
+  });
+
+  it("returns null for the commander (no tube to clip)", () => {
+    expect(barrelSegment({ x: 0, y: 0, z: 0 }, 0, 0, 0, "commander")).toBeNull();
+  });
+});
+
+describe("trunksOnBarrel", () => {
+  // Hull ground anchor at y=100; flash tube rides ~109.5 flat down +Z.
+  const hull = { x: 0, y: 100, z: 0 };
+  const segOf = (kind: "flash" | "hammer" = "flash", elev = 0) =>
+    barrelSegment(hull, 0, 0, elev, kind)!;
+  const tree = (x: number, z: number, standing = true): TreeStand => ({
+    x,
+    z,
+    groundY: 100,
+    standing,
+  });
+
+  it("flags a bole on the tube line inside trunk + tube radius", () => {
+    const seg = segOf();
+    // On the line, mid-tube.
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(0, 10)])).toEqual([0]);
+    // 5 aside still grazes (trunk 4 + tube 2 = 6).
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(5, 10)])).toEqual([0]);
+    // 7 aside clears.
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(7, 10)])).toEqual([]);
+    // Past the tip clears.
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(0, 40)])).toEqual([]);
+  });
+
+  it("ignores felled trees (no bole left to hit)", () => {
+    const seg = segOf();
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(0, 10, false)])).toEqual([]);
+  });
+
+  it("ignores crowns (tube past the bole but under the canopy)", () => {
+    const seg = segOf();
+    // 6.5 aside: outside the 6 bole radius, but inside the crown sphere
+    // (center +24, r16: dy 14.5 leaves 6.8 of XZ reach) — leaves may brush,
+    // wood must not count.
+    expect(trunksOnBarrel(seg.a, seg.b, [tree(6.5, 10)])).toEqual([]);
+  });
+
+  it("clears a lobbed barrel climbing over the bole", () => {
+    // Hammer at near-vertical elevation: the tube climbs ~31 over ~4 of
+    // horizontal reach, so a bole 5 aside is never within tube distance
+    // at bole height — while the flat tube at the same spot clips.
+    const flat = segOf("hammer", 0);
+    expect(trunksOnBarrel(flat.a, flat.b, [tree(5, 12)])).toEqual([0]);
+    const lobbed = segOf("hammer", 1.45);
+    expect(trunksOnBarrel(lobbed.a, lobbed.b, [tree(5, 12)])).toEqual([]);
+  });
+
+  it("lists hits in ascending order", () => {
+    const seg = segOf("hammer", 0);
+    const trees = [tree(0, 40), tree(0, 8), tree(50, 50), tree(0, 20)];
+    expect(trunksOnBarrel(seg.a, seg.b, trees)).toEqual([1, 3]);
+  });
+
+  it("costs nothing on open ground", () => {
+    const seg = segOf();
+    expect(trunksOnBarrel(seg.a, seg.b, [])).toEqual([]);
   });
 });

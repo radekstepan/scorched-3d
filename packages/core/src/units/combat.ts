@@ -644,3 +644,118 @@ export function rollTreeStick(
   }
   return -1;
 }
+
+/**
+ * Gun-tube collision with standing trunks. A traversing turret sweeps a
+ * 14–32-unit tube well outside the hull-flank trunk keepout (11–14), so the
+ * hull can stand clear of the wood while its cannon passes straight through
+ * a bole — the clip this section fixes. The fix treats the tube as part of
+ * the vehicle (the task's bounding-box hint: the hull footprint plus the
+ * gun tube is the vehicle's full size for collision) and resolves contact
+ * the same way hull drives do — the wood falls (`crushTree`), never the
+ * barrel: traverse and fire stay sane, forests near parked guns thin the
+ * way crushed lanes do. Crowns are deliberately ignored (a tube brushing
+ * leaves reads fine; a tube through a bole does not), as are felled trees
+ * (flat wood has no bole left to hit) and the commander (no tube — its
+ * torso turns inside the hull keepout).
+ */
+
+/** Gun-tube radius, world units (tube 1.2–1.8 plus margin, so paint never touches bark). */
+export const BARREL_TUBE_RADIUS = 2;
+
+/**
+ * Gun-tube mount per tank kind: pivot height above the hull ground anchor
+ * and fore/aft offset in the turret frame, plus tube length. Matches the
+ * web `units.ts` build poses (flash pivot (0, 9.5, 3) + 14 tube, stump
+ * (0, 12.5, 4) + 22, hammer (0, 13, 0) + 32). Null for the commander.
+ */
+export const BARREL_MOUNT: Record<
+  UnitKind,
+  { pivotY: number; pivotZ: number; length: number } | null
+> = {
+  flash: { pivotY: 9.5, pivotZ: 3, length: 14 },
+  stump: { pivotY: 12.5, pivotZ: 4, length: 22 },
+  hammer: { pivotY: 13, pivotZ: 0, length: 32 },
+  commander: null,
+};
+
+/** World-space gun-tube segment ends (pivot `a`, tip `b`). */
+export interface BarrelSegment {
+  a: CombatVec3;
+  b: CombatVec3;
+}
+
+/**
+ * World-space gun-tube segment for a hull at `hull` (ground-anchor position)
+ * with `hullYaw` + `turretRel` aim and `elevation` barrel pitch. Null for
+ * kinds without a tube (commander). Pure, so the renderer and vitest share
+ * the exact segment the pose draws.
+ */
+export function barrelSegment(
+  hull: CombatVec3,
+  hullYaw: number,
+  turretRel: number,
+  elevation: number,
+  kind: UnitKind,
+): BarrelSegment | null {
+  const mount = BARREL_MOUNT[kind];
+  if (!mount) return null;
+  const abs = hullYaw + turretRel;
+  const sy = Math.sin(abs);
+  const cy = Math.cos(abs);
+  // Pivot rides the turret (turret group sits at the hull center).
+  const ax = hull.x + sy * mount.pivotZ;
+  const ay = hull.y + mount.pivotY;
+  const az = hull.z + cy * mount.pivotZ;
+  const ce = Math.cos(elevation);
+  const se = Math.sin(elevation);
+  return {
+    a: { x: ax, y: ay, z: az },
+    b: {
+      x: ax + sy * ce * mount.length,
+      y: ay + se * mount.length,
+      z: az + cy * ce * mount.length,
+    },
+  };
+}
+
+/**
+ * True when the gun-tube segment `a`→`b` enters a standing tree's bole: the
+ * XZ approach closes within trunk + tube radius while the tube height
+ * overlaps the bole (`groundY`..`groundY + TREE_TRUNK_HEIGHT`). A lobbed
+ * barrel climbing over the bole clears honestly — height is tested at the
+ * closest approach, not at the endpoints. Non-standing trees never hit.
+ */
+export function barrelTouchesTrunk(a: CombatVec3, b: CombatVec3, tree: TreeStand): boolean {
+  if (!tree.standing) return false;
+  const abx = b.x - a.x;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + abz * abz;
+  let t = 0;
+  if (len2 > 1e-9) {
+    t = Math.min(Math.max(((tree.x - a.x) * abx + (tree.z - a.z) * abz) / len2, 0), 1);
+  }
+  const cx = a.x + abx * t - tree.x;
+  const cz = a.z + abz * t - tree.z;
+  const r = TREE_TRUNK_RADIUS + BARREL_TUBE_RADIUS;
+  if (cx * cx + cz * cz > r * r) return false;
+  const y = a.y + (b.y - a.y) * t;
+  return y >= tree.groundY && y <= tree.groundY + TREE_TRUNK_HEIGHT;
+}
+
+/**
+ * Standing-tree ids whose bole the gun-tube segment `a`→`b` enters, in
+ * ascending (deterministic) order for the caller's fell pass. Empty without
+ * trees, so open-ground ticks cost one length check.
+ */
+export function trunksOnBarrel(
+  a: CombatVec3,
+  b: CombatVec3,
+  trees: readonly TreeStand[],
+): number[] {
+  const hit: number[] = [];
+  for (let i = 0; i < trees.length; i++) {
+    if (barrelTouchesTrunk(a, b, trees[i]!)) hit.push(i);
+  }
+  return hit;
+}

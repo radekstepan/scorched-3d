@@ -6,6 +6,7 @@ import {
   applyBlastToUnits,
   ballisticPosition,
   ballisticVelocity,
+  barrelSegment,
   BLAST_RADIUS,
   type BlastSlope,
   canFire,
@@ -40,6 +41,7 @@ import {
   stepAngle,
   THREAT_ENGAGE_RADIUS,
   treesOnSegment,
+  trunksOnBarrel,
   TURRET_SLEW_RATE,
   wrapAngle,
   yawToTarget,
@@ -51,7 +53,7 @@ import {
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
-import { muzzleWorld, getTurret, setBarrelElevation, setUnitAim } from "./units";
+import { muzzleWorld, getTurret, barrelElevation, setBarrelElevation, setUnitAim } from "./units";
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 
@@ -438,6 +440,13 @@ export interface CombatEnv {
    * through `blastFeatures`, so this mostly serves stuck bolt embers).
    */
   strikeTree?: (fid: number) => void;
+  /**
+   * A gun tube swept into standing tree `fid`: the canvas fells that tree
+   * through `crushTree` (the hull-crush parallel — the tube is part of the
+   * vehicle for collision, so contact knocks the bole flat instead of
+   * letting the cannon clip through it). Absent, barrels never fell.
+   */
+  fellTree?: (fid: number) => void;
 }
 
 export class CombatFx {
@@ -820,6 +829,11 @@ export class CombatFx {
     this.ensureDamage();
     this.elapsed += dt;
     this.slewPending(dt);
+    // Gun tubes knock down what they touch: a traversing turret sweeps its
+    // barrel outside the hull trunk keepout, so without this the cannon
+    // would rest inside a bole. Felled before the firing solution runs, the
+    // muzzle can never start inside wood it just entered.
+    this.crushBarrels();
     this.timer -= dt;
     if (this.timer <= 0) {
       if (this.tryFire()) {
@@ -1372,6 +1386,41 @@ export class CombatFx {
         pose.turret = next.turret;
       }
       setUnitAim(body, pose.hull, pose.turret);
+    }
+  }
+
+  /**
+   * Fell the standing trunks the gun tubes currently touch. The tube is part
+   * of the vehicle for collision (hull footprint + barrel = full size), and
+   * contact resolves the hull-crush way — the bole falls via the
+   * `fellTree` hook, the barrel never clips through it. Wrecks (turrets
+   * popped or slumped) and tube-less kinds never fell; without stands or the
+   * hook this is a no-op, so headless history without trees is untouched.
+   */
+  private crushBarrels(): void {
+    const env = this.env;
+    const fellTree = env?.fellTree;
+    if (!env || !fellTree) return;
+    const stands = env.treeStands?.() ?? [];
+    if (stands.length === 0) return;
+    const bodies = this.units.children as THREE.Group[];
+    for (let i = 0; i < bodies.length; i++) {
+      if (this.destroyed[i]) continue;
+      const kind = this.unitKind(i);
+      if (!kind) continue;
+      const pose = this.aim[i];
+      const body = bodies[i];
+      if (!pose || !body) continue;
+      const seg = barrelSegment(
+        { x: body.position.x, y: body.position.y, z: body.position.z },
+        pose.hull,
+        pose.turret,
+        barrelElevation(body),
+        kind,
+      );
+      if (!seg) continue;
+      const fids = trunksOnBarrel(seg.a, seg.b, stands);
+      for (const fid of fids) fellTree(fid);
     }
   }
 

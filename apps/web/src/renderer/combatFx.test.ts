@@ -1227,6 +1227,92 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
   });
 });
 
+describe("CombatFx barrel crush (tubes knock down what they touch)", () => {
+  /** One stump at the origin facing +Z (tube z 4..26 at y ~112.5). */
+  function makeParkedStump(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "stump", cellX: 1, cellZ: 1, rotation: 0 }];
+    const body = new THREE.Group();
+    body.position.set(0, 100, 0);
+    body.rotation.y = 0;
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+    return group;
+  }
+
+  it("fells a standing trunk the tube rests in (no clip left behind)", () => {
+    const scene = new THREE.Scene();
+    const units = makeParkedStump();
+    const felled: number[] = [];
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      treeStands: () => [{ x: 0, z: 15, groundY: 100, standing: true }],
+      fellTree: (fid: number) => {
+        felled.push(fid);
+      },
+    });
+    for (let n = 0; n < 3; n++) fx.update(1 / 60);
+    // The parked tube overlaps the bole from the first tick — every report
+    // names that tree (the canvas-side crush is idempotent past the fell).
+    expect(felled.length).toBeGreaterThan(0);
+    for (const fid of felled) expect(fid).toBe(0);
+    fx.dispose();
+  });
+
+  it("leaves open ground, felled wood, and crowns alone", () => {
+    const scene = new THREE.Scene();
+    const units = makeParkedStump();
+    const felled: number[] = [];
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      treeStands: () => [
+        // Far from the tube.
+        { x: 60, z: 60, groundY: 100, standing: true },
+        // On the tube line but already flat (no bole left to hit).
+        { x: 0, z: 15, groundY: 100, standing: false },
+        // 6.5 aside: outside the bole + tube radius, under the canopy only.
+        { x: 6.5, z: 15, groundY: 100, standing: true },
+      ],
+      fellTree: (fid: number) => {
+        felled.push(fid);
+      },
+    });
+    for (let n = 0; n < 60; n++) fx.update(1 / 60);
+    expect(felled).toEqual([]);
+    fx.dispose();
+  });
+
+  it("never fells for tube-less kinds (commander torso turns in place)", () => {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "commander", cellX: 1, cellZ: 1, rotation: 0 }];
+    const body = new THREE.Group();
+    body.position.set(0, 100, 0);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+    const felled: number[] = [];
+    const fx = new CombatFx(scene, group, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      treeStands: () => [{ x: 0, z: 8, groundY: 100, standing: true }],
+      fellTree: (fid: number) => {
+        felled.push(fid);
+      },
+    });
+    for (let n = 0; n < 60; n++) fx.update(1 / 60);
+    expect(felled).toEqual([]);
+    fx.dispose();
+  });
+});
+
 describe("CombatFx exploded husks", () => {
   function primeDamage(fx: CombatFx, index: number, value: number): void {
     (fx as unknown as { damage: number[] }).damage[index] = value;

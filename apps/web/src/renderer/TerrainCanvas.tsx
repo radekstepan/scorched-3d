@@ -8,6 +8,7 @@ import {
   CELL_PIXELS,
   createDamageField,
   craterDepthAt,
+  crushTree,
   FEATURE_EMPTY,
   FEATURE_FRINGE,
   composeAlbedo,
@@ -349,6 +350,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         if (igniteTree(damage, fid)) {
           poseTree(fid);
           glowFire(fid);
+        }
+      },
+      // Gun-tube crush: a traversing cannon that touches a standing bole
+      // knocks it flat (the hull-crush parallel) instead of clipping
+      // through it. Same fell/pose/decay path as hull crush and blasts.
+      fellTree: (fid: number) => {
+        if (crushTree(damage, fid)) {
+          poseTree(fid);
+          fallen.add(fid);
+          dirtyStands();
         }
       },
     });
