@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } 
 import {
   APP_NAME,
   CELL_PIXELS,
+  DEFAULT_EXAGGERATION,
   PRESET_META,
   TEAM_DEFS,
   TILE_PIXELS,
@@ -43,7 +44,7 @@ export default function App() {
   // preserves yaw/pitch/zoom (only the orbit target translates).
   const [jump, setJump] = useState<{ x: number; z: number; seq: number } | null>(null);
   const [options, setOptions] = useState<ViewOptions>({
-    exaggeration: 2.0,
+    exaggeration: DEFAULT_EXAGGERATION,
     showWater: true,
     showFeatures: true,
     showWire: false,

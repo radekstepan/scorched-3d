@@ -125,3 +125,10 @@ export interface ViewOptions {
   /** Scroll-wheel zoom multiplier (1 = default). */
   zoomSpeed: number;
 }
+
+/**
+ * Default render-time height exaggeration (height-scale slider start).
+ * 3.0x = 1.5x the previous 2.0x default for more dramatic relief; the
+ * slider range (1–6) is unchanged so users can still dial it back.
+ */
+export const DEFAULT_EXAGGERATION = 3.0;
