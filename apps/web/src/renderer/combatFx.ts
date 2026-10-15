@@ -14,6 +14,7 @@ import {
   clampTurret,
   craterDepthForIntensity,
   createUnitDamage,
+  disperseAim,
   GRAVITY,
   huskDecay,
   huskSink,
@@ -412,15 +413,18 @@ export function muzzlePoint(
   };
 }
 
-/** Impact point: just above the target hull with a small random scatter. */
+/** Impact point: the distance-scattered aim around the target hull, lifted slightly. */
 export function impactPoint(
   pos: { x: number; y: number; z: number },
   rng: () => number,
+  kind: UnitKind,
+  distance: number,
 ): { x: number; y: number; z: number } {
+  const aim = disperseAim({ x: pos.x, y: pos.y, z: pos.z }, kind, distance, rng);
   return {
-    x: pos.x + (rng() - 0.5) * 22,
+    x: aim.x,
     y: pos.y + 6 + rng() * 8,
-    z: pos.z + (rng() - 0.5) * 22,
+    z: aim.z,
   };
 }
 
@@ -1643,6 +1647,17 @@ export class CombatFx {
     return pairs[Math.floor(this.rng() * pairs.length)] ?? null;
   }
 
+  /** Muzzle-to-mark distance for aim scatter: the same flat-math seed the launch path aims from. */
+  private muzzleToTarget(
+    attacker: THREE.Group,
+    pose: { hull: number; turret: number },
+    kind: UnitKind,
+    mark: { x: number; y: number; z: number },
+  ): number {
+    const muzzle = muzzlePoint(attacker.position, muzzleYaw(pose.hull, pose.turret), kind);
+    return Math.hypot(mark.x - muzzle.x, mark.y - muzzle.y, mark.z - muzzle.z);
+  }
+
   /** Fire a hull-vs-hull volley through the shared launch path. */
   private fireAtUnit(attackerIdx: number, targetIdx: number): boolean {
     const attacker = this.units.children[attackerIdx] as THREE.Group | undefined;
@@ -1653,7 +1668,14 @@ export class CombatFx {
     this.pending.set(attackerIdx, targetIdx);
     const want = this.bearing(attackerIdx, targetIdx);
     if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
-    return this.launchShot(attackerIdx, attacker, kind, pose, impactPoint(target.position, this.rng), targetIdx);
+    return this.launchShot(
+      attackerIdx,
+      attacker,
+      kind,
+      pose,
+      impactPoint(target.position, this.rng, kind, this.muzzleToTarget(attacker, pose, kind, target.position)),
+      targetIdx,
+    );
   }
 
   /** Fire a hull-vs-HQ volley through the shared launch path. */
@@ -1673,7 +1695,7 @@ export class CombatFx {
       attacker,
       kind,
       pose,
-      impactPoint({ x: hq.x, y: hq.y, z: hq.z }, this.rng),
+      impactPoint({ x: hq.x, y: hq.y, z: hq.z }, this.rng, kind, this.muzzleToTarget(attacker, pose, kind, hq)),
       -1,
     );
   }

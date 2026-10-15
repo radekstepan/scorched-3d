@@ -127,14 +127,36 @@ describe("muzzlePoint", () => {
 });
 
 describe("impactPoint", () => {
-  it("lands near the target hull, slightly above it", () => {
+  it("lands dead-on at close range, slightly above the hull", () => {
     const rng = mulberry32(11);
     for (let n = 0; n < 50; n++) {
-      const p = impactPoint({ x: 500, y: 120, z: 300 }, rng);
-      expect(Math.abs(p.x - 500)).toBeLessThanOrEqual(11);
-      expect(Math.abs(p.z - 300)).toBeLessThanOrEqual(11);
+      const p = impactPoint({ x: 500, y: 120, z: 300 }, rng, "hammer", 50);
+      expect(p.x).toBe(500);
+      expect(p.z).toBe(300);
       expect(p.y).toBeGreaterThan(120);
     }
+  });
+
+  it("scatters around the mark at range, bounded and worse for artillery", () => {
+    const mark = { x: 500, y: 120, z: 300 };
+    const shell = mulberry32(11);
+    let shellMax = 0;
+    for (let n = 0; n < 200; n++) {
+      const p = impactPoint(mark, shell, "hammer", 900);
+      shellMax = Math.max(shellMax, Math.hypot(p.x - mark.x, p.z - mark.z));
+      expect(p.y).toBeGreaterThan(120);
+    }
+    // Long-range artillery visibly strays yet stays bounded.
+    expect(shellMax).toBeGreaterThan(10);
+    expect(shellMax).toBeLessThanOrEqual(60);
+    const bolt = mulberry32(11);
+    let boltMax = 0;
+    for (let n = 0; n < 200; n++) {
+      const p = impactPoint(mark, bolt, "flash", 900);
+      boltMax = Math.max(boltMax, Math.hypot(p.x - mark.x, p.z - mark.z));
+    }
+    expect(boltMax).toBeLessThanOrEqual(24);
+    expect(boltMax).toBeLessThan(shellMax);
   });
 });
 

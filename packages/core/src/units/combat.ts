@@ -116,6 +116,62 @@ export function inRange(kind: UnitKind, distance: number): boolean {
   return distance >= MIN_RANGE && distance <= maxRangeFor(kind);
 }
 
+/**
+ * Aim dispersion: the longer the shot, the wider it lands around the aim
+ * point — artillery most of all. Radius grows linearly past a deadzone
+ * (close-range gunnery stays dead-on), capped per kind so rounds never stray
+ * "too far off target" (caps sit at or under the kind's `BLAST_RADIUS`, so a
+ * max-range stray still splashes its mark). Pure; the caller rolls the offset
+ * with its seeded rng via `disperseAim`, so replay streams stay deterministic.
+ */
+export const AIM_SCATTER_DEADZONE = 150;
+/** Extra scatter radius per world unit past the deadzone, per kind. */
+export const AIM_SCATTER_RATE: Record<UnitKind, number> = {
+  flash: 0.02,
+  stump: 0.025,
+  hammer: 0.06,
+  commander: 0.02,
+};
+/** Hard cap on scatter radius, per kind (bounded stray, never a wild miss). */
+export const AIM_SCATTER_MAX: Record<UnitKind, number> = {
+  flash: 24,
+  stump: 28,
+  hammer: 60,
+  commander: 24,
+};
+
+/** Scatter radius for a shot of `distance` world units, per kind. */
+export function scatterRadius(kind: UnitKind, distance: number): number {
+  if (!(distance > AIM_SCATTER_DEADZONE)) return 0;
+  const rate = AIM_SCATTER_RATE[kind] ?? 0;
+  const cap = AIM_SCATTER_MAX[kind] ?? 0;
+  return Math.min((distance - AIM_SCATTER_DEADZONE) * rate, cap);
+}
+
+/**
+ * Scatter an aim point uniformly inside the `scatterRadius` disc around
+ * `point` (even density: `r = R·√rng`, `θ = 2π·rng`). XZ only — height is the
+ * caller's seat (impact lift, terrain grade). Consumes two rng draws when
+ * scattering, none inside the deadzone, so close-range streams replay
+ * identically with or without the feature. Returns a fresh point.
+ */
+export function disperseAim(
+  point: CombatVec3,
+  kind: UnitKind,
+  distance: number,
+  rng: () => number,
+): CombatVec3 {
+  const radius = scatterRadius(kind, distance);
+  if (!(radius > 0)) return { x: point.x, y: point.y, z: point.z };
+  const theta = rng() * Math.PI * 2;
+  const r = radius * Math.sqrt(rng());
+  return {
+    x: point.x + Math.cos(theta) * r,
+    y: point.y,
+    z: point.z + Math.sin(theta) * r,
+  };
+}
+
 /** Seconds until the next ambient shot, uniform in [min, max]. */
 export function nextShotDelay(
   rng: () => number,

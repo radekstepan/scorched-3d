@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { mulberry32 } from "../terrain/noise.js";
 import {
+  AIM_SCATTER_DEADZONE,
+  AIM_SCATTER_MAX,
   ballisticPosition,
   ballisticVelocity,
   barrelSegment,
   BARREL_MOUNT,
   clampElevation,
+  disperseAim,
   ELEVATION_MAX,
   ELEVATION_MIN,
   flightClearsTrees,
@@ -24,6 +27,7 @@ import {
   pickSkirmishPair,
   pointInTree,
   rollTreeStick,
+  scatterRadius,
   SHOT_DELAY_MAX,
   SHOT_DELAY_MIN,
   solveBallistic,
@@ -455,6 +459,66 @@ describe("tree interception", () => {
     expect(rollTreeStick([], "flash", rng)).toBe(-1);
     // A roll above the chance flies on through every tree.
     expect(rollTreeStick([1, 2], "flash", () => 0.999)).toBe(-1);
+  });
+});
+
+describe("aim dispersion", () => {
+  it("holds dead-on inside the deadzone (zero/low distance ≈ no scatter)", () => {
+    for (const kind of UNIT_KINDS) {
+      expect(scatterRadius(kind, 0)).toBe(0);
+      expect(scatterRadius(kind, AIM_SCATTER_DEADZONE)).toBe(0);
+      expect(scatterRadius(kind, AIM_SCATTER_DEADZONE - 1)).toBe(0);
+      // Deadzone shots cost no entropy and copy the point exactly.
+      let calls = 0;
+      const p = disperseAim({ x: 1, y: 2, z: 3 }, kind, 50, () => {
+        calls++;
+        return 0.5;
+      });
+      expect(p).toEqual({ x: 1, y: 2, z: 3 });
+      expect(calls).toBe(0);
+    }
+  });
+
+  it("grows scatter with distance", () => {
+    for (const kind of UNIT_KINDS) {
+      const near = scatterRadius(kind, AIM_SCATTER_DEADZONE + 100);
+      const mid = scatterRadius(kind, AIM_SCATTER_DEADZONE + 400);
+      const far = scatterRadius(kind, AIM_SCATTER_DEADZONE + 700);
+      expect(near).toBeGreaterThan(0);
+      expect(mid).toBeGreaterThan(near);
+      expect(far).toBeGreaterThan(mid);
+    }
+  });
+
+  it("scatters artillery more than every other kind at any range", () => {
+    for (const dist of [200, 400, 600, 900, 1200]) {
+      for (const kind of UNIT_KINDS) {
+        if (kind === "hammer") continue;
+        expect(scatterRadius("hammer", dist)).toBeGreaterThan(scatterRadius(kind, dist));
+      }
+    }
+  });
+
+  it("bounds scatter (never too far off target)", () => {
+    for (const kind of UNIT_KINDS) {
+      const cap = AIM_SCATTER_MAX[kind]!;
+      // Even absurd ranges clamp at the per-kind cap.
+      expect(scatterRadius(kind, 100000)).toBe(cap);
+      // Sampled offsets never leave the disc, and height is untouched.
+      const rng = mulberry32(7);
+      const origin = { x: 500, y: 120, z: 300 };
+      for (let n = 0; n < 500; n++) {
+        const p = disperseAim(origin, kind, 900, rng);
+        expect(Math.hypot(p.x - origin.x, p.z - origin.z)).toBeLessThanOrEqual(cap + 1e-9);
+        expect(p.y).toBe(origin.y);
+      }
+    }
+  });
+
+  it("is deterministic for a seeded rng", () => {
+    const a = disperseAim({ x: 0, y: 0, z: 0 }, "hammer", 800, mulberry32(99));
+    const b = disperseAim({ x: 0, y: 0, z: 0 }, "hammer", 800, mulberry32(99));
+    expect(a).toEqual(b);
   });
 });
 
