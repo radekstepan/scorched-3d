@@ -149,3 +149,48 @@ describe("applyCraters (tiny visual dents)", () => {
     expect(yAt(a.geo, 24)).toBeCloseTo(80 - dropA, 12);
   });
 });
+
+describe("applyCraters (washed bowls on gradients)", () => {
+  function makeGrid(w: number, h: number, height: number): { map: TNTMap; geo: THREE.BufferGeometry } {
+    const map = { width: w, height: h, heights: new Uint8Array(w * h).fill(height) } as TNTMap;
+    const positions = new Float32Array(w * h * 3);
+    for (let z = 0; z < h; z++) {
+      for (let x = 0; x < w; x++) {
+        const i = z * w + x;
+        positions[i * 3] = (x - (w - 1) / 2) * CELL_PIXELS;
+        positions[i * 3 + 1] = height;
+        positions[i * 3 + 2] = (z - (h - 1) / 2) * CELL_PIXELS;
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    return { map, geo };
+  }
+
+  function yAt(geo: THREE.BufferGeometry, i: number): number {
+    return (geo.getAttribute("position") as THREE.BufferAttribute).getY(i);
+  }
+
+  it("digs deeper downhill and shallower uphill under a wash", () => {
+    // 9×9 grid: row 4 holds world z = 0; x = 3/4/5 sit at −16/0/+16.
+    const { map, geo } = makeGrid(9, 9, 100);
+    applyCraters(
+      geo,
+      map,
+      [{ x: 0, z: 0, radius: 2 * CELL_PIXELS, depth: 1, sx: 1, sz: 0, skew: 0.45 }],
+      2,
+    );
+    const down = yAt(geo, 41); // +16 world x, downhill
+    const up = yAt(geo, 39); // −16 world x, uphill
+    expect(down).toBeLessThan(200);
+    expect(up).toBeLessThan(200);
+    // Same plan distance, but the downhill flank digs visibly deeper.
+    expect(down).toBeLessThan(up - 0.5);
+  });
+
+  it("keeps unwashed bowls symmetric (legacy)", () => {
+    const { map, geo } = makeGrid(9, 9, 100);
+    applyCraters(geo, map, [{ x: 0, z: 0, radius: 2 * CELL_PIXELS, depth: 1 }], 2);
+    expect(yAt(geo, 41)).toBeCloseTo(yAt(geo, 39), 12);
+  });
+});

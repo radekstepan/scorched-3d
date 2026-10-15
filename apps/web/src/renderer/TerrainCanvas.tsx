@@ -4,6 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   applyBlastToRocks,
   applyBlastToTrees,
+  blastSlopeAt,
   CELL_PIXELS,
   createDamageField,
   craterDepthAt,
@@ -17,6 +18,7 @@ import {
   seatHull,
   tickDamage,
   worldSize,
+  type BlastSlope,
   type Crater,
   type HoverInfo,
   type TNTMap,
@@ -266,9 +268,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const p = allTrees[fid]!;
       combat.glowAt({ x: p.x, y: groundY(p.x, p.z) + 18, z: p.z }, 0xff7a22);
     };
-    const blastFeatures = (x: number, z: number, radius: number): void => {
-      const treeRes = applyBlastToTrees(damage, allTrees, x, z, radius, Math.random);
-      const rockChanged = applyBlastToRocks(damage, rockPts, x, z, radius);
+    const blastFeatures = (x: number, z: number, radius: number, slope?: BlastSlope): void => {
+      const treeRes = applyBlastToTrees(damage, allTrees, x, z, radius, Math.random, undefined, slope);
+      const rockChanged = applyBlastToRocks(damage, rockPts, x, z, radius, undefined, slope);
       for (const fid of treeRes.flattened) {
         poseTree(fid);
         fallen.add(fid);
@@ -280,15 +282,26 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       for (const i of rockChanged) poseRock(i);
     };
     // Shallow visual crater per impact (≤0.6 height units each, oldest evicted
-    // with the scorch cap so the bowl count never grows unbounded). The dent
+    // with the scorch cap so the bowl count never grows unbounded). On graded
+    // ground the bowl carries its downhill wash (stretched down the fall
+    // line, cut short uphill) instead of denting a flat circle. The dent
     // lives only in the terrain mesh + groundY seating: core pathing and unit
     // seating read the static heightfield, so bowls never trap units.
-    const dentTerrain = (x: number, z: number, radius: number, depth: number): void => {
-      craters.push({ x, z, radius, depth });
+    const dentTerrain = (x: number, z: number, radius: number, depth: number, slope?: BlastSlope): void => {
+      craters.push(
+        slope && slope.skew > 0
+          ? { x, z, radius, depth, sx: slope.sx, sz: slope.sz, skew: slope.skew }
+          : { x, z, radius, depth },
+      );
       if (craters.length > 48) craters.shift();
       applyCraters(geometry, map, craters, optsRef.current.exaggeration);
     };
-    const combat = new CombatFx(scene, units, Math.random, { groundY, blastFeatures, dentTerrain });
+    const combat = new CombatFx(scene, units, Math.random, {
+      groundY,
+      slopeAt: (x, z) => blastSlopeAt(map, x, z),
+      blastFeatures,
+      dentTerrain,
+    });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets
     // (external hulls) so units fire on the move. Recoil anchors follow the

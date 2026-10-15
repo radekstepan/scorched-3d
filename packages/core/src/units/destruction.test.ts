@@ -5,6 +5,9 @@ import {
   applyBlastToRocks,
   applyBlastToTrees,
   BLAST_RADIUS,
+  BLAST_SKEW_FULL_GRADE,
+  blastSkewForGrade,
+  blastSlope,
   BURN_DURATION,
   burningCount,
   craterDepthAt,
@@ -12,15 +15,18 @@ import {
   craterFalloff,
   createDamageField,
   crushTree,
+  effectiveBlastDist,
   FALLEN_DECAY_DURATION,
   FALLEN_SINK_DEPTH,
   fallenDecay,
   fallenSink,
   FIRE_SPREAD_RADIUS,
+  FLAT_BLAST_SLOPE,
   igniteTree,
   indicesInBlast,
   isFallenGone,
   isTerminalTree,
+  MAX_BLAST_SKEW,
   MAX_CRATER_DEPTH,
   MAX_CRATER_TOTAL,
   MAX_FELLED_PER_BLAST,
@@ -524,5 +530,83 @@ describe("fallen-tree decay (felled trees sink and vanish like husks)", () => {
     expect(field.trees[1]).not.toBe("gone");
     const ev = tickDamage(field, pts, 1.5, mulberry32(7));
     expect(ev.decayed).toEqual([0, 1]);
+  });
+});
+
+describe("slope-aware blasts (gradient wash)", () => {
+  // Steep fall line toward +X: maximum downhill stretch.
+  const downhill = { sx: 1, sz: 0, skew: MAX_BLAST_SKEW };
+
+  it("stays perfectly circular on the flat", () => {
+    expect(MAX_BLAST_SKEW).toBe(0.45);
+    expect(blastSkewForGrade(0)).toBe(0);
+    expect(blastSkewForGrade(-2)).toBe(0);
+    expect(blastSlope(1, 0, 0)).toEqual({ sx: 0, sz: 0, skew: 0 });
+    expect(blastSlope(0, 0, 5)).toEqual({ sx: 0, sz: 0, skew: 0 });
+    // No wash, explicit flat wash, and omitted wash all agree exactly.
+    expect(effectiveBlastDist(30, 40)).toBe(50);
+    expect(effectiveBlastDist(30, 40, FLAT_BLAST_SLOPE)).toBe(50);
+    expect(effectiveBlastDist(30, 40, undefined)).toBe(50);
+    expect(effectiveBlastDist(0, 0, downhill)).toBe(0);
+  });
+
+  it("ramps skew with grade, unitizes the fall line, and caps at the max", () => {
+    expect(blastSkewForGrade(BLAST_SKEW_FULL_GRADE / 2)).toBeCloseTo(MAX_BLAST_SKEW / 2, 12);
+    expect(blastSkewForGrade(BLAST_SKEW_FULL_GRADE)).toBeCloseTo(MAX_BLAST_SKEW, 12);
+    expect(blastSkewForGrade(BLAST_SKEW_FULL_GRADE * 10)).toBeCloseTo(MAX_BLAST_SKEW, 12);
+    expect(blastSlope(10, 0, BLAST_SKEW_FULL_GRADE)).toEqual({ sx: 1, sz: 0, skew: MAX_BLAST_SKEW });
+    expect(blastSlope(3, 4, BLAST_SKEW_FULL_GRADE)).toEqual({ sx: 0.6, sz: 0.8, skew: MAX_BLAST_SKEW });
+  });
+
+  it("reaches further downhill and is cut short uphill", () => {
+    expect(effectiveBlastDist(100, 0, downhill)).toBeCloseTo(100 / 1.45, 9);
+    expect(effectiveBlastDist(-100, 0, downhill)).toBeCloseTo(100 / 0.55, 9);
+    // Cross-slope offsets are untouched.
+    expect(effectiveBlastDist(0, 100, downhill)).toBeCloseTo(100, 9);
+  });
+
+  it("stretches fell reach downhill in indicesInBlast", () => {
+    const pts = [
+      { x: 120, z: 0 }, // downhill, past the circular rim
+      { x: -80, z: 0 }, // uphill, inside the circular rim
+    ];
+    expect(indicesInBlast(pts, 0, 0, 100)).toEqual([1]);
+    // Washed: downhill 120 → eff 82.8 (inside), uphill −80 → eff 145 (outside).
+    expect(indicesInBlast(pts, 0, 0, 100, MAX_FELLED_PER_BLAST, downhill)).toEqual([0]);
+  });
+
+  it("dents asymmetrically: deeper downhill, shallower uphill", () => {
+    const washed = [{ x: 0, z: 0, radius: 100, depth: 0.6, sx: 1, sz: 0, skew: MAX_BLAST_SKEW }];
+    expect(craterDepthAt(washed, 60, 0)).toBeGreaterThan(craterDepthAt(washed, -60, 0));
+    expect(craterDepthAt(washed, 60, 0)).toBeGreaterThan(0);
+    // Bowls without wash render exactly as before (symmetric).
+    const flat = [{ x: 0, z: 0, radius: 100, depth: 0.6 }];
+    expect(craterDepthAt(flat, 60, 0)).toBe(craterDepthAt(flat, -60, 0));
+    expect(craterDepthAt(flat, 0, 0)).toBeCloseTo(0.6, 9);
+  });
+
+  it("flattens the washed core downhill while the uphill fringe only ignites", () => {
+    const field = createDamageField(2, 0);
+    const pts = [
+      { x: 40, z: 0 }, // downhill: eff 27.6 < core 32 → flattened
+      { x: -40, z: 0 }, // uphill: eff 72.7 → fringe ignite
+    ];
+    const res = applyBlastToTrees(field, pts, 0, 0, 100, mulberry32(4), MAX_FELLED_PER_BLAST, downhill);
+    expect(res.flattened).toEqual([0]);
+    expect(res.ignited).toEqual([1]);
+    expect(isTerminalTree(field.trees[0]!)).toBe(true);
+    expect(field.trees[1]).toBe("burning");
+  });
+
+  it("chips rocks further downhill under a wash", () => {
+    const field = createDamageField(0, 2);
+    const pts = [
+      { x: 60, z: 0 }, // downhill: eff 41 < half-radius 50 → +2
+      { x: -60, z: 0 }, // uphill: eff 109 → outside, untouched
+    ];
+    const changed = applyBlastToRocks(field, pts, 0, 0, 100, MAX_FELLED_PER_BLAST, downhill);
+    expect(changed).toEqual([0]);
+    expect(field.rocks[0]).toBe(2);
+    expect(field.rocks[1]).toBe(0);
   });
 });

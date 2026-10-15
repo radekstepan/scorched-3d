@@ -30,6 +30,14 @@ export interface ScorchMark {
    * marks without one still render deterministically.
    */
   seed?: number;
+  /**
+   * Optional downhill wash (see `BlastSlope`): the renderer stretches the
+   * decal down the fall line instead of stamping a flat circle. Absent
+   * reads as flat.
+   */
+  sx?: number;
+  sz?: number;
+  skew?: number;
 }
 
 /** Perf cap: persistent scorch decals (separate from shot/explosion caps). */
@@ -233,8 +241,10 @@ export interface TreeBlastResult {
 /**
  * Apply a blast to trees: inside TOPPLE_FRACTION of the radius trees
  * flatten immediately to a terminal state; the fringe ignites (cap-aware).
- * Terminal trees are never re-touched. Mutates `field` in place; the
- * renderer re-poses only the returned indices (no full-buffer rewrite).
+ * With a wash the flatten/ignite boundary stretches downhill and shrinks
+ * uphill (effective distance, not plan distance). Terminal trees are never
+ * re-touched. Mutates `field` in place; the renderer re-poses only the
+ * returned indices (no full-buffer rewrite).
  */
 export function applyBlastToTrees(
   field: DamageField,
@@ -244,13 +254,14 @@ export function applyBlastToTrees(
   radius: number,
   rng: () => number,
   cap: number = MAX_FELLED_PER_BLAST,
+  slope?: BlastSlope,
 ): TreeBlastResult {
   const result: TreeBlastResult = { flattened: [], ignited: [] };
-  for (const i of indicesInBlast(points, cx, cz, radius, cap)) {
+  for (const i of indicesInBlast(points, cx, cz, radius, cap, slope)) {
     if (i >= field.trees.length) continue;
     if (field.trees[i] !== "intact" && field.trees[i] !== "burning") continue;
     const p = points[i]!;
-    const dist = Math.hypot(p.x - cx, p.z - cz);
+    const dist = effectiveBlastDist(p.x - cx, p.z - cz, slope);
     if (dist <= radius * TOPPLE_FRACTION) {
       field.trees[i] = resolveTerminal(rng);
       field.treeAge[i] = 0;
@@ -264,7 +275,8 @@ export function applyBlastToTrees(
 
 /**
  * Apply a blast to rocks: the inner half-radius deals two damage levels
- * (chip → buried), the fringe one. Clamped at buried(3). Mutates in place.
+ * (chip → buried), the fringe one. Washed blasts chip further downhill.
+ * Clamped at buried(3). Mutates in place.
  */
 export function applyBlastToRocks(
   field: DamageField,
@@ -273,14 +285,15 @@ export function applyBlastToRocks(
   cz: number,
   radius: number,
   cap: number = MAX_FELLED_PER_BLAST,
+  slope?: BlastSlope,
 ): number[] {
   const changed: number[] = [];
-  for (const i of indicesInBlast(points, cx, cz, radius, cap)) {
+  for (const i of indicesInBlast(points, cx, cz, radius, cap, slope)) {
     if (i >= field.rocks.length) continue;
     const level = field.rocks[i]!;
     if (level >= 3) continue;
     const p = points[i]!;
-    const dist = Math.hypot(p.x - cx, p.z - cz);
+    const dist = effectiveBlastDist(p.x - cx, p.z - cz, slope);
     const next = Math.min(3, level + (dist <= radius * 0.5 ? 2 : 1)) as RockDamage;
     if (next !== level) {
       field.rocks[i] = next;
@@ -446,6 +459,67 @@ export const MAX_CRATER_DEPTH = 0.6;
 export const MAX_CRATER_TOTAL = 1.2;
 
 /**
+ * Downhill wash of a blast on graded terrain. A flat blast is circular;
+ * on a gradient the same energy reaches further downhill (ejecta and the
+ * fire front run with the fall line) and is cut short uphill (the rise
+ * shields it) — so scorch, dents, and damage stretch downhill instead of
+ * reading as a flat stamp. `sx`/`sz` is the unit downhill vector in world
+ * XZ (0,0 when flat); `skew` 0 (circular) .. `MAX_BLAST_SKEW` scales the
+ * asymmetry. Absent wash reads as flat, keeping old marks byte-identical.
+ */
+export interface BlastSlope {
+  sx: number;
+  sz: number;
+  skew: number;
+}
+
+/** Strongest directional skew: ±45% blast reach along the fall line. */
+export const MAX_BLAST_SKEW = 0.45;
+/** Raw grade (rise/run) at which the wash saturates (~the drive gate). */
+export const BLAST_SKEW_FULL_GRADE = 0.9;
+
+/** Circular (flat-ground) wash: zero skew, no direction. */
+export const FLAT_BLAST_SLOPE: BlastSlope = { sx: 0, sz: 0, skew: 0 };
+
+/**
+ * Directional skew for a raw terrain grade (rise over run, ≥0): linear
+ * from circular on the flat to saturated past `BLAST_SKEW_FULL_GRADE`.
+ * Clamped, so negative grades and absurd cliffs read as flat/full.
+ */
+export function blastSkewForGrade(grade: number): number {
+  if (!(grade > 0)) return 0;
+  return Math.min(grade / BLAST_SKEW_FULL_GRADE, 1) * MAX_BLAST_SKEW;
+}
+
+/**
+ * Normalize a raw downslope sample into a `BlastSlope`: the direction is
+ * unitized (degenerate/zero input reads flat) and the grade maps through
+ * `blastSkewForGrade`.
+ */
+export function blastSlope(sx: number, sz: number, grade: number): BlastSlope {
+  const skew = blastSkewForGrade(grade);
+  if (!(skew > 0)) return { sx: 0, sz: 0, skew: 0 };
+  const mag = Math.hypot(sx, sz);
+  if (!(mag > 0)) return { sx: 0, sz: 0, skew: 0 };
+  return { sx: sx / mag, sz: sz / mag, skew };
+}
+
+/**
+ * Effective blast distance of the world offset (`dx`, `dz`) under a wash:
+ * downhill offsets shrink (further reach), uphill offsets grow (cut short).
+ * `eff = dist / (1 + skew·cosθ)` with θ to the fall line — at most ±45%,
+ * and exactly `dist` when flat, so flat-field behavior is bit-identical.
+ */
+export function effectiveBlastDist(dx: number, dz: number, slope?: BlastSlope): number {
+  const dist = Math.hypot(dx, dz);
+  if (!(dist > 0)) return 0;
+  const skew = slope?.skew ?? 0;
+  if (!(skew > 0)) return dist;
+  const cos = Math.min(Math.max(((dx * slope!.sx + dz * slope!.sz) / dist), -1), 1);
+  return dist / Math.max(1 + skew * cos, 1e-3);
+}
+
+/**
  * Dent depth for a blast intensity: hammer shells dig the full 0.6 height
  * units (a shallow dimple, not a pit), lighter bolts barely dimple the ground.
  */
@@ -468,12 +542,22 @@ export interface Crater {
   radius: number;
   /** Dent depth in pre-exaggeration height units. */
   depth: number;
+  /**
+   * Optional downhill wash (see `BlastSlope`): the bowl stretches down the
+   * fall line instead of denting a flat circle. Absent reads as flat.
+   */
+  sx?: number;
+  sz?: number;
+  skew?: number;
 }
 
 /**
  * Total visual dent at world (x, z) from nearby blast bowls, capped so
- * overlapping impacts never dig a pit. Pure + deterministic; feeds the
- * renderer mesh displacement and scorch seating only — never pathing.
+ * overlapping impacts never dig a pit. Washed bowls reach further downhill
+ * and are cut short uphill (same `effectiveBlastDist` warp as damage, so
+ * the dent and the scar agree); flat bowls are untouched. Pure +
+ * deterministic; feeds the renderer mesh displacement and scorch seating
+ * only — never pathing.
  */
 export function craterDepthAt(craters: readonly Crater[], x: number, z: number): number {
   let total = 0;
@@ -481,7 +565,11 @@ export function craterDepthAt(craters: readonly Crater[], x: number, z: number):
     if (!(c.radius > 0) || !(c.depth > 0)) continue;
     const dx = x - c.x;
     const dz = z - c.z;
-    const t = Math.sqrt(dx * dx + dz * dz) / c.radius;
+    const skew = c.skew ?? 0;
+    const t =
+      skew > 0
+        ? effectiveBlastDist(dx, dz, { sx: c.sx ?? 0, sz: c.sz ?? 0, skew }) / c.radius
+        : Math.sqrt(dx * dx + dz * dz) / c.radius;
     const f = craterFalloff(t);
     if (f > 0) total += c.depth * f;
   }
@@ -495,8 +583,10 @@ export interface BlastPoint {
 
 /**
  * Indices of points within `radius` of (`cx`, `cz`), in ascending order,
- * capped at `cap` entries (nearest first when capped). Pure helper used to
- * pick which tree/rock instances a blast fells.
+ * capped at `cap` entries (nearest first when capped). With a wash the
+ * reach is directional (further downhill), and ordering is by effective
+ * distance so the hardest-hit still come first. Pure helper used to pick
+ * which tree/rock instances a blast fells.
  */
 export function indicesInBlast(
   points: readonly BlastPoint[],
@@ -504,6 +594,7 @@ export function indicesInBlast(
   cz: number,
   radius: number,
   cap: number = MAX_FELLED_PER_BLAST,
+  slope?: BlastSlope,
 ): number[] {
   if (!(radius > 0) || cap <= 0) return [];
   const r2 = radius * radius;
@@ -512,8 +603,13 @@ export function indicesInBlast(
     const p = points[i]!;
     const dx = p.x - cx;
     const dz = p.z - cz;
-    const d2 = dx * dx + dz * dz;
-    if (d2 <= r2) scored.push({ index: i, d2 });
+    if (slope && slope.skew > 0) {
+      const eff = effectiveBlastDist(dx, dz, slope);
+      if (eff <= radius) scored.push({ index: i, d2: eff * eff });
+    } else {
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= r2) scored.push({ index: i, d2 });
+    }
   }
   scored.sort((a, b) => a.d2 - b.d2 || a.index - b.index);
   return scored.slice(0, cap).map((s) => s.index);

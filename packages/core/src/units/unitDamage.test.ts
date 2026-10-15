@@ -20,7 +20,7 @@ import {
   UNIT_KILL_DAMAGE,
   UNIT_SMOKE_DAMAGE,
 } from "./unitDamage.js";
-import { BLAST_RADIUS } from "./destruction.js";
+import { BLAST_RADIUS, MAX_BLAST_SKEW } from "./destruction.js";
 
 describe("createUnitDamage", () => {
   it("starts all-pristine and zeros", () => {
@@ -195,5 +195,40 @@ describe("applyBlastToUnits", () => {
     expect(applyBlastToUnits([], [], 0, 0, "hammer")).toEqual([]);
     expect(applyBlastToUnits(damage, [], 0, 0, "hammer")).toEqual([]);
     expect(damage).toEqual([0, 0]);
+  });
+});
+
+describe("slope-aware blast splash (gradient wash)", () => {
+  it("shields uphill hulls and reaches downhill ones", () => {
+    const slope = { sx: 1, sz: 0, skew: MAX_BLAST_SKEW };
+    const radius = BLAST_RADIUS.hammer!;
+    // 70 world units out: inside the 64-radius blast downhill (eff 48),
+    // far outside it uphill (eff 127).
+    const down = createUnitDamage(1);
+    expect(applyBlastToUnits(down, [{ x: 70, z: 0 }], 0, 0, "hammer", slope)).toEqual([0]);
+    expect(down[0]!).toBeGreaterThan(0);
+    const up = createUnitDamage(1);
+    expect(applyBlastToUnits(up, [{ x: -70, z: 0 }], 0, 0, "hammer", slope)).toEqual([]);
+    expect(up[0]).toBe(0);
+    expect(radius).toBe(64);
+  });
+
+  it("hits downhill harder than uphill at the same plan distance", () => {
+    const slope = { sx: 1, sz: 0, skew: MAX_BLAST_SKEW };
+    // 30 out both ways: both inside (eff 20.7 / 54.5), downhill hits harder.
+    const down = createUnitDamage(1);
+    applyBlastToUnits(down, [{ x: 30, z: 0 }], 0, 0, "hammer", slope);
+    const up = createUnitDamage(1);
+    applyBlastToUnits(up, [{ x: -30, z: 0 }], 0, 0, "hammer", slope);
+    expect(down[0]!).toBeGreaterThan(up[0]!);
+    expect(up[0]!).toBeGreaterThan(0);
+  });
+
+  it("stays symmetric without a wash", () => {
+    const a = createUnitDamage(1);
+    applyBlastToUnits(a, [{ x: 60, z: 0 }], 0, 0, "hammer");
+    const b = createUnitDamage(1);
+    applyBlastToUnits(b, [{ x: -60, z: 0 }], 0, 0, "hammer");
+    expect(a[0]).toBe(b[0]);
   });
 });

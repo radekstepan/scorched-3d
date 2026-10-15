@@ -6,6 +6,7 @@ import {
   ballisticPosition,
   ballisticVelocity,
   BLAST_RADIUS,
+  type BlastSlope,
   canFire,
   clampElevation,
   clampTurret,
@@ -158,6 +159,10 @@ const MAX_FLASHES = 24;
 const HALO_SCALE = 1.9;
 const HALO_GROWTH = 2.4;
 const HALO_PEAK = 0.4;
+/** World up (scratch tilt quaternions align ground discs from this). */
+const UP = new THREE.Vector3(0, 1, 0);
+/** Scratch yaw quaternion for scorch instance orientation (no per-mark alloc). */
+const _yawQuat = new THREE.Quaternion();
 
 /** Muzzle world position for a unit body at `pos` yawed by `rotationY`. */
 export function muzzlePoint(
@@ -192,17 +197,24 @@ export interface CombatEnv {
   /** Terrain surface height at world (x, z), for seating scorch decals. */
   groundY: (x: number, z: number) => number;
   /**
-   * Graduated blast damage to trees/rocks within `radius` of world (x, z):
-   * core flattens, fringe ignites/chips. Units are untouched.
+   * Downhill blast wash at world (x, z), when the terrain is graded:
+   * blasts stretch downhill instead of stamping flat circles. Absent
+   * reads as flat ground (circular blasts, legacy behavior).
    */
-  blastFeatures: (x: number, z: number, radius: number) => void;
+  slopeAt?: (x: number, z: number) => BlastSlope;
+  /**
+   * Graduated blast damage to trees/rocks within `radius` of world (x, z):
+   * core flattens, fringe ignites/chips. Units are untouched. `slope`
+   * stretches the reach downhill (supplied by the fx from `slopeAt`).
+   */
+  blastFeatures: (x: number, z: number, radius: number, slope?: BlastSlope) => void;
   /**
    * Optional shallow visual dent of the terrain mesh at world (x, z):
    * `depth` is pre-exaggeration height units (≤0.6 per blast). Implemented by
    * the canvas, which owns the terrain geometry; purely visual — pathing and
    * unit seating read the static core heightfield.
    */
-  dentTerrain?: (x: number, z: number, radius: number, depth: number) => void;
+  dentTerrain?: (x: number, z: number, radius: number, depth: number, slope?: BlastSlope) => void;
 }
 
 export class CombatFx {
@@ -543,12 +555,14 @@ export class CombatFx {
   /**
    * Splash a blast onto nearby hulls: accumulate core damage with linear
    * falloff and char the touched bodies in place. Visual only — hulls are
-   * never moved (only recoil touches them). A hull crossing the kill
-   * threshold dies exactly once: an epic explosion at the hull, full char,
-   * and the `onUnitKilled` hook (movement hold, deselect) — the instance
-   * itself lingers as a decaying husk (see `poseHusks`).
+   * never moved (only recoil touches them). On graded ground the wash
+   * stretches the splash downhill and shields uphill hulls behind the rise.
+   * A hull crossing the kill threshold dies exactly once: an epic explosion
+   * at the hull, full char, and the `onUnitKilled` hook (movement hold,
+   * deselect) — the instance itself lingers as a decaying husk (see
+   * `poseHusks`).
    */
-  private damageUnits(at: THREE.Vector3, kind: UnitKind): void {
+  private damageUnits(at: THREE.Vector3, kind: UnitKind, slope?: BlastSlope | null): void {
     if (this.damage.length === 0) return;
     const bodies = this.units.children as THREE.Group[];
     const before = this.damage.slice();
@@ -558,6 +572,7 @@ export class CombatFx {
       at.x,
       at.z,
       kind,
+      slope ?? undefined,
     );
     for (const i of touched) {
       const body = bodies[i];
@@ -864,6 +879,8 @@ export class CombatFx {
     const group = new THREE.Group();
     group.position.copy(at);
     const ground = this.env ? this.env.groundY(at.x, at.z) : at.y;
+    const slope = this.env?.slopeAt?.(at.x, at.z) ?? null;
+    const wash = slope && slope.skew > 0 ? slope : null;
     const shape = scorchForKind(kind);
     const radiusScale = epic ? EPIC_RADIUS_SCALE : 1;
     const puffCount = epic ? EPIC_SMOKE_PUFFS : SMOKE_PER_EXPLOSION;
@@ -909,13 +926,23 @@ export class CombatFx {
       puff.scale.setScalar(0.5 + this.rng() * 0.4);
       group.add(puff);
       smokes.push(puff);
-      smokeVel[i * 3] = Math.cos(theta + Math.PI / 2) * (4 + this.rng() * 8);
+      // Smoke climbs and drifts downhill with the wash (fixed bias, no extra
+      // rng — the plume leans down the fall line instead of rising through
+      // the uphill slope).
+      const lean = wash ? wash.skew * 30 : 0;
+      smokeVel[i * 3] =
+        Math.cos(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sx * lean : 0);
       smokeVel[i * 3 + 1] = 26 + this.rng() * 22;
-      smokeVel[i * 3 + 2] = Math.sin(theta + Math.PI / 2) * (4 + this.rng() * 8);
+      smokeVel[i * 3 + 2] =
+        Math.sin(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sz * lean : 0);
     }
 
     // Shockwave ring + lingering glow: ground-seated so the blast footprint
-    // reads on dirt and undergrowth, not just on hulls.
+    // reads on dirt and undergrowth, not just on hulls. Both tilt to the
+    // terrain normal (finite-difference of the seated surface) so the wave
+    // races along the slope instead of clipping through the uphill grade as
+    // a flat horizontal disc.
+    const groundTilt = this.groundTilt(at.x, at.z);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xffe2b8,
       transparent: true,
@@ -926,6 +953,7 @@ export class CombatFx {
     });
     const ringMesh = new THREE.Mesh(this.ringGeo, ringMat);
     ringMesh.position.y = ground - at.y + 1.6;
+    ringMesh.quaternion.copy(groundTilt);
     ringMesh.scale.setScalar(Math.max(shape.radius * radiusScale * 0.4, 1));
     group.add(ringMesh);
     const glowMat = new THREE.MeshBasicMaterial({
@@ -937,18 +965,23 @@ export class CombatFx {
     });
     const glowMesh = new THREE.Mesh(this.glowGeo, glowMat);
     glowMesh.position.y = ground - at.y + 1.4;
+    glowMesh.quaternion.copy(groundTilt);
     glowMesh.scale.setScalar(Math.max(shape.radius * radiusScale * 1.1, 1));
     group.add(glowMesh);
 
     const positions = new Float32Array(sparkCount * 3);
     const velocities = new Float32Array(sparkCount * 3);
+    // Ejecta bias down the fall line (fixed, no extra rng): debris sprays
+    // further downhill, cut short uphill — the burst expands outward along
+    // the terrain instead of as a flat symmetric fountain.
+    const ejecta = wash ? wash.skew * 90 : 0;
     for (let i = 0; i < sparkCount; i++) {
       const theta = this.rng() * Math.PI * 2;
       const up = 0.4 + this.rng() * 1.2;
       const speed = 60 + this.rng() * 160;
-      velocities[i * 3] = Math.cos(theta) * speed;
+      velocities[i * 3] = Math.cos(theta) * speed + (wash ? wash.sx * ejecta : 0);
       velocities[i * 3 + 1] = up * speed;
-      velocities[i * 3 + 2] = Math.sin(theta) * speed;
+      velocities[i * 3 + 2] = Math.sin(theta) * speed + (wash ? wash.sz * ejecta : 0);
     }
     const sparkGeo = new THREE.BufferGeometry();
     sparkGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -989,30 +1022,51 @@ export class CombatFx {
       glowRadius: shape.radius * radiusScale,
     });
     this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
-    this.scarGround(at, kind);
-    this.damageUnits(at, kind);
+    this.scarGround(at, kind, slope);
+    this.damageUnits(at, kind, slope);
   }
 
   /**
    * Persistent ground scar + graduated blast damage for an impact. Decals
    * reuse one shared instanced disc (no per-mark geometry/material); only
    * instance matrices/colors are rewritten, and only on impact — never per
-   * frame. Hulls are splashed with accumulating (visual-only) damage by the
+   * frame. On graded ground the mark carries its downhill wash (stretched
+   * down the fall line in `syncScorch`) and the crater dents asymmetrically.
+   * Hulls are splashed with accumulating (visual-only) damage by the
    * caller; a tree flattened under a unit still leaves the unit where it
    * stands.
    */
-  private scarGround(at: THREE.Vector3, kind: UnitKind): void {
+  private scarGround(at: THREE.Vector3, kind: UnitKind, slope?: BlastSlope | null): void {
     const shape = scorchForKind(kind);
+    const wash = slope && slope.skew > 0 ? slope : null;
     this.scorchMarks = addScorchMark(this.scorchMarks, {
       x: at.x,
       z: at.z,
       radius: shape.radius,
       intensity: shape.intensity,
       seed: scorchSeed(at.x, at.z),
+      ...(wash ? { sx: wash.sx, sz: wash.sz, skew: wash.skew } : {}),
     });
     this.syncScorch(at.y);
-    this.env?.blastFeatures(at.x, at.z, BLAST_RADIUS[kind]);
-    this.env?.dentTerrain?.(at.x, at.z, shape.radius, craterDepthForIntensity(shape.intensity));
+    this.env?.blastFeatures(at.x, at.z, BLAST_RADIUS[kind], slope ?? undefined);
+    this.env?.dentTerrain?.(at.x, at.z, shape.radius, craterDepthForIntensity(shape.intensity), slope ?? undefined);
+  }
+
+  /**
+   * Tilt-from-up quaternion aligning a ground disc (shock ring, scorch,
+   * glow) to the seated terrain normal at (x, z), from finite differences
+   * of the live surface (map heights minus crater dents, exaggerated).
+   * Flat ground returns identity, so flat blasts render exactly as before.
+   */
+  private groundTilt(x: number, z: number): THREE.Quaternion {
+    const tilt = new THREE.Quaternion();
+    if (!this.env) return tilt;
+    const g = this.env.groundY;
+    const t = 8;
+    const nx = (g(x - t, z) - g(x + t, z)) / (2 * t);
+    const nz = (g(x, z - t) - g(x, z + t)) / (2 * t);
+    if (nx === 0 && nz === 0) return tilt;
+    return tilt.setFromUnitVectors(UP, new THREE.Vector3(nx, 1, nz).normalize());
   }
 
   /** Rewrite scorch instance matrices/colors from the mark list. */
@@ -1020,14 +1074,34 @@ export class CombatFx {
     const dummy = this.scorchDummy;
     for (let i = 0; i < this.scorchMarks.length; i++) {
       const mark = this.scorchMarks[i]!;
-      const y = this.env ? this.env.groundY(mark.x, mark.z) + 1.2 : fallbackY;
-      dummy.position.set(mark.x, y, mark.z);
-      // Deterministic per-mark orientation: golden-angle spread plus the
-      // position-hashed seed, so the baked irregular edge never aligns.
-      dummy.rotation.set(0, ((i * 2.39996) % Math.PI) + resolveScorchSeed(mark) * Math.PI, 0);
+      const seed = resolveScorchSeed(mark);
+      const radius = Math.max(mark.radius, 0.5);
       // Elliptical squash from the seed: no two blotches share a silhouette.
-      const [ax, az] = scorchAnisotropy(resolveScorchSeed(mark));
-      dummy.scale.set(Math.max(mark.radius, 0.5) * ax, 1, Math.max(mark.radius, 0.5) * az);
+      const [ax, az] = scorchAnisotropy(seed);
+      const skew = mark.skew ?? 0;
+      const washed = skew > 0 && ((mark.sx ?? 0) !== 0 || (mark.sz ?? 0) !== 0);
+      if (!this.env) {
+        // Headless (no terrain): legacy flat stamp at the fallback height.
+        dummy.position.set(mark.x, fallbackY, mark.z);
+        dummy.rotation.set(0, ((i * 2.39996) % Math.PI) + seed * Math.PI, 0);
+        dummy.scale.set(radius * ax, 1, radius * az);
+      } else {
+        // Drape the decal on the live surface: tilt to the terrain normal
+        // so the blotch hugs the grade instead of floating downhill and
+        // clipping uphill, and stretch washed marks down the fall line
+        // (major axis along the wash, jittered by the seed so parallel
+        // hillsides don't read as stamped copies).
+        dummy.position.set(mark.x, this.env.groundY(mark.x, mark.z) + 1.2, mark.z);
+        const yaw = washed
+          ? Math.atan2(-(mark.sz ?? 0), mark.sx ?? 1) + (seed - 0.5) * 0.9
+          : ((i * 2.39996) % Math.PI) + seed * Math.PI;
+        dummy.quaternion.copy(this.groundTilt(mark.x, mark.z)).multiply(_yawQuat.setFromAxisAngle(UP, yaw));
+        dummy.scale.set(
+          radius * ax * (washed ? 1 + skew : 1),
+          1,
+          radius * az * (washed ? 1 - skew * 0.5 : 1),
+        );
+      }
       dummy.updateMatrix();
       this.scorchMesh.setMatrixAt(i, dummy.matrix);
       // Near-white warm multiplier over the baked char-center texture:

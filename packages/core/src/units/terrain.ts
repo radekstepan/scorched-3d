@@ -1,6 +1,7 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import type { UnitField } from "./place.js";
-import type { BlastPoint, TreeDamage } from "./destruction.js";
+import type { BlastPoint, BlastSlope, TreeDamage } from "./destruction.js";
+import { blastSkewForGrade } from "./destruction.js";
 import {
   isTreeCell,
   isWalkable,
@@ -138,6 +139,46 @@ export function sampleHeightBilinear(field: SeatField, x: number, z: number): nu
 /** Rendered (exaggerated) surface height at world (x, z). */
 export function groundHeight(field: SeatField, x: number, z: number, exaggeration: number): number {
   return sampleHeightBilinear(field, x, z) * exaggeration;
+}
+
+/** Downhill fall-line sample: unit vector plus raw grade (rise/run). */
+export interface Downslope {
+  /** Unit downhill X (0 when flat). */
+  dx: number;
+  /** Unit downhill Z (0 when flat). */
+  dz: number;
+  /** Raw grade ≥ 0 (height units per world unit). */
+  grade: number;
+}
+
+/** Finite-difference tap for `downslopeAt`, in world units (one cell). */
+export const DOWNSLOPE_TAP = CELL_PIXELS;
+
+/**
+ * Fall line at world (x, z) from bilinear taps one cell apart: the
+ * downhill unit vector plus the raw grade. Flat ground reads
+ * `{0, 0, 0}` exactly (no direction, no grade), so callers can branch to
+ * legacy circular behavior bit-identically on the flat.
+ */
+export function downslopeAt(field: SeatField, x: number, z: number): Downslope {
+  const t = DOWNSLOPE_TAP;
+  const gx = -(sampleHeightBilinear(field, x + t, z) - sampleHeightBilinear(field, x - t, z)) / (2 * t);
+  const gz = -(sampleHeightBilinear(field, x, z + t) - sampleHeightBilinear(field, x, z - t)) / (2 * t);
+  const mag = Math.hypot(gx, gz);
+  if (!(mag > 0)) return { dx: 0, dz: 0, grade: 0 };
+  return { dx: gx / mag, dz: gz / mag, grade: mag };
+}
+
+/**
+ * Blast wash at world (x, z): the fall line mapped through
+ * `blastSkewForGrade`. Flat ground reads `FLAT_BLAST_SLOPE`-equal
+ * (zero skew), so blasts there stay perfectly circular.
+ */
+export function blastSlopeAt(field: SeatField, x: number, z: number): BlastSlope {
+  const d = downslopeAt(field, x, z);
+  const skew = blastSkewForGrade(d.grade);
+  if (!(skew > 0)) return { sx: 0, sz: 0, skew: 0 };
+  return { sx: d.dx, sz: d.dz, skew };
 }
 
 function clampTilt(v: number): number {

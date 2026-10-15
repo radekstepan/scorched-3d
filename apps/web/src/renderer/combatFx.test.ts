@@ -889,3 +889,129 @@ describe("CombatFx destruction", () => {
     fx.dispose();
   });
 });
+
+describe("CombatFx slope-aware blasts (gradient wash)", () => {
+  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
+  function blastGroups(scene: THREE.Scene): THREE.Group[] {
+    return scene.children.filter(
+      (c) => c instanceof THREE.Group && c.children.some((k) => (k as THREE.Points).isPoints),
+    ) as THREE.Group[];
+  }
+
+  function makeSlopeEnv() {
+    const featureSkew: number[] = [];
+    const dentSkew: number[] = [];
+    return {
+      featureSkew,
+      dentSkew,
+      env: {
+        // Eastward grade: ground rises toward +x at 0.5 world units per unit.
+        groundY: (x: number) => 100 + x * 0.5,
+        // Steep fall line toward −x (downhill): maximum wash.
+        slopeAt: () => ({ sx: -1, sz: 0, skew: 0.45 }),
+        blastFeatures: (x: number, z: number, radius: number, slope?: { skew?: number }) => {
+          void x;
+          void z;
+          void radius;
+          featureSkew.push(slope?.skew ?? 0);
+        },
+        dentTerrain: (
+          x: number,
+          z: number,
+          radius: number,
+          depth: number,
+          slope?: { skew?: number },
+        ) => {
+          void x;
+          void z;
+          void radius;
+          void depth;
+          dentSkew.push(slope?.skew ?? 0);
+        },
+      },
+    };
+  }
+
+  function scorchMeshOf(scene: THREE.Scene): THREE.InstancedMesh {
+    return scene.children.find(
+      (c) => (c as THREE.InstancedMesh).isInstancedMesh,
+    ) as THREE.InstancedMesh;
+  }
+
+  it("reports the wash to blast/crater hooks and stretches scorch downhill", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const ctl = makeSlopeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
+    for (let n = 0; n < 200; n++) fx.update(0.05);
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    // Every scar carried its wash to features and the crater dent.
+    expect(ctl.featureSkew).toHaveLength(fx.scorchCount);
+    expect(ctl.dentSkew).toHaveLength(fx.scorchCount);
+    for (const s of [...ctl.featureSkew, ...ctl.dentSkew]) expect(s).toBeCloseTo(0.45, 9);
+    // Scorch decals stretch down the fall line: the major axis clearly
+    // exceeds the minor one (flat stamps stay near-circular).
+    const mesh = scorchMeshOf(scene);
+    const m = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    for (let i = 0; i < fx.scorchCount; i++) {
+      mesh.getMatrixAt(i, m);
+      m.decompose(pos, quat, scale);
+      expect(scale.x / scale.z).toBeGreaterThan(1.2);
+      // Draped to the grade, never a flat horizontal stamp: the instance
+      // carries real X/Z tilt (26° grade here ≫ any float noise).
+      expect(Math.hypot(quat.x, quat.z)).toBeGreaterThan(0.1);
+    }
+    fx.dispose();
+  });
+
+  it("tilts the shockwave ring and glow to the terrain normal", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const ctl = makeSlopeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
+    for (let n = 0; n < 4000 && fx.explosionCount === 0; n++) fx.update(1 / 60);
+    expect(fx.explosionCount).toBeGreaterThan(0);
+    const groups = blastGroups(scene);
+    expect(groups.length).toBe(fx.explosionCount);
+    // Ring + glow ride the slope: tilted quaternions, not identity.
+    let tilted = 0;
+    let checked = 0;
+    for (const group of groups) {
+      for (const child of group.children) {
+        const geo = (child as THREE.Mesh).geometry;
+        if (geo?.type !== "RingGeometry" && geo?.type !== "CircleGeometry") continue;
+        checked++;
+        const q = (child as THREE.Mesh).quaternion;
+        if (Math.abs(q.x) + Math.abs(q.y) + Math.abs(q.z) + Math.abs(q.w - 1) > 1e-3) tilted++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(tilted).toBe(checked);
+    fx.dispose();
+  });
+
+  it("keeps flat-ground blasts circular with untilted rings (legacy)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    // No slopeAt: perfectly flat wash, flat seating.
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      dentTerrain: () => {},
+    });
+    for (let n = 0; n < 4000 && fx.explosionCount === 0; n++) fx.update(1 / 60);
+    expect(fx.explosionCount).toBeGreaterThan(0);
+    for (const group of blastGroups(scene)) {
+      for (const child of group.children) {
+        const geo = (child as THREE.Mesh).geometry;
+        if (geo?.type !== "RingGeometry" && geo?.type !== "CircleGeometry") continue;
+        const q = (child as THREE.Mesh).quaternion;
+        expect(Math.abs(q.x) + Math.abs(q.y) + Math.abs(q.z) + Math.abs(q.w - 1)).toBeLessThan(1e-9);
+      }
+    }
+    fx.dispose();
+  });
+});

@@ -1,4 +1,4 @@
-import { BLAST_RADIUS } from "./destruction.js";
+import { BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
 import type { UnitKind } from "./types.js";
 
 /**
@@ -140,9 +140,11 @@ export interface UnitBlastPoint {
 /**
  * Splash a blast onto nearby hulls: every unit inside the firing kind's
  * `BLAST_RADIUS` of (`cx`, `cz`) takes its point-blank hit scaled by linear
- * falloff `1 - dist/radius`, clamped at 1. Mutates `damage` in place and
- * returns the touched indices (nearest first). Pure apart from the mutation:
- * no rng, so replays stay deterministic.
+ * falloff `1 - dist/radius`, clamped at 1. With a wash the radius stretches
+ * downhill and shrinks uphill (effective distance drives both inclusion
+ * and falloff, so a hull above the blast is shielded by the rise). Mutates
+ * `damage` in place and returns the touched indices (nearest first). Pure
+ * apart from the mutation: no rng, so replays stay deterministic.
  */
 export function applyBlastToUnits(
   damage: number[],
@@ -150,6 +152,7 @@ export function applyBlastToUnits(
   cx: number,
   cz: number,
   attacker: UnitKind,
+  slope?: BlastSlope,
 ): number[] {
   const radius = BLAST_RADIUS[attacker] ?? 0;
   const hit = UNIT_HIT_DAMAGE[attacker] ?? 0;
@@ -158,7 +161,7 @@ export function applyBlastToUnits(
   const n = Math.min(damage.length, positions.length);
   for (let i = 0; i < n; i++) {
     const p = positions[i]!;
-    const d = Math.hypot(p.x - cx, p.z - cz);
+    const d = effectiveBlastDist(p.x - cx, p.z - cz, slope);
     if (d <= radius) scored.push({ index: i, d });
   }
   scored.sort((a, b) => a.d - b.d || a.index - b.index);

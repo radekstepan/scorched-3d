@@ -13,6 +13,8 @@ import {
   ROUGH_SLOPE_FLOOR,
   TREE_DRAG,
   TRUNK_PUSH_SPEED,
+  blastSlopeAt,
+  downslopeAt,
   featureDrag,
   groundHeight,
   hullBodyRadius,
@@ -29,6 +31,7 @@ import {
   trunkKeepoutFor,
   type SeatField,
 } from "./terrain.js";
+import { MAX_BLAST_SKEW } from "./destruction.js";
 import { TRUNK_KEEPOUT, TRUNK_RADIUS } from "./pathfinding.js";
 
 function flatField(w = 32, h = 32, height = 100, sea = 0): SeatField {
@@ -515,5 +518,34 @@ describe("hull crush contact (which standing trees a step touches)", () => {
     const a = points[0]!;
     expect(treesCrushedByStep(points, undefined, a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([0]);
     expect(treesCrushedByStep([], [], a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([]);
+  });
+});
+
+describe("downslopeAt/blastSlopeAt (fall line for blast wash)", () => {
+  it("reads flat ground as zero grade with no direction", () => {
+    expect(downslopeAt(flatField(), 0, 0)).toEqual({ dx: 0, dz: 0, grade: 0 });
+    expect(downslopeAt(flatField(), 37.5, -112)).toEqual({ dx: 0, dz: 0, grade: 0 });
+    const s = blastSlopeAt(flatField(), 0, 0);
+    expect(s).toEqual({ sx: 0, sz: 0, skew: 0 });
+  });
+
+  it("points down the fall line with the ramp grade", () => {
+    // Eastward ramp rising toward +x: downhill is −x at per/CELL_PIXELS.
+    const field = rampField(4, 9, 9);
+    const d = downslopeAt(field, 0, 0);
+    expect(d.dx).toBeCloseTo(-1, 9);
+    expect(d.dz).toBeCloseTo(0, 6);
+    expect(d.grade).toBeCloseTo(4 / CELL_PIXELS, 9);
+    const s = blastSlopeAt(field, 0, 0);
+    expect(s.sx).toBeCloseTo(-1, 9);
+    expect(s.sz).toBeCloseTo(0, 6);
+    expect(s.skew).toBeGreaterThan(0);
+    expect(s.skew).toBeLessThanOrEqual(MAX_BLAST_SKEW);
+  });
+
+  it("saturates the wash on cliffs instead of skewing past the max", () => {
+    const field = rampField(30, 9, 9);
+    const s = blastSlopeAt(field, 0, 0);
+    expect(s.skew).toBeCloseTo(MAX_BLAST_SKEW, 9);
   });
 });
