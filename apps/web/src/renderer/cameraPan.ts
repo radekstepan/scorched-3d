@@ -21,9 +21,9 @@ export interface PanInput {
 /** World units the target travels per second, relative to camera distance. */
 export const PAN_SPEED_FACTOR = 1.2;
 
-/** Default orbit multipliers (1 = stock OrbitControls / keyboard feel). */
+/** Default orbit multipliers (pan 1 = stock feel; zoom ships at 2x). */
 export const DEFAULT_PAN_SPEED = 1;
-export const DEFAULT_ZOOM_SPEED = 1;
+export const DEFAULT_ZOOM_SPEED = 2;
 
 /** Slider bounds for the View-menu pan/zoom speed controls. */
 export const PAN_SPEED_MIN = 0.2;
@@ -33,12 +33,13 @@ export const ZOOM_SPEED_MAX = 3;
 
 /**
  * Closest the wheel/pinch may dolly toward the orbit target (world units).
- * 30 frames a single ~26-unit tank hull as a close-up while staying just
- * outside the 27-unit team ring; the 2-unit near plane keeps a ~15x margin
- * so hulls never clip, and the polar clamp still holds the camera above
- * the dirt. Cursor-anchored zoom behavior is untouched — only the floor.
+ * 15 frames a single ~26-unit tank hull as a tight close-up while staying
+ * just outside the longest hull half-length (14) and ~7.5x past the 2-unit
+ * near plane, so hulls never clip and no near-plane change was needed; the
+ * polar clamp still holds the camera above the dirt. Cursor-anchored zoom
+ * behavior is untouched — only the floor.
  */
-export const MIN_ZOOM_DISTANCE = 30;
+export const MIN_ZOOM_DISTANCE = 15;
 /**
  * Farthest the wheel/pinch may dolly out (world units). 320x256 cells is
  * ~5104 world units wide, so twice the classic 4200 keeps the whole

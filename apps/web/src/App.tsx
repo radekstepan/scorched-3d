@@ -52,7 +52,7 @@ export default function App() {
     showWaypoints: false,
     showHealth: true,
     panSpeed: 1,
-    zoomSpeed: 1,
+    zoomSpeed: 2,
   });
 
   // Cache selection-tray thumbnails on load (one idle-chunked 3D render

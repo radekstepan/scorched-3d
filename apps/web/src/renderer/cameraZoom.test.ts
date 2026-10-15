@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
-import { MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE } from "./cameraPan";
+import { DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -184,6 +184,31 @@ describe("cursor-anchored wheel zoom", () => {
     expect(before!.distanceTo(after!)).toBeGreaterThan(10);
   });
 
+  it("ships a 2x default zoom speed within the 0.2x–3x slider range", () => {
+    expect(DEFAULT_ZOOM_SPEED).toBe(2);
+    expect(DEFAULT_ZOOM_SPEED).toBeGreaterThan(0.2);
+    expect(DEFAULT_ZOOM_SPEED).toBeLessThanOrEqual(3);
+  });
+
+  it("dollies roughly twice as far per wheel tick at 2x than at 1x", () => {
+    const startDist = (rig: ZoomRig): number => distanceOf(rig.camera, rig.controls.target);
+    const slow = makeRig(true);
+    slow.controls.zoomSpeed = 1;
+    const fast = makeRig(true);
+    fast.controls.zoomSpeed = DEFAULT_ZOOM_SPEED;
+    const d0 = startDist(slow);
+    expect(startDist(fast)).toBeCloseTo(d0, 6);
+    slow.fireWheel(CX, CY, -120);
+    fast.fireWheel(CX, CY, -120);
+    const slowStep = d0 - startDist(slow);
+    const fastStep = d0 - startDist(fast);
+    expect(slowStep).toBeGreaterThan(0);
+    expect(fastStep).toBeGreaterThan(0);
+    // OrbitControls scales the dolly exponentially per tick, so 2x speed
+    // lands well clear of 1x without asserting an exact ratio.
+    expect(fastStep / slowStep).toBeGreaterThan(1.5);
+  });
+
   it("respects min/max distance at the extremes", () => {
     const { camera, controls, fireWheel } = makeRig(true);
     for (let i = 0; i < 80; i++) fireWheel(CX, CY, -400);
@@ -250,13 +275,14 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     expect(canvasSource).toMatch(/controls\.maxDistance\s*=\s*MAX_ZOOM_DISTANCE/);
   });
 
-  it("lets the wheel dolly in closer than the old 80-unit floor", () => {
-    // Close enough for a single-hull close-up (~26-unit tank, 27-unit team
-    // ring) while staying far outside the 2-unit near plane, so hulls never
+  it("lets the wheel dolly in closer than the old 30-unit floor", () => {
+    // Tight single-hull close-up (~26-unit tank, longest hull half-length
+    // 14) while staying well outside the 2-unit near plane, so hulls never
     // clip and the polar clamp still holds the camera above the dirt.
-    expect(MIN_ZOOM_DISTANCE).toBe(30);
-    expect(MIN_ZOOM_DISTANCE).toBeLessThan(80);
-    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 10);
+    expect(MIN_ZOOM_DISTANCE).toBe(15);
+    expect(MIN_ZOOM_DISTANCE).toBeLessThan(30);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     expect(canvasSource).toMatch(/controls\.minDistance\s*=\s*MIN_ZOOM_DISTANCE/);
   });
 });

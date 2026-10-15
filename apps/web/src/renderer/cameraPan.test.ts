@@ -160,9 +160,9 @@ describe("shouldIgnoreKeyEvent", () => {
 });
 
 describe("camera speed sliders", () => {
-  it("exposes a sane 0.2x–3x slider range around a 1x default", () => {
+  it("exposes a sane 0.2x–3x slider range around the defaults (pan 1x, zoom 2x)", () => {
     expect(DEFAULT_PAN_SPEED).toBe(1);
-    expect(DEFAULT_ZOOM_SPEED).toBe(1);
+    expect(DEFAULT_ZOOM_SPEED).toBe(2);
     expect(PAN_SPEED_MIN).toBe(0.2);
     expect(PAN_SPEED_MAX).toBe(3);
     expect(ZOOM_SPEED_MIN).toBe(0.2);
@@ -177,17 +177,19 @@ describe("camera speed sliders", () => {
     expect(clampPanSpeed(99)).toBe(PAN_SPEED_MAX);
   });
 
-  it("clamps zoom speed into range", () => {
+  it("clamps zoom speed into range around the 2x default", () => {
+    expect(clampZoomSpeed(2)).toBe(2);
     expect(clampZoomSpeed(1)).toBe(1);
     expect(clampZoomSpeed(-5)).toBe(ZOOM_SPEED_MIN);
     expect(clampZoomSpeed(99)).toBe(ZOOM_SPEED_MAX);
   });
 
-  it("falls back to 1x on non-finite input", () => {
+  it("falls back to the defaults on non-finite input", () => {
     expect(clampPanSpeed(NaN)).toBe(DEFAULT_PAN_SPEED);
     expect(clampPanSpeed(Infinity)).toBe(DEFAULT_PAN_SPEED);
     expect(clampZoomSpeed(NaN)).toBe(DEFAULT_ZOOM_SPEED);
     expect(clampZoomSpeed(-Infinity)).toBe(DEFAULT_ZOOM_SPEED);
+    expect(DEFAULT_ZOOM_SPEED).toBe(2);
   });
 
   it("scales the keyboard pan step linearly with the speed multiplier", () => {
@@ -214,10 +216,12 @@ describe("camera speed sliders", () => {
   });
 
   it("bounds the wheel-zoom range from close-up to whole-map", () => {
-    // Close-up floor: inside the old 80, far outside the 2-unit near plane.
-    expect(MIN_ZOOM_DISTANCE).toBe(30);
-    expect(MIN_ZOOM_DISTANCE).toBeLessThan(80);
-    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 10);
+    // Close-up floor: inside the old 30 (and 80 before it), far outside the
+    // 2-unit near plane, just outside the longest hull half-length (14).
+    expect(MIN_ZOOM_DISTANCE).toBe(15);
+    expect(MIN_ZOOM_DISTANCE).toBeLessThan(30);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     // Whole-map ceiling for the doubled 320x256 field.
     expect(MAX_ZOOM_DISTANCE).toBe(8400);
     expect(MAX_ZOOM_DISTANCE).toBeGreaterThan(MIN_ZOOM_DISTANCE);
