@@ -22,21 +22,21 @@ export function burnProgress(ageSeconds: number): number {
 }
 
 /**
- * Outer-flame tint at `progress`: fresh fires glow bright orange, dying fires
+ * Outer-flame tint at `progress`: fresh fires glow soft orange, dying fires
  * sink toward deep ember red. Pure (tuple, no scene state) for tests.
  */
 export function outerFlameTint(progress: number): [number, number, number] {
   const p = Math.min(Math.max(progress, 0), 1);
-  return [1, 0.42 - 0.24 * p, 0.1 - 0.04 * p];
+  return [1, 0.36 - 0.2 * p, 0.09 - 0.04 * p];
 }
 
 /**
- * Core-flame tint at `progress`: near-white-yellow heart when young, amber
+ * Core-flame tint at `progress`: warm yellow heart when young, amber
  * when dying. Pure (tuple, no scene state) for tests.
  */
 export function coreFlameTint(progress: number): [number, number, number] {
   const p = Math.min(Math.max(progress, 0), 1);
-  return [1, 0.82 - 0.3 * p, 0.42 - 0.22 * p];
+  return [1, 0.7 - 0.26 * p, 0.36 - 0.19 * p];
 }
 
 /**
@@ -48,8 +48,8 @@ export function coreFlameTint(progress: number): [number, number, number] {
  * blob. Each burning tree gets the same treatment here — five pooled
  * instanced draws, no per-tree objects, no per-frame allocations:
  *
- * - outer flame: big translucent additive cone engulfing the canopy,
- * - core flame: smaller bright additive cone for the white-hot heart,
+ * - outer flame: modest translucent additive cone engulfing the canopy,
+ * - core flame: smaller soft additive cone for the warm heart,
  * - embers: additive sparks spiralling up out of the flames (plus one dim
  *   leftover spark per smouldering wreck so wrecks still read as hot),
  * - smoke: a two-puff dark column per burning tree, one lighter puff per
@@ -78,11 +78,11 @@ export class FireFx {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    const outerGeo = new THREE.ConeGeometry(11, 34, 7);
+    const outerGeo = new THREE.ConeGeometry(8, 26, 7);
     const outerMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.38,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -90,11 +90,11 @@ export class FireFx {
     this.outerMesh.count = 0;
     this.outerMesh.frustumCulled = false;
     this.outerMesh.renderOrder = 3;
-    const coreGeo = new THREE.ConeGeometry(6, 24, 6);
+    const coreGeo = new THREE.ConeGeometry(4.5, 18, 6);
     const coreMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.85,
+      opacity: 0.6,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -102,11 +102,11 @@ export class FireFx {
     this.coreMesh.count = 0;
     this.coreMesh.frustumCulled = false;
     this.coreMesh.renderOrder = 4;
-    const emberGeo = new THREE.SphereGeometry(2.2, 6, 5);
+    const emberGeo = new THREE.SphereGeometry(1.6, 6, 5);
     const emberMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.7,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -114,11 +114,11 @@ export class FireFx {
     this.emberMesh.count = 0;
     this.emberMesh.frustumCulled = false;
     this.emberMesh.renderOrder = 4;
-    const smokeGeo = new THREE.SphereGeometry(10, 8, 6);
+    const smokeGeo = new THREE.SphereGeometry(8, 8, 6);
     const smokeMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.22,
       depthWrite: false,
     });
     this.smokeMesh = new THREE.InstancedMesh(smokeGeo, smokeMat, MAX_SMOKE);
@@ -130,7 +130,7 @@ export class FireFx {
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0xff8a2a,
       transparent: true,
-      opacity: 0.32,
+      opacity: 0.2,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -197,17 +197,17 @@ export class FireFx {
       const p = positions[i]!;
       const y = groundY(p.x, p.z);
       if (state === "burning" && flames < MAX_FIRES) {
-        // Flames die down with burn age: full height on ignition, ~55%
+        // Flames die down with burn age: modest height on ignition, ~60%
         // when about to collapse into smoulder.
         const progress = burnProgress(field.treeAge[i] ?? 0);
-        const height = 1.1 - 0.5 * progress;
+        const height = 0.85 - 0.35 * progress;
         // Flicker without rng: phase-hash the index so neighbours desync;
         // outer and core breathe at different rates so the silhouette boils
         // instead of pulsing as one cone.
         const outerFlicker = 0.92 + 0.22 * Math.sin(elapsed * 13 + i * 1.7);
-        const swayX = Math.sin(elapsed * 2.3 + i * 1.3) * 2.5;
-        const swayZ = Math.cos(elapsed * 1.9 + i * 0.7) * 2.5;
-        dummy.position.set(p.x + swayX, y + 19 * height * outerFlicker, p.z + swayZ);
+        const swayX = Math.sin(elapsed * 2.3 + i * 1.3) * 1.8;
+        const swayZ = Math.cos(elapsed * 1.9 + i * 0.7) * 1.8;
+        dummy.position.set(p.x + swayX, y + 15 * height * outerFlicker, p.z + swayZ);
         dummy.rotation.set(Math.sin(elapsed * 3.1 + i) * 0.09, 0, Math.cos(elapsed * 2.7 + i * 1.1) * 0.09);
         dummy.scale.set(outerFlicker, height * outerFlicker, outerFlicker);
         dummy.updateMatrix();
@@ -215,7 +215,7 @@ export class FireFx {
         const [or, og, ob] = outerFlameTint(progress);
         this.outerMesh.setColorAt(flames, this.tint.setRGB(or, og, ob));
         const coreFlicker = 0.9 + 0.3 * Math.sin(elapsed * 17 + i * 2.3 + 1.1);
-        dummy.position.set(p.x - swayX * 0.5, y + 15 * height * coreFlicker, p.z - swayZ * 0.5);
+        dummy.position.set(p.x - swayX * 0.5, y + 12 * height * coreFlicker, p.z - swayZ * 0.5);
         dummy.rotation.set(0, 0, 0);
         dummy.scale.set(coreFlicker, height * coreFlicker * (1 + 0.12 * Math.sin(elapsed * 21 + i)), coreFlicker);
         dummy.updateMatrix();
@@ -241,7 +241,7 @@ export class FireFx {
         // Ground glow: firelight pooling on the earth beneath the canopy.
         dummy.position.set(p.x, y + 1.5, p.z);
         dummy.rotation.set(0, 0, 0);
-        dummy.scale.setScalar(24 * (0.9 + 0.2 * Math.sin(elapsed * 11 + i * 2.2)) * (1 - 0.3 * progress));
+        dummy.scale.setScalar(18 * (0.9 + 0.2 * Math.sin(elapsed * 11 + i * 2.2)) * (1 - 0.3 * progress));
         dummy.updateMatrix();
         this.glowMesh.setMatrixAt(flames, dummy.matrix);
         this.glowMesh.setColorAt(flames, this.tint.setRGB(1, 0.62 - 0.2 * progress, 0.3 - 0.12 * progress));
@@ -272,10 +272,10 @@ export class FireFx {
             p.z + k * 3,
           );
           dummy.rotation.set(0, 0, 0);
-          dummy.scale.setScalar(1.1 * (0.7 + t * 1.1));
+          dummy.scale.setScalar(0.9 * (0.7 + t * 1.1));
           dummy.updateMatrix();
           this.smokeMesh.setMatrixAt(smoke, dummy.matrix);
-          const tone = 0.2 + t * 0.25;
+          const tone = 0.28 + t * 0.22;
           this.smokeMesh.setColorAt(smoke, this.tint.setRGB(tone, tone * 0.94, tone * 0.88));
           smoke++;
         }
@@ -284,10 +284,10 @@ export class FireFx {
         const rise = (elapsed * 10 + (i * 37) % SMOULDER_SMOKE_RISE) % SMOULDER_SMOKE_RISE;
         dummy.position.set(p.x + Math.sin(elapsed * 0.9 + i) * 4, y + 28 + rise, p.z);
         dummy.rotation.set(0, 0, 0);
-        dummy.scale.setScalar(0.8 * (0.7 + rise / SMOULDER_SMOKE_RISE));
+        dummy.scale.setScalar(0.65 * (0.7 + rise / SMOULDER_SMOKE_RISE));
         dummy.updateMatrix();
         this.smokeMesh.setMatrixAt(smoke, dummy.matrix);
-        this.smokeMesh.setColorAt(smoke, this.tint.setRGB(0.55, 0.52, 0.48));
+        this.smokeMesh.setColorAt(smoke, this.tint.setRGB(0.6, 0.57, 0.53));
         smoke++;
       }
     }

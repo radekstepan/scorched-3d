@@ -89,9 +89,9 @@ export type TreeDamage = "intact" | "burning" | "smouldering" | "toppled" | "stu
 export type RockDamage = 0 | 1 | 2 | 3;
 
 /** Seconds a tree burns with open flame before collapsing to smoulder. */
-export const BURN_DURATION = 6;
+export const BURN_DURATION = 14;
 /** Seconds a tree smoulders before resolving to a terminal state. */
-export const SMOULDER_DURATION = 8;
+export const SMOULDER_DURATION = 22;
 /** Perf cap: concurrent burning trees (flame instances + light kicks). */
 export const MAX_FIRES = 24;
 /** Perf cap: concurrent smoke puffs (burning + smouldering, view only). */
@@ -99,11 +99,11 @@ export const MAX_SMOKE = 48;
 /** Fringe fires spread only to intact neighbours within this world distance. */
 export const FIRE_SPREAD_RADIUS = 45;
 /** Per-second ignition probability per eligible burning→intact pair. */
-export const SPREAD_RATE = 0.08;
+export const SPREAD_RATE = 0.05;
 /** Blast fraction inside which trees flatten instantly instead of igniting. */
 export const TOPPLE_FRACTION = 0.32;
 /** A burning tree must age this long before it can spread fire. */
-export const SPREAD_MIN_AGE = 3;
+export const SPREAD_MIN_AGE = 6;
 
 /** Caller-owned graduated damage state, indexed by feature id. */
 export interface DamageField {

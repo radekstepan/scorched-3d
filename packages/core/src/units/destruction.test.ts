@@ -335,7 +335,7 @@ describe("graduated collateral damage", () => {
     expect(igniteTree(field, 0)).toBe(true);
     // Age past SPREAD_MIN_AGE without burning out, then force spread with a
     // stub rng that always ignites eligible pairs.
-    tickDamage(field, points, 2.5, () => 0.999);
+    tickDamage(field, points, 5.5, () => 0.999);
     const ev = tickDamage(field, points, 1, () => 0);
     expect(ev.ignited).toContain(1);
     expect(ev.ignited).not.toContain(2);
@@ -376,6 +376,34 @@ describe("graduated collateral damage", () => {
     // Terminal trees stay terminal through long idle ticks (no resurrection).
     tickDamage(field, [{ x: 0, z: 0 }, { x: 9000, z: 0 }], 60, mulberry32(3));
     expect(isTerminalTree(field.trees[0]!)).toBe(true);
+  });
+});
+
+describe("longer subtle burns (fires smoulder on)", () => {
+  it("pins the extended burn/smoulder pacing", () => {
+    expect(BURN_DURATION).toBe(14);
+    expect(SMOULDER_DURATION).toBe(22);
+    expect(BURN_DURATION + SMOULDER_DURATION).toBeGreaterThanOrEqual(30);
+  });
+
+  it("keeps trees burning past the old timings", () => {
+    const field = createDamageField(1, 0);
+    expect(igniteTree(field, 0)).toBe(true);
+    const pts = [{ x: 0, z: 0 }];
+    // The old pipeline left open flame at 6 s; the fire must still burn.
+    tickDamage(field, pts, 7, mulberry32(1));
+    expect(field.trees[0]).toBe("burning");
+    // ... and still smoulder past the old 14 s burn+smoulder total.
+    tickDamage(field, pts, BURN_DURATION - 7 + 0.1, mulberry32(1));
+    expect(field.trees[0]).toBe("smouldering");
+    tickDamage(field, pts, 7, mulberry32(1));
+    expect(field.trees[0]).toBe("smouldering");
+  });
+
+  it("holds spread ignition back until the later spread age", () => {
+    expect(SPREAD_MIN_AGE).toBe(6);
+    expect(SPREAD_MIN_AGE).toBeLessThan(BURN_DURATION);
+    expect(SPREAD_RATE).toBeLessThanOrEqual(0.06);
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  BURN_DURATION,
   createDamageField,
   igniteTree,
   MAX_FIRES,
@@ -106,10 +107,46 @@ describe("FireFx", () => {
   it("burnProgress clamps fresh ignitions to 0 and old burns to 1", () => {
     expect(burnProgress(0)).toBe(0);
     expect(burnProgress(-3)).toBe(0);
-    expect(burnProgress(3)).toBeGreaterThan(0);
-    expect(burnProgress(3)).toBeLessThan(1);
-    expect(burnProgress(6)).toBe(1);
+    expect(burnProgress(BURN_DURATION / 2)).toBeGreaterThan(0);
+    expect(burnProgress(BURN_DURATION / 2)).toBeLessThan(1);
+    expect(burnProgress(BURN_DURATION)).toBe(1);
     expect(burnProgress(999)).toBe(1);
+  });
+
+  it("stays subtle: small soft flames, dim embers/smoke/glow", () => {
+    const scene = new THREE.Scene();
+    const fire = new FireFx(scene);
+    const internals = fire as unknown as {
+      outerMesh: THREE.InstancedMesh;
+      coreMesh: THREE.InstancedMesh;
+      emberMesh: THREE.InstancedMesh;
+      smokeMesh: THREE.InstancedMesh;
+      glowMesh: THREE.InstancedMesh;
+    };
+    // Modest cones, never the old traffic-cone silhouette.
+    const outerGeo = internals.outerMesh.geometry as THREE.ConeGeometry;
+    expect(outerGeo.parameters.radius).toBeLessThanOrEqual(8);
+    expect(outerGeo.parameters.height).toBeLessThanOrEqual(26);
+    const coreGeo = internals.coreMesh.geometry as THREE.ConeGeometry;
+    expect(coreGeo.parameters.radius).toBeLessThanOrEqual(4.5);
+    expect(coreGeo.parameters.height).toBeLessThanOrEqual(18);
+    expect((internals.outerMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.4);
+    expect((internals.coreMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.65);
+    expect((internals.emberMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.75);
+    expect((internals.smokeMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.25);
+    expect((internals.glowMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.22);
+    // Small soft puffs/sparks, never near-black smoke.
+    expect((internals.smokeMesh.geometry as THREE.SphereGeometry).parameters.radius).toBeLessThanOrEqual(8);
+    expect((internals.emberMesh.geometry as THREE.SphereGeometry).parameters.radius).toBeLessThanOrEqual(1.6);
+    fire.dispose();
+  });
+
+  it("tracks the longer burn: 7-second-old fires still flame mid-progress", () => {
+    expect(BURN_DURATION).toBeGreaterThanOrEqual(12);
+    expect(SMOULDER_DURATION).toBeGreaterThanOrEqual(18);
+    // 7 s used to be past the burn; now it reads as a half-died flame.
+    expect(burnProgress(7)).toBeGreaterThan(0);
+    expect(burnProgress(7)).toBeLessThan(1);
   });
 
   it("cools flame tints monotonically: young fires burn brighter", () => {
