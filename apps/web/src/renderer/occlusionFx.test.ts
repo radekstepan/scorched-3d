@@ -7,6 +7,9 @@ import {
   disposeOcclusionAssets,
   ghostBoxFor,
   OCCLUSION_BLUE,
+  OCCLUSION_FILL_OPACITY,
+  OCCLUSION_OUTLINE_OPACITY,
+  OCCLUSION_OUTLINE_ORDER,
   OCCLUSION_RENDER_ORDER,
   OCCLUSION_TAPS,
   OcclusionFx,
@@ -126,6 +129,37 @@ describe("OcclusionFx ghost policy", () => {
     });
   }
 
+  /** A real hull: box hull mesh + yawed turret subgroup with its own mesh. */
+  function meshedBody(): THREE.Group {
+    const body = new THREE.Group();
+    body.position.set(0, 10, 0);
+    const hull = new THREE.Mesh(
+      new THREE.BoxGeometry(13, 6, 18),
+      new THREE.MeshLambertMaterial({ color: 0x888866 }),
+    );
+    hull.position.set(0, 4, 0);
+    body.add(hull);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    const plate = new THREE.Mesh(
+      new THREE.BoxGeometry(8, 5, 9),
+      new THREE.MeshLambertMaterial({ color: 0x666677 }),
+    );
+    plate.position.set(0, 9.5, -1);
+    turret.add(plate);
+    body.add(turret);
+    return body;
+  }
+
+  function disposeBody(body: THREE.Group): void {
+    body.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      mat?.dispose();
+    });
+  }
+
   it("shows a ghost exactly while occluded, hiding it in the open", () => {
     const scene = new THREE.Scene();
     const fx = new OcclusionFx(scene, kinds);
@@ -167,35 +201,104 @@ describe("OcclusionFx ghost policy", () => {
     }
   });
 
-  it("ghosts read in the selection blue, above the health bars, off the hull", () => {
+  it("mirrors the true hull silhouette, not a bounding rectangle", () => {
     expect(OCCLUSION_BLUE).toBe(SELECTION_CORE);
     expect(OCCLUSION_RENDER_ORDER).toBeGreaterThan(HEALTH_BAR_RENDER_ORDER);
+    expect(OCCLUSION_OUTLINE_ORDER).toBeGreaterThan(OCCLUSION_RENDER_ORDER);
+    const scene = new THREE.Scene();
+    const fx = new OcclusionFx(scene, ["stump"] as const);
+    const body = meshedBody();
+    try {
+      fx.update(cam, [body], { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
+      expect(fx.isShown(0)).toBe(true);
+      const ghost = fx.group.children[0] as THREE.Group;
+      // Ghost rides the body origin exactly (silhouette overlays the hull).
+      expect(ghost.position.x).toBe(body.position.x);
+      expect(ghost.position.y).toBe(body.position.y);
+      expect(ghost.position.z).toBe(body.position.z);
+      // Every hull mesh gets a fill sharing the source geometry (true shape)
+      // plus an edge outline — no footprint-sized box anywhere.
+      const fills: THREE.Mesh[] = [];
+      const outlines: THREE.LineSegments[] = [];
+      ghost.traverse((child) => {
+        if (child.name === "occlusion-fill") fills.push(child as THREE.Mesh);
+        if (child.name === "occlusion-outline") outlines.push(child as THREE.LineSegments);
+      });
+      expect(fills.length).toBe(2);
+      expect(outlines.length).toBe(2);
+      const hullGeo = (body.children[0] as THREE.Mesh).geometry;
+      expect(fills.some((f) => f.geometry === hullGeo)).toBe(true);
+      for (const fill of fills) {
+        const mat = fill.material as THREE.MeshBasicMaterial;
+        expect(mat.color.getHex()).toBe(SELECTION_CORE);
+        expect(mat.transparent).toBe(true);
+        expect(mat.opacity).toBeCloseTo(OCCLUSION_FILL_OPACITY, 5);
+        expect(mat.depthTest).toBe(false);
+        expect(mat.depthWrite).toBe(false);
+        expect(fill.renderOrder).toBe(OCCLUSION_RENDER_ORDER);
+        expect(fill.userData.noHighlight).toBe(true);
+      }
+      for (const outline of outlines) {
+        const mat = outline.material as THREE.LineBasicMaterial;
+        expect(mat.color.getHex()).toBe(SELECTION_CORE);
+        expect(mat.opacity).toBeCloseTo(OCCLUSION_OUTLINE_OPACITY, 5);
+        expect(mat.depthTest).toBe(false);
+        expect(outline.renderOrder).toBe(OCCLUSION_OUTLINE_ORDER);
+        expect(outline.userData.noHighlight).toBe(true);
+      }
+      // Ghosts live in their own scene group — never body children — so
+      // hull damage charring and picking can never touch them.
+      expect(body.getObjectByName("occlusion-ghost")).toBeUndefined();
+      expect(body.getObjectByName("occlusion-fill")).toBeUndefined();
+    } finally {
+      fx.dispose();
+      disposeOcclusionAssets();
+      disposeBody(body);
+    }
+  });
+
+  it("tracks the live turret yaw in the silhouette", () => {
+    const scene = new THREE.Scene();
+    const fx = new OcclusionFx(scene, ["stump"] as const);
+    const body = meshedBody();
+    const turret = body.getObjectByName("turret")!;
+    try {
+      turret.rotation.y = 0.6;
+      fx.update(cam, [body], { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
+      const ghost = fx.group.children[0] as THREE.Group;
+      const ghostTurret = ghost.getObjectByName("turret")!;
+      expect(ghostTurret.rotation.y).toBeCloseTo(0.6, 9);
+      // Second tick with a new yaw: transform sync only, no rebuild.
+      turret.rotation.y = -0.4;
+      fx.update(cam, [body], { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
+      expect(ghost.getObjectByName("turret")!.rotation.y).toBeCloseTo(-0.4, 9);
+    } finally {
+      fx.dispose();
+      disposeOcclusionAssets();
+      disposeBody(body);
+    }
+  });
+
+  it("falls back to a footprint fill+outline box for mesh-less bodies", () => {
     const scene = new THREE.Scene();
     const fx = new OcclusionFx(scene, kinds);
     try {
       const list = bodies();
       fx.update(cam, list, { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
-      for (const child of fx.group.children) {
-        const line = child as THREE.LineSegments;
-        const mat = line.material as THREE.LineBasicMaterial;
-        expect(mat.color.getHex()).toBe(SELECTION_CORE);
-        expect(mat.depthTest).toBe(false);
-        expect(mat.depthWrite).toBe(false);
-        expect(line.renderOrder).toBe(OCCLUSION_RENDER_ORDER);
-        expect(line.userData.noHighlight).toBe(true);
-      }
-      // Ghosts live in their own scene group — never body children — so
-      // hull damage charring and picking can never touch them.
-      for (const body of list) {
-        expect(body.getObjectByName("occlusion-ghost")).toBeUndefined();
-      }
-      // Ghost box rides the body origin, yawed with the hull.
-      const ghost = fx.group.children[0] as THREE.LineSegments;
+      const ghost = fx.group.children[0] as THREE.Group;
       const size = ghostBoxFor(kinds[0]);
-      expect(ghost.position.x).toBe(list[0]!.position.x);
-      expect(ghost.position.y).toBeCloseTo(list[0]!.position.y + size.h / 2, 9);
-      expect(ghost.rotation.y).toBeCloseTo(list[0]!.rotation.y, 9);
-      expect(ghost.scale.x).toBeCloseTo(size.w, 9);
+      const fill = ghost.getObjectByName("occlusion-fill") as THREE.Mesh;
+      const outline = ghost.getObjectByName("occlusion-outline") as THREE.LineSegments;
+      expect(fill).toBeDefined();
+      expect(outline).toBeDefined();
+      expect(fill.scale.x).toBeCloseTo(size.w, 9);
+      expect(fill.scale.y).toBeCloseTo(size.h, 9);
+      expect(fill.scale.z).toBeCloseTo(size.d, 9);
+      // Fallback yaws with the hull via the ghost origin.
+      expect(ghost.quaternion.y).toBeCloseTo(
+        new THREE.Quaternion().setFromEuler(list[0]!.rotation).y,
+        9,
+      );
     } finally {
       fx.dispose();
       disposeOcclusionAssets();

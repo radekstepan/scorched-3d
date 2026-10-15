@@ -362,12 +362,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live CombatFx damage, re-seated every tick from the body origins.
     const health = new HealthBars(scene, units.children.length);
     health.setVisible(optsRef.current.showHealth);
-    // Occlusion x-ray: a blue box outline (selection cyan) for any unit
-    // hidden behind the heightfield or a live canopy from this camera, so
-    // occluded hulls stay locatable. Own scene group, depth-ignored, above
-    // the health-bar layer; never a body child, so hull paint (incl. damage
-    // charring), selection rings/beacons, waypoints, and picking ignore it.
-    // Sampled taps vs live groundY + the shared stands — no raycaster.
+    // Occlusion x-ray: a blue silhouette ghost (selection cyan: true hull
+    // outline + slight transparent fill) for any unit hidden behind the
+    // heightfield or a live canopy from this camera, so occluded hulls stay
+    // locatable. Own scene group, depth-ignored, above the health-bar layer;
+    // never a body child, so hull paint (incl. damage charring), selection
+    // rings/beacons, waypoints, and picking ignore it. Sampled taps vs live
+    // groundY + the shared stands — no raycaster.
     const occlusion = new OcclusionFx(
       scene,
       map.units.map((u) => u.kind),
