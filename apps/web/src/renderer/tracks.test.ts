@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
   MAX_TRACKS,
+  TRACK_LIFT,
+  TRACK_LENGTH,
   TRACK_LIFETIME,
   TRACK_PEAK_OPACITY,
   TRACK_SPACING,
@@ -64,8 +66,11 @@ describe("track helpers", () => {
     expect(trackAlpha(TRACK_LIFETIME / 2)).toBeCloseTo(TRACK_PEAK_OPACITY / 2, 12);
     expect(trackAlpha(TRACK_LIFETIME)).toBe(0);
     expect(trackAlpha(TRACK_LIFETIME + 10)).toBe(0);
-    // The peak stays subtle: well under the scorch layer, never opaque.
-    expect(TRACK_PEAK_OPACITY).toBeLessThanOrEqual(0.3);
+    // The peak is visible yet stays under the scorch layer (0.62 opacity,
+    // lift 1.2, order 2): a blast scar always wins where they overlap.
+    expect(TRACK_PEAK_OPACITY).toBeGreaterThan(0.3);
+    expect(TRACK_PEAK_OPACITY).toBeLessThan(0.62);
+    expect(TRACK_LIFT).toBeLessThan(1.2);
   });
 
   it("widens treads per kind (tanks wider, the walker scuffs)", () => {
@@ -197,5 +202,39 @@ describe("TrackTrails", () => {
     tracks.update(movement, 1 / 60);
     expect(tracks.count).toBe(0);
     movement.dispose();
+  });
+
+  it("renders wider, longer-lived marks under the scorch layer", () => {
+    // Visibility tune pinned: 12 s ribbons, overlapping quads, tank treads
+    // wider than the old 9–11 u, all still below scorch in every dimension.
+    expect(TRACK_LIFETIME).toBe(12);
+    expect(TRACK_LENGTH).toBeGreaterThan(TRACK_SPACING);
+    expect(trackWidthFor("stump")).toBeGreaterThan(11);
+    const scene = new THREE.Scene();
+    const far: TrackSource = {
+      unitCount: 1,
+      kindAt: () => "stump",
+      isDestroyed: () => false,
+      moverState: null as unknown as TrackSource["moverState"],
+    };
+    let fx = 0;
+    far.moverState = () => ({ x: (fx += TRACK_SPACING + 1), z: 0, hull: 0, leg: 1 });
+    const tracks = new TrackTrails(scene, { groundY: () => 100 });
+    tracks.update(far, 1 / 60);
+    tracks.update(far, 1 / 60);
+    expect(tracks.count).toBeGreaterThan(0);
+    const meshes = scene.children.filter((c): c is THREE.Mesh => c.type === "Mesh");
+    expect(meshes.length).toBeGreaterThan(0);
+    for (const mesh of meshes) {
+      // Below scorch (order 2) in draw order; lift pin lives in the fade test.
+      expect(mesh.renderOrder).toBe(1);
+    }
+    const mark = meshes[0]!;
+    expect(mark.scale.x).toBeCloseTo(trackWidthFor("stump"), 9);
+    expect(mark.scale.z).toBeCloseTo(TRACK_LENGTH, 9);
+    expect((mark.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(
+      TRACK_PEAK_OPACITY,
+    );
+    tracks.dispose();
   });
 });

@@ -4,8 +4,8 @@ import type { Mover, UnitKind } from "@scorched-3d/core";
 /**
  * Fading track trails: vehicles leave a subtle compressed-dust trace behind
  * themselves while driving. Each moving hull drops small flat quads at fixed
- * travel intervals; every mark fades to nothing over a few seconds and is
- * then recycled — so a patrol lane reads as a faint dotted ribbon, never as
+ * travel intervals; every mark fades to nothing over seconds and is
+ * then recycled — so a patrol lane reads as a dotted ribbon, never as
  * scorch. Renderer-side only: movers and simulation never see the marks.
  *
  * Palette discipline (cf. the gentler-scorch tone): cool dark grey at low
@@ -14,26 +14,26 @@ import type { Mover, UnitKind } from "@scorched-3d/core";
  */
 
 /** Seconds one mark stays visible before it is recycled. */
-export const TRACK_LIFETIME = 9;
+export const TRACK_LIFETIME = 12;
 /** Travel distance (world units) between dropped marks. */
 export const TRACK_SPACING = 16;
 /** Hard cap on live marks (bounded pool, oldest recycled first). */
 export const MAX_TRACKS = 160;
-/** Peak opacity of a fresh mark (subtle: well under the scorch layer). */
-export const TRACK_PEAK_OPACITY = 0.26;
+/** Peak opacity of a fresh mark (visible, still well under the scorch layer). */
+export const TRACK_PEAK_OPACITY = 0.42;
 /** Mark color: cool dark grey (compressed dust, never scorch-brown). */
 export const TRACK_COLOR = 0x33302b;
 /** Surface lift above the seated terrain (below scorch, above z-fight). */
 export const TRACK_LIFT = 0.8;
 /** Mark length along travel (overlaps `TRACK_SPACING` so lanes link up). */
-export const TRACK_LENGTH = 20;
+export const TRACK_LENGTH = 22;
 
 /** Tread width per kind (tanks wider, the walker just scuffs). */
 export const TRACK_WIDTH: Record<UnitKind, number> = {
-  flash: 9,
-  stump: 11,
-  hammer: 10,
-  commander: 4.5,
+  flash: 11,
+  stump: 13,
+  hammer: 12,
+  commander: 6,
 };
 
 /** Tread width for a kind (falls back to flash for unknown kinds). */
