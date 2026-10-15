@@ -166,7 +166,7 @@ export default function App() {
         </div>
       </aside>
 
-      <aside className="pointer-events-auto absolute right-4 top-24 z-10 w-[230px] md:right-6 md:top-28">
+      <aside className="pointer-events-auto absolute right-4 top-44 z-10 max-h-[calc(100vh-14rem)] w-[230px] overflow-y-auto md:right-6 md:top-48">
         <div className="hud-panel space-y-3 p-3">
           <Label>View</Label>
           <Slider
