@@ -16,20 +16,18 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-When clicking somewhere for the unit to move, use the same round "circle" logic we use around the existing units now. The circle is "cutoff" by hilly terrain when  try to get a unit to go somewhere. But the regular outline around a unit shows always correct.
-
-I should not see double circles when I select a unit. Again, just make the one circle thicker when I select a unit.
-
-Units move slower when next to each other, so figure out if units should move away from each other so they move faster. Don't make them stuck.
-
-The HQ should not "float" when on a hilly terrain. THe "foundations" need to go deep enough to show it being actually "set" in the ground.
-
-Double the size of the maps.
-
-The longer the projectile distance, the less accurate it'll be, especially with artillery. But other units too. Make it shoot "around" randomly. But not too far off target.
-
-Turn on health by default.
-
-Add smaller "infantry" like units. Fit with the theme of the game.
-
 Make the tracks behind units a bit more visible.
+
+---
+
+if a unit is "dead", don't show it's blue outline when behind obstructions anymore.
+
+Some of the projectiles are flying "through" terrain. Make sure it does not happen. If a unit cannot engage because its view is obstructed it has to move to a higher vantage point or closer.
+
+Be able to zoom in closer
+
+Be able to click anywhere on the minimap to move to that area, preserve the angle of view and zoom level.
+
+At the larger map and some point the units are just guarding and not attacking. If a "team" has found the enemy direction/HQ, try to keep going there.
+
+Make the tracks behind vehicles a bit more visible.
