@@ -586,10 +586,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // Retaliation: a surviving splash points the victim at its live shooter
     // so idle/patrolling hulls turn and pursue while the memory is fresh
     // (ordered/holding hulls refuse — player orders win — and wrecks and
-    // self-splashes stay silent). The threat feeds the same core drive the
-    // patrol uses, so pursuit never teleports.
-    combat.onUnitThreatened = (victim, attacker, ax, az) => {
-      movement.threatenUnit(victim, attacker, ax, az);
+    // self-splashes stay silent). Arcing shells investigate past the
+    // retaliation gates, and the victim's turret traverses onto the live
+    // shooter either way (range and terrain still gate every round). The
+    // threat feeds the same core drive the patrol uses, so pursuit never
+    // teleports.
+    combat.onUnitThreatened = (victim, attacker, ax, az, _damageAdd, shell) => {
+      movement.threatenUnit(victim, attacker, ax, az, shell);
+      combat.trackThreat(victim, attacker);
     };
     // Obstructed guns: a hull that holds fire because terrain hides its
     // target repositions toward it (higher vantage or closer) through the

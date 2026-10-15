@@ -108,6 +108,20 @@ export const THREAT_MEMORY_DURATION = 12;
  */
 export const THREAT_ENGAGE_RADIUS = 900;
 /**
+ * Shell-investigate engage gate: a wound from an arcing shell records a
+ * threat inside this distance even past the bolt envelope — so a tank being
+ * shelled from beyond line-of-sight turns to investigate the firing
+ * position instead of patrolling on. Sized past the hammer's reach (1000
+ * plus the scheduler's +50 admission margin and scatter) yet inside the
+ * disengage bound, so the hysteresis still holds: a fresh victim answers
+ * shells at 1100 while an engaged one tolerates 1250. Deliberately the
+ * hunt-eyes scale — being shelled is as salient as spotting the enemy.
+ * Memories recorded past the retaliation gates carry the hunt leash, so the
+ * investigate ranges like a hunt (bounded, never a map-wide chase) under
+ * the same countdown.
+ */
+export const SHELL_ENGAGE_RADIUS = 1100;
+/**
  * Disengage gate: an active pursuit ends once the (live) attacker is
  * farther than this from the victim. Deliberately larger than the engage
  * gate — the gap is the hysteresis that stops boundary oscillation.
@@ -195,20 +209,29 @@ export interface ThreatAnchor {
  *   own blast splash must not pursue itself.
  * - A fresh victim engages only inside `THREAT_ENGAGE_RADIUS` and only when
  *   the attacker sits inside the leash of `anchor` — distant snipers never
- *   pull a patrol off its loop.
+ *   pull a patrol off its loop. Wounds from arcing shells (`shell`, see
+ *   `SHELL_ENGAGE_RADIUS`) engage wider and range on the hunt leash instead:
+ *   the same memory, the same drive, the same countdown — a shelled hull
+ *   investigates the firing position instead of staying put, giving up at
+ *   the same leash, disengage, and expiry gates. Close shell hits record a
+ *   plain retaliation memory, byte-identical to a bolt hit.
  * - A re-hit from the *same* attacker refreshes position + clock while the
  *   attacker stays inside `THREAT_DISENGAGE_RADIUS` (the hysteresis side:
  *   an engaged hull tolerates more distance than a fresh one); past it the
- *   memory drops instead of refreshing.
+ *   memory drops instead of refreshing. The refresh keeps the memory's
+ *   carried leash, so a ranging investigate (or hunt) never collapses to
+ *   the tight anchor guard mid-chase.
  * - A hit from a *new* attacker steals the memory only inside the engage
  *   gate — the latest close hit is the most salient — otherwise the old
- *   pursuit stands.
+ *   pursuit stands. Shell hits steal on the wider shell gates (recording a
+ *   hunt-leash memory past the retaliation bounds), bolts on the tight ones.
  * - HQ assaults are the exception: a hull engaging a fort (`structure`, see
  *   `seekStructure`) never drops the push on a single splash. Hits from one
  *   live enemy count up on `challenger`, and only `HQ_DEFENSE_HITS` in a row
  *   from the same gun retargets the hull onto the challenger — self-defense
  *   first, the fort after. A different attacker restarts the count; distant
- *   chips (past the engage gate or the leash) record nothing.
+ *   chips (past the engage gate or the leash) record nothing, shells
+ *   included.
  */
 export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
   mover: M,
@@ -217,6 +240,7 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   ax: number,
   az: number,
   anchor?: ThreatAnchor | null,
+  shell = false,
 ): M {
   if (!Number.isInteger(attacker) || attacker < 0) return mover;
   if (!Number.isFinite(ax) || !Number.isFinite(az)) return mover;
@@ -227,6 +251,14 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   const dz = az - victim.z;
   const dist = Math.hypot(dx, dz);
   if (!(dist >= 0)) return mover;
+  const engage = shell ? SHELL_ENGAGE_RADIUS : THREAT_ENGAGE_RADIUS;
+  const leashGate = shell ? HUNT_LEASH_RADIUS : THREAT_LEASH_RADIUS;
+  // Close enough for a plain retaliation memory (bolt-identical shape, no
+  // carried leash): only shells refused here fall through to the wider
+  // investigate gates below.
+  const close =
+    dist <= THREAT_ENGAGE_RADIUS &&
+    !(anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS);
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
   if (live) {
     // An HQ assault under fire holds its push until the fire proves
@@ -239,15 +271,36 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
         const { threat: _dropped, ...rest } = mover;
         return { ...rest } as M;
       }
-      return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+      return {
+        ...mover,
+        threat: {
+          attacker,
+          x: ax,
+          z: az,
+          ttl: THREAT_MEMORY_DURATION,
+          ...(live.leash !== undefined ? { leash: live.leash } : {}),
+        },
+      };
     }
-    if (dist > THREAT_ENGAGE_RADIUS) return mover;
-    if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
-    return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+    if (dist > engage) return mover;
+    if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
+    return {
+      ...mover,
+      threat:
+        shell && !close
+          ? { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS }
+          : { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION },
+    };
   }
-  if (dist > THREAT_ENGAGE_RADIUS) return mover;
-  if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
-  return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+  if (dist > engage) return mover;
+  if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
+  return {
+    ...mover,
+    threat:
+      shell && !close
+        ? { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS }
+        : { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION },
+  };
 }
 
 /**

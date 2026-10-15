@@ -211,16 +211,22 @@ export class UnitMovement {
    * Point a live hull at its attacker from (`ax`, `az`) (core
    * `notifyThreat` against the patrol anchor, so only idle/patrolling hulls
    * with a near, reachable threat pursue — ordered/holding hulls refuse).
-   * Wrecks refuse the memory (they hold forever), and a hull never blames
-   * itself (own-blast self-splashes are ignored). Idempotent per tick:
-   * re-hits refresh the memory, they never stack.
+   * Arcing shell wounds (`shell`) investigate past the retaliation gates on
+   * the hunt leash instead of staying silent, so a tank being shelled turns
+   * toward the firing position. Wrecks refuse the memory (they hold
+   * forever), a hull never blames itself (own-blast self-splashes are
+   * ignored), and same-team attackers never draw retaliation (friendly
+   * shells are honest splash, never a grudge). Idempotent per tick: re-hits
+   * refresh the memory, they never stack.
    */
-  threatenUnit(victim: number, attacker: number, ax: number, az: number): void {
+  threatenUnit(victim: number, attacker: number, ax: number, az: number, shell = false): void {
     const mover = this.movers[victim];
     if (!mover || this.destroyed[victim]) return;
     if (victim === attacker) return;
+    const victimTeam = this.teamAt(victim);
+    if (victimTeam !== undefined && victimTeam === this.teamAt(attacker)) return;
     const anchor = this.routes[victim]?.[0] ?? null;
-    this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor);
+    this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor, shell);
   }
 
   /** True while the unit carries a live retaliation threat memory. */

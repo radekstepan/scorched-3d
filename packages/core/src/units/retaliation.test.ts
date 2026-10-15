@@ -11,6 +11,7 @@ import {
   HUNT_ENGAGE_RADIUS,
   HUNT_LEASH_RADIUS,
   HQ_DEFENSE_HITS,
+  SHELL_ENGAGE_RADIUS,
   THREAT_DISENGAGE_RADIUS,
   THREAT_ENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
@@ -25,6 +26,7 @@ import {
   seekStructure,
   tickThreat,
 } from "./retaliation.js";
+import { wrapAngle, yawToTarget } from "./facing.js";
 
 function flatRoute(len = 400): RoutePoint[] {
   return [
@@ -498,6 +500,122 @@ describe("acquireHunt", () => {
     expect(acquireHunt(mover, 9, teams, foesNear, alive, anchor).threat).toBeUndefined();
     const nanFoes = [{ x: Number.NaN, z: 0 }, ...foesNear.slice(1)];
     expect(acquireHunt(mover, 0, teams, nanFoes, alive, anchor).threat).toBeUndefined();
+  });
+});
+
+describe("shell investigate", () => {
+  it("records a distant shell hit as a hunt-leash investigate memory", () => {
+    const route = flatRoute();
+    const mover = initMover(route, 0);
+    // A hammer shelling from 1000: past the bolt envelope, inside the shell
+    // engage gate and the hunt leash of the anchor.
+    const next = notifyThreat(mover, mover, 1, 1000, 0, route[0], true);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat).toMatchObject({
+      attacker: 1,
+      x: 1000,
+      z: 0,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: HUNT_LEASH_RADIUS,
+    });
+    expect(mover.threat).toBeUndefined();
+  });
+
+  it("still ignores shells past shell engage or the hunt leash", () => {
+    const route = flatRoute();
+    const mover = initMover(route, 0);
+    // Past the shell engage gate: cross-map artillery never pulls a patrol.
+    expect(hasThreat(notifyThreat(mover, mover, 1, SHELL_ENGAGE_RADIUS + 1, 0, route[0], true))).toBe(false);
+    // Inside shell engage but past the hunt leash of the anchor: likewise.
+    expect(hasThreat(notifyThreat(mover, mover, 1, 1000, 0, { x: -5000, z: 0 }, true))).toBe(false);
+  });
+
+  it("records close shell hits as plain retaliation (bolt-identical)", () => {
+    const route = flatRoute();
+    const next = notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 300, 0, route[0], true);
+    expect(next.threat).toMatchObject({ attacker: 1, x: 300, z: 0, ttl: THREAT_MEMORY_DURATION });
+    expect(next.threat?.leash).toBeUndefined();
+  });
+
+  it("investigates past the bolt leash where a bolt hit stays silent", () => {
+    const route = flatRoute();
+    const mover = initMover(route, 0);
+    // Attacker 800 away: inside bolt engage, past the 650 retaliation leash
+    // of the anchor — a bolt hit is ignored, a shell investigates.
+    expect(hasThreat(notifyThreat(mover, mover, 1, 800, 0, route[0]))).toBe(false);
+    const next = notifyThreat(mover, mover, 1, 800, 0, route[0], true);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat?.leash).toBe(HUNT_LEASH_RADIUS);
+  });
+
+  it("refreshes an investigate on shell re-hits, keeping the wide leash", () => {
+    const route = flatRoute();
+    const live = notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 1000, 0, route[0], true);
+    const refreshed = notifyThreat(live, live, 1, 1020, 10, route[0], true);
+    expect(hasThreat(refreshed)).toBe(true);
+    expect(refreshed.threat).toMatchObject({
+      attacker: 1,
+      x: 1020,
+      z: 10,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: HUNT_LEASH_RADIUS,
+    });
+  });
+
+  it("refreshes an investigate on a close hit, keeping the ranging leash", () => {
+    const route = flatRoute();
+    const live = notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 1000, 0, route[0], true);
+    // The gun closed in: position and clock refresh, but the ranging leash
+    // survives the re-hit (like seeks and drive ticks) instead of
+    // collapsing to the tight anchor guard mid-chase.
+    const refreshed = notifyThreat(live, live, 1, 300, 0, route[0]);
+    expect(refreshed.threat).toMatchObject({
+      attacker: 1, x: 300, z: 0, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS,
+    });
+  });
+
+  it("lets player orders and holds refuse shells too", () => {
+    const route = flatRoute();
+    const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
+    expect(notifyThreat(ordered, ordered, 1, 1000, 0, route[0], true).threat).toBeUndefined();
+    const holding: Mover = { ...initMover(route, 0), hold: true };
+    expect(notifyThreat(holding, holding, 1, 1000, 0, route[0], true).threat).toBeUndefined();
+  });
+
+  it("drives an investigate toward the firing position, facing it", () => {
+    const route = flatRoute();
+    // Hull starts facing away from the firing position (east); the drive
+    // must turn toward it and close the distance.
+    const victim = { ...notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 1000, 0, route[0], true), hull: Math.PI };
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 1000, z: 0 },
+    ];
+    const start = Math.hypot(victim.x - 1000, victim.z - 0);
+    const want = yawToTarget(victim, { x: 1000, z: 0 });
+    const turnBefore = Math.abs(wrapAngle(victim.hull - want));
+    const next = advanceMover("stump", victim, route, 1, 1, null, null, foes);
+    expect(hasThreat(next)).toBe(true);
+    expect(Math.hypot(next.x - 1000, next.z - 0)).toBeLessThan(start);
+    expect(Math.abs(wrapAngle(next.hull - want))).toBeLessThan(turnBefore);
+  });
+
+  it("gives up the investigate on expiry and past the hunt leash", () => {
+    const route = flatRoute();
+    const victim = { ...notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 1000, 0, route[0], true), hull: 0 };
+    const expired = advanceMover("stump", victim, route, THREAT_MEMORY_DURATION + 1);
+    expect(hasThreat(expired)).toBe(false);
+    expect("threat" in expired).toBe(false);
+    // Past the hunt leash of the anchor: the drive lets go like any pursuit.
+    const far: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: {
+        attacker: 1, x: HUNT_LEASH_RADIUS + 200, z: 0, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS,
+      },
+    };
+    const foes = [{ x: 0, z: 0 }, { x: HUNT_LEASH_RADIUS + 200, z: 0 }];
+    expect(hasThreat(advanceMover("stump", far, route, 1, 1, null, null, foes))).toBe(false);
   });
 });
 

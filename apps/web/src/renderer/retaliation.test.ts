@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  HUNT_LEASH_RADIUS,
   initMover,
   mulberry32,
+  muzzleYaw,
   notifyThreat,
+  wrapAngle,
+  yawToTarget,
   type Mover,
   type RoutePoint,
   type UnitKind,
@@ -731,6 +735,210 @@ describe("peewee scout", () => {
     for (let n = 0; n < 3; n++) movement.update(1 / 60);
     expect(movement.hasThreat(0)).toBe(false);
     movement.dispose();
+  });
+});
+
+describe("CombatFx shell investigate", () => {
+  it("marks shell splashes so victims investigate the firing position", () => {
+    const { fx } = sizedFx();
+    const threats: { victim: number; attacker: number; shell: boolean }[] = [];
+    fx.onUnitThreatened = (victim, attacker, _ax, _az, _damageAdd, shell) =>
+      threats.push({ victim, attacker, shell });
+    // Hammer shells arc in: the hook carries shell=true.
+    splash(fx, 10, 100, 0, "hammer", 1);
+    expect(threats).toHaveLength(1);
+    expect(threats[0]).toMatchObject({ victim: 0, attacker: 1, shell: true });
+    fx.dispose();
+  });
+
+  it("marks direct-fire bolts as non-shell", () => {
+    const { fx } = sizedFx();
+    const threats: { shell: boolean }[] = [];
+    fx.onUnitThreatened = (_victim, _attacker, _ax, _az, _damageAdd, shell) => threats.push({ shell });
+    splash(fx, 2, 100, 0, "flash", 1);
+    expect(threats).toHaveLength(1);
+    expect(threats[0]?.shell).toBe(false);
+    fx.dispose();
+  });
+
+  it("never blames a same-team shooter (friendly shells ignored)", () => {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 1, cellZ: 1, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: 0, team: 0 },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(400, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const fx = new CombatFx(scene, group, mulberry32(7));
+    fx.update(1 / 60);
+    const threats: unknown[] = [];
+    const stuns: unknown[] = [];
+    fx.onUnitThreatened = (...args: unknown[]) => threats.push(args);
+    fx.onUnitStunned = (...args: unknown[]) => stuns.push(args);
+    // Mate 1 shells victim 0 (past the 64-unit hammer blast only the victim
+    // is touched): honest splash damage, never a grudge.
+    splash(fx, 10, 100, 0, "hammer", 1);
+    expect(stuns).toHaveLength(1);
+    expect(threats).toHaveLength(0);
+    fx.dispose();
+  });
+
+  it("traverses the victim turret onto its live attacker", () => {
+    const { fx, units } = sizedFx();
+    const a = units.children[0] as THREE.Group;
+    const b = units.children[1] as THREE.Group;
+    const want = yawToTarget({ x: a.position.x, z: a.position.z }, { x: b.position.x, z: b.position.z });
+    fx.trackThreat(0, 1);
+    const gunBefore = muzzleYaw(fx.aimState(0)!.hull, fx.aimState(0)!.turret);
+    const errBefore = Math.abs(wrapAngle(gunBefore - want));
+    expect(errBefore).toBeGreaterThan(0.1);
+    for (let n = 0; n < 30; n++) fx.update(1 / 60);
+    expect(fx.isDestroyedAt(0)).toBe(false);
+    const aimed = fx.aimState(0)!;
+    const errAfter = Math.abs(wrapAngle(muzzleYaw(aimed.hull, aimed.turret) - want));
+    expect(errAfter).toBeLessThan(errBefore);
+    fx.dispose();
+  });
+
+  it("refuses self-tracks, wrecks, and unknown indices", () => {
+    const { fx } = sizedFx();
+    fx.trackThreat(0, 0);
+    fx.trackThreat(0, 5);
+    fx.trackThreat(5, 1);
+    (fx as unknown as { destroyed: boolean[] }).destroyed[1] = true;
+    fx.trackThreat(0, 1);
+    // Nothing tracked and no live pair drawable: the aim never slews.
+    const before = fx.aimState(0)!;
+    for (let n = 0; n < 30; n++) fx.update(1 / 60);
+    expect(fx.aimState(0)).toEqual(before);
+    fx.dispose();
+  });
+});
+
+describe("UnitMovement shell investigate", () => {
+  /** Victim at the origin, hammer parked 1000 east — past the bolt gates. */
+  function makeShellMovement(teams?: [number, number]): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, ...(teams ? { team: teams[0] } : {}) },
+      { kind: "hammer", cellX: 40, cellZ: 40, rotation: Math.PI, ...(teams ? { team: teams[1] } : {}) },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(1000, 120, 0)]) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const movement = new UnitMovement(
+      group,
+      [
+        [
+          { x: 0, z: 0 },
+          { x: 0, z: 400 },
+          { x: 400, z: 400 },
+          { x: 400, z: 0 },
+        ],
+        [
+          { x: 1000, z: 0 },
+          { x: 1000, z: 400 },
+          { x: 1400, z: 400 },
+          { x: 1400, z: 0 },
+        ],
+      ],
+      { groundY: () => 100 },
+    );
+    return { movement, units: group };
+  }
+
+  it("investigates a distant shell source past the bolt gates", () => {
+    const { movement } = makeShellMovement();
+    // The same geometry without the shell flag stays silent (bolt-identical).
+    movement.threatenUnit(0, 1, 1000, 0);
+    expect(movement.hasThreat(0)).toBe(false);
+    // The shell wound investigates: attacker + firing position on the hunt leash.
+    movement.threatenUnit(0, 1, 1000, 0, true);
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.moverState(0)?.threat).toMatchObject({
+      attacker: 1,
+      x: 1000,
+      z: 0,
+      leash: HUNT_LEASH_RADIUS,
+    });
+    movement.dispose();
+  });
+
+  it("turns the hull toward the shell source and closes on it", () => {
+    // Team-less, so the hunt sweep stays out of it: only the investigate steers.
+    const { movement } = makeShellMovement();
+    movement.threatenUnit(0, 1, 1000, 0, true);
+    const before = movement.moverState(0)!;
+    const want = yawToTarget({ x: before.x, z: before.z }, { x: 1000, z: 0 });
+    const turnBefore = Math.abs(wrapAngle(before.hull - want));
+    expect(turnBefore).toBeGreaterThan(0.5);
+    const distBefore = Math.hypot(before.x - 1000, before.z - 0);
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    const after = movement.moverState(0)!;
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(Math.abs(wrapAngle(after.hull - want))).toBeLessThan(turnBefore);
+    // Flash stand-off is 220: a 1000-unit investigate visibly closes.
+    expect(Math.hypot(after.x - 1000, after.z - 0)).toBeLessThan(distBefore);
+    movement.dispose();
+  });
+
+  it("ignores friendly shells, answers enemy ones", () => {
+    const mate = makeShellMovement([0, 0]);
+    mate.movement.threatenUnit(0, 1, 1000, 0, true);
+    expect(mate.movement.hasThreat(0)).toBe(false);
+    mate.movement.dispose();
+    const enemy = makeShellMovement([0, 1]);
+    enemy.movement.threatenUnit(0, 1, 1000, 0, true);
+    expect(enemy.movement.hasThreat(0)).toBe(true);
+    enemy.movement.dispose();
+  });
+
+  it("runs the shell loop: a distant splash investigates the firing position", () => {
+    // CombatFx splash with the shooter parked 1000 out, wired like the
+    // canvas: the hook's shell flag drives the victim's investigate memory.
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0 },
+      { kind: "hammer", cellX: 40, cellZ: 40, rotation: Math.PI },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(1000, 120, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const fx = new CombatFx(scene, group, mulberry32(7));
+    fx.update(1 / 60);
+    const { movement } = makeShellMovement();
+    fx.onUnitThreatened = (victim, attacker, ax, az, _damageAdd, shell) => {
+      movement.threatenUnit(victim, attacker, ax, az, shell);
+      fx.trackThreat(victim, attacker);
+    };
+    // The blast lands on the victim; the round came from the hammer 1000 east.
+    splash(fx, 10, 100, 0, "hammer", 1);
+    expect(movement.moverState(0)?.threat).toMatchObject({
+      attacker: 1,
+      x: 1000,
+      z: 0,
+      leash: HUNT_LEASH_RADIUS,
+    });
+    movement.dispose();
+    fx.dispose();
   });
 });
 

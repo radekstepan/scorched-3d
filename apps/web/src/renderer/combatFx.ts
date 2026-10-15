@@ -638,16 +638,20 @@ export class CombatFx {
   onUnitStunned: ((index: number, damageAdd: number) => void) | null = null;
   /**
    * Fired once per surviving hull per hostile splash with the shooter's
-   * roster index, its live position, and the dealt fractional damage, so the
-   * canvas can steer that hull's retaliation pursuit (see
-   * `UnitMovement.threatenUnit`). Killing blows never fire it (the wreck
-   * holds instead), wrecks never re-fire it, self-splashes never fire it (a
-   * hull shelled by its own blast must not pursue itself), and non-hostile
-   * bursts (a wreck going up) never fire it. Assigned by the canvas; null in
-   * headless tests.
+   * roster index, its live position, the dealt fractional damage, and whether
+   * the wound came from an arcing shell (hammer shells and peewee grenade
+   * lobs — indirect fire that outranges the bolt envelope, so the victim may
+   * investigate past the retaliation gates), so the canvas can steer that
+   * hull's retaliation pursuit (see `UnitMovement.threatenUnit`) and traverse
+   * its turret onto the shooter (see `trackThreat`). Killing blows never fire
+   * it (the wreck holds instead), wrecks never re-fire it, self-splashes
+   * never fire it (a hull shelled by its own blast must not pursue itself),
+   * same-team shooters never fire it (friendlies never draw retaliation),
+   * and non-hostile bursts (a wreck going up) never fire it. Assigned by the
+   * canvas; null in headless tests.
    */
   onUnitThreatened:
-    | ((victim: number, attacker: number, ax: number, az: number, damageAdd: number) => void)
+    | ((victim: number, attacker: number, ax: number, az: number, damageAdd: number, shell: boolean) => void)
     | null = null;
   /**
    * Fired when a gun holds fire because terrain hides its target (the arc
@@ -892,6 +896,27 @@ export class CombatFx {
   /** Drive hulls externally (patrol movement) or let combat turn them. */
   setExternalHull(driven: boolean): void {
     this.externalHull = driven;
+  }
+
+  /**
+   * Traverse a shelled hull's turret toward its live attacker (the canvas
+   * calls this alongside `threatenUnit` on every threat hook): the victim's
+   * gun answers the incoming direction even before the scheduler draws the
+   * pair, so turrets visibly turn toward shell fire instead of sitting on
+   * stale aims. Rides the shared pending traverse (slewed every tick in
+   * `slewPending`, turret-only while hulls are externally driven), so it
+   * never fires by itself — the range/terrain admission in `launchShot`
+   * still gates every round — never fights the scheduler (drawn pairs
+   * overwrite the goal, and the aim feeds squad focus + sticky preference
+   * like any traverse), and dies with either end. Wrecks, self-tracks, and
+   * unknown indices refuse.
+   */
+  trackThreat(victim: number, attacker: number): void {
+    const count = this.units.children.length;
+    if (!Number.isInteger(victim) || !Number.isInteger(attacker)) return;
+    if (victim < 0 || attacker < 0 || victim >= count || attacker >= count) return;
+    if (victim === attacker || this.destroyed[victim] || this.destroyed[attacker]) return;
+    this.pending.set(victim, attacker);
   }
 
   /**
@@ -1148,8 +1173,12 @@ export class CombatFx {
         // hulls turn and pursue while the memory is fresh (see
         // `onUnitThreatened`). Non-hostile bursts (a wreck going up) blame
         // nobody, and a hull shelled by its own blast never pursues itself.
+        // Arcing shells (and grenade lobs) outrange the bolt envelope, so the
+        // victim investigates past the retaliation gates (see core
+        // `SHELL_ENGAGE_RADIUS`).
+        const shell = attack === "grenade" || WEAPON_PROFILES[kind]?.shot === "shell";
         const threat = this.resolveThreat(i, shooter ?? null, hostile);
-        if (threat) this.onUnitThreatened?.(i, threat.attacker, threat.x, threat.z, added);
+        if (threat) this.onUnitThreatened?.(i, threat.attacker, threat.x, threat.z, added, shell);
       }
       // Post-death barrages re-tint the wreck through the capped live char —
       // keep the deepened husk char on top (idempotent).
@@ -1164,8 +1193,10 @@ export class CombatFx {
    * victim — the most plausible direction the shot came from — inside the
    * engage gate so a far-off barrage never drags a patrol across the map on
    * a guess. Same-team hulls are never blamed: fire only ever comes across
-   * team lines, so a nearby mate is never the shooter. Non-hostile bursts
-   * blame nobody. Null when retaliation should stay quiet.
+   * team lines, so a nearby mate is never the shooter — and a threaded
+   * same-team shooter id (white-box misuse, never organic fire) blames
+   * nobody either. Non-hostile bursts blame nobody. Null when retaliation
+   * should stay quiet.
    */
   private resolveThreat(
     victim: number,
@@ -1176,19 +1207,20 @@ export class CombatFx {
     const bodies = this.units.children as THREE.Group[];
     const victimBody = bodies[victim];
     if (!victimBody) return null;
+    // Legacy headless groups carry no placement (victim team unknown): any
+    // live hull is blameable, as before teams existed.
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const side = placed?.[victim]?.team;
     if (shooter !== null) {
       if (!Number.isInteger(shooter) || shooter < 0 || shooter >= bodies.length) return null;
       if (shooter === victim || this.destroyed[shooter]) return null;
+      if (side !== undefined && placed?.[shooter]?.team === side) return null;
       const gun = bodies[shooter];
       if (!gun) return null;
       return { attacker: shooter, x: gun.position.x, z: gun.position.z };
     }
     // Unknown shooter: blame the nearest live hull on the *opposing* side —
-    // never a same-team mate parked nearby — inside the engage gate. Legacy
-    // headless groups carry no placement (victim team unknown): any live
-    // hull is blameable, as before teams existed.
-    const placed = this.units.userData.units as PlacedUnit[] | undefined;
-    const side = placed?.[victim]?.team;
+    // never a same-team mate parked nearby — inside the engage gate.
     let best = -1;
     let bestDist = THREAT_ENGAGE_RADIUS;
     for (let i = 0; i < bodies.length; i++) {
