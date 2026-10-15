@@ -16,16 +16,20 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-The projectiles streaking across the ground should show a smaller "highlight" circle on the ground. Right now it's a bit too much.
+When clicking somewhere for the unit to move, use the same round "circle" logic we use around the existing units now. The circle is "cutoff" by hilly terrain when  try to get a unit to go somewhere. But the regular outline around a unit shows always correct.
 
-The icons for units when selected are ugly. Make them a 3D render of the actual units of from the side and somewhat from above. Cache these on load.
+I should not see double circles when I select a unit. Again, just make the one circle thicker when I select a unit.
 
-The factories we generate should look a bit more factory like and NOT be placed on high mountains or in the water.
+Units move slower when next to each other, so figure out if units should move away from each other so they move faster. Don't make them stuck.
 
-Remove the long text in the "Units" section and remove everything but the (live) count of units starting with commander and ending with hammer.
+The HQ should not "float" when on a hilly terrain. THe "foundations" need to go deep enough to show it being actually "set" in the ground.
 
-Make the unit ring less visible and more subtle. When you select a unit, just make the unit's ring more visible.
+Double the size of the maps.
 
-Make the tracks that a unit leaves be actual 2 tracks in case of tanks and little lines that have gaps in them in case of commander. Basically match the footprint of the unit.
+The longer the projectile distance, the less accurate it'll be, especially with artillery. But other units too. Make it shoot "around" randomly. But not too far off target.
 
-Something is off with the AI, it should be more real like and they should be tryign to fight each other and decice strategically when to engage whom and whom to pursue and if to wait for others etc.
+Turn on health by default.
+
+Add smaller "infantry" like units. Fit with the theme of the game.
+
+Make the tracks behind units a bit more visible.
