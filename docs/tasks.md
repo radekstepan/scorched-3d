@@ -16,14 +16,14 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Tanks are driving sideaways...
+Units are clipping through trees, let's make sure they are not clipping through the trunks.
 
-It should be harder driving through rough terrain, trees etc.
+The units on fire/smoking animation needs to be a bit more subtle with more smaller "puffs" here and there. Also sometimes the units turn completely black (charred I guess) - don't make it that severe.
 
-Show damage to models, like charring, smoke here and there etc.
+Make the destruction of the environment a bit less severe. And make the brown blotches of ground blown up less severe and less "poop colored"
 
-Improve the trees on fire, the fire looks like little cones...
+The projectile firing looks great, make it look even more amazing an awesome. I like that you can see the flash against the units. Do the same against environment and when there is an explosion make it look even more realisting and AAA RTS like.
 
-The brown blotches on the ground are weird. Is that from projectiles exploding? Make them more "believable. And you can "flatten the terrain a tiny bit. Right now it looks like mud.
+The physics of some of the units, give them little wheels, legs should realistically move, the turrets should move slower I think.
 
-Some of the units are scaling too high of a terrain, make the physics look more believable. And start with a smaller height scale.
+Add explosion of units when they exhaust their health. Make it look epic.
