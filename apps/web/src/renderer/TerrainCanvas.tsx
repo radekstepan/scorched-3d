@@ -13,6 +13,7 @@ import {
   composeAlbedo,
   composeHeight,
   featureName,
+  igniteTree,
   planRoutes,
   sampleHeightBilinear,
   seatHull,
@@ -22,6 +23,7 @@ import {
   type Crater,
   type HoverInfo,
   type TNTMap,
+  type TreeStand,
   type UnitKind,
   type ViewOptions,
 } from "@scorched-3d/core";
@@ -306,6 +308,26 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       slopeAt: (x, z) => blastSlopeAt(map, x, z),
       blastFeatures,
       dentTerrain,
+      // Projectile tree interception: live crowns/trunks catch rounds
+      // (stuck bolt embers, shell early bursts) and block flat lines of
+      // fire so guns lob over the canopy. Felled/stump/snag/gone wood has
+      // no crown left to catch — only standing trees intercept.
+      treeStands: (): TreeStand[] =>
+        allTrees.map((p, fid) => {
+          const state = damage.trees[fid] ?? "intact";
+          return {
+            x: p.x,
+            z: p.z,
+            groundY: groundY(p.x, p.z),
+            standing: state === "intact" || state === "burning" || state === "smouldering",
+          };
+        }),
+      strikeTree: (fid: number) => {
+        if (igniteTree(damage, fid)) {
+          poseTree(fid);
+          glowFire(fid);
+        }
+      },
     });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets

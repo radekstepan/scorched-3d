@@ -6,6 +6,7 @@ import {
   clampElevation,
   ELEVATION_MAX,
   ELEVATION_MIN,
+  flightClearsTrees,
   FLIGHT_MAX_TIME,
   flightDuration,
   GRAVITY,
@@ -18,11 +19,18 @@ import {
   muzzleHeight,
   nextShotDelay,
   pickSkirmishPair,
+  pointInTree,
+  rollTreeStick,
   SHOT_DELAY_MAX,
   SHOT_DELAY_MIN,
   solveBallistic,
+  solveBallisticHigh,
   solveDirect,
   solveShot,
+  solveShotClearing,
+  treesOnSegment,
+  treeStickChance,
+  type TreeStand,
   WEAPON_PROFILES,
 } from "./combat.js";
 import { UNIT_KINDS } from "./types.js";
@@ -290,5 +298,103 @@ describe("weapon profiles", () => {
       expect(muzzleHeight(kind)).toBeGreaterThan(0);
       expect(muzzleForward(kind)).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("tree interception", () => {
+  // Flat 400-unit shot at y=30 over flat ground (y=0); a standing tree
+  // midway puts its crown sphere (center y=24, r=16) on the line of fire.
+  const tree = (x: number, standing = true, groundY = 0): TreeStand => ({ x, z: 0, groundY, standing });
+  const a = { x: 0, y: 30, z: 0 };
+  const b = { x: 400, y: 30, z: 0 };
+  // A tree on a slight rise (crown 16..48) sits solidly on the flat arc.
+  const copse = [tree(200, true, 8)];
+
+  it("catches points inside the crown sphere and the trunk cylinder", () => {
+    const t = tree(200);
+    expect(pointInTree(200, 24, 0, t)).toBe(true);
+    expect(pointInTree(200, 24 + 15, 0, t)).toBe(true);
+    expect(pointInTree(200, 24 + 17, 0, t)).toBe(false);
+    expect(pointInTree(200, 10, 0, t)).toBe(true);
+    expect(pointInTree(200 + 3, 10, 0, t)).toBe(true);
+    expect(pointInTree(200 + 9, 10, 0, t)).toBe(false);
+    expect(pointInTree(200, 24, 0, tree(200, false))).toBe(false);
+  });
+
+  it("finds crossed trees in ascending order with a cheap corridor reject", () => {
+    const trees = [tree(900), tree(300), tree(100), tree(150, false)];
+    expect(treesOnSegment(a, b, trees)).toEqual([1, 2]);
+    expect(treesOnSegment(a, b, [])).toEqual([]);
+    // High lob passes over the same crowns.
+    const over = { x: 0, y: 200, z: 0 };
+    const overB = { x: 400, y: 200, z: 0 };
+    expect(treesOnSegment(over, overB, trees)).toEqual([]);
+  });
+
+  it("tests whole flights: flat clips, high lob clears", () => {
+    const trees = copse;
+    const low = solveBallistic(a, b, 520, GRAVITY)!;
+    expect(flightClearsTrees(a, low.velocity, GRAVITY, low.duration, trees)).toBe(false);
+    const high = solveBallisticHigh(a, b, 520, GRAVITY)!;
+    expect(high.elevation).toBeGreaterThan(Math.PI / 4);
+    expect(high.duration).toBeGreaterThan(low.duration);
+    // Same muzzle energy, same impact — only the arc differs.
+    const speed = Math.hypot(high.velocity.x, high.velocity.y, high.velocity.z);
+    expect(speed).toBeCloseTo(520, 9);
+    const at = ballisticPosition(a, high.velocity, high.duration, GRAVITY);
+    expect(at.x).toBeCloseTo(b.x, 6);
+    expect(at.y).toBeCloseTo(b.y, 6);
+    expect(at.z).toBeCloseTo(b.z, 6);
+    expect(flightClearsTrees(a, high.velocity, GRAVITY, high.duration, trees)).toBe(true);
+    expect(flightClearsTrees(a, low.velocity, GRAVITY, low.duration, [])).toBe(true);
+  });
+
+  it("lobs shells over blocked canopy while bolts stay flat", () => {
+    const trees = copse;
+    const shell = solveShotClearing("hammer", a, b, trees)!;
+    expect(shell).not.toBeNull();
+    expect(shell.elevated).toBe(true);
+    expect(shell.solution.elevation).toBeGreaterThan(Math.PI / 4);
+    // Open ground keeps the flat low root (no gratuitous mortar fire).
+    const open = solveShotClearing("hammer", a, b, [])!;
+    expect(open.elevated).toBe(false);
+    expect(open.solution.elevation).toBeLessThan(Math.PI / 4);
+    // A bolt cannot lob: it stays on the target line and accepts the stick
+    // risk (the interception roll may catch it in the branches).
+    const bolt = solveShotClearing("flash", a, b, trees);
+    expect(bolt).not.toBeNull();
+    expect(bolt!.elevated).toBe(false);
+  });
+
+  it("fires the flat shell through when even the lob clips (interception may catch it)", () => {
+    // Blockers derived from the actual arcs: one crown centered on the low
+    // midpoint, one on the high midpoint — neither root clears.
+    const low = solveBallistic(a, b, 520, GRAVITY)!;
+    const high = solveBallisticHigh(a, b, 520, GRAVITY)!;
+    const lowMid = ballisticPosition(a, low.velocity, low.duration / 2, GRAVITY);
+    const highMid = ballisticPosition(a, high.velocity, high.duration / 2, GRAVITY);
+    const wall: TreeStand[] = [
+      { x: lowMid.x, z: lowMid.z, groundY: lowMid.y - 24, standing: true },
+      { x: highMid.x, z: highMid.z, groundY: highMid.y - 24, standing: true },
+    ];
+    expect(flightClearsTrees(a, low.velocity, GRAVITY, low.duration, wall)).toBe(false);
+    expect(flightClearsTrees(a, high.velocity, GRAVITY, high.duration, wall)).toBe(false);
+    const shell = solveShotClearing("hammer", a, b, wall)!;
+    expect(shell.elevated).toBe(false);
+  });
+
+  it("rolls sticks in encounter order with per-kind chances", () => {
+    expect(treeStickChance("flash")).toBeGreaterThan(treeStickChance("hammer"));
+    // First crossed tree sticks on a low roll; later trees never see the rng.
+    let calls = 0;
+    const rng = () => {
+      calls++;
+      return 0;
+    };
+    expect(rollTreeStick([2, 5, 7], "flash", rng)).toBe(2);
+    expect(calls).toBe(1);
+    expect(rollTreeStick([], "flash", rng)).toBe(-1);
+    // A roll above the chance flies on through every tree.
+    expect(rollTreeStick([1, 2], "flash", () => 0.999)).toBe(-1);
   });
 });

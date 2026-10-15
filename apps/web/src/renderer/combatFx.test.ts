@@ -891,8 +891,137 @@ describe("CombatFx destruction", () => {
   });
 });
 
-describe("CombatFx slope-aware blasts (gradient wash)", () => {
-  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
+describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
+  /** Two hulls 400 apart along +X on flat ground, facing each other. */
+  function makeWoodlandPair(attackerKind: UnitKind, targetKind: UnitKind): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: attackerKind, cellX: 1, cellZ: 1, rotation: Math.PI / 2 },
+      { kind: targetKind, cellX: 2, cellZ: 2, rotation: -Math.PI / 2 },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(400, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    // Pre-aimed down the line so the first scheduler tick can fire.
+    (group.children[0] as THREE.Group).rotation.y = Math.PI / 2;
+    (group.children[1] as THREE.Group).rotation.y = -Math.PI / 2;
+    return group;
+  }
+
+  /** One live crown centered on the flat line of fire (muzzle ~110). */
+  function woodlandEnv() {
+    const struck: number[] = [];
+    return {
+      struck,
+      env: {
+        groundY: () => 100,
+        blastFeatures: () => {},
+        treeStands: () => [{ x: 200, z: 0, groundY: 86, standing: true }],
+        strikeTree: (fid: number) => {
+          struck.push(fid);
+        },
+      },
+    };
+  }
+
+  it("sticks flat bolts in live crowns (ember, no blast) and reports the tree", () => {
+    const scene = new THREE.Scene();
+    const units = makeWoodlandPair("flash", "flash");
+    const ctl = woodlandEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
+    for (let n = 0; n < 1200; n++) fx.update(1 / 60);
+    // Every flat round crosses the crown (scatter stays inside r=16), so
+    // ~25 shots at 0.55 stick chance must strand several embers.
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(fx.stuckCount).toBeGreaterThan(0);
+    expect(ctl.struck.length).toBe(fx.stuckCount);
+    for (const fid of ctl.struck) expect(fid).toBe(0);
+    fx.dispose();
+  });
+
+  it("never sticks in open ground (no stands, no entropy spent)", () => {
+    const scene = new THREE.Scene();
+    const units = makeWoodlandPair("flash", "flash");
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    for (let n = 0; n < 1200; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(fx.stuckCount).toBe(0);
+    fx.dispose();
+  });
+
+  /** Hammer + stump 400 apart via buildUnits (real elevating barrels). */
+  function makeArtilleryDuel(): THREE.Group {
+    const width = 64;
+    const height = 64;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "hammer", cellX: 20, cellZ: 32, rotation: Math.PI / 2 },
+        { kind: "stump", cellX: 45, cellZ: 32, rotation: -Math.PI / 2 },
+      ],
+    } as unknown as TNTMap;
+    return buildUnits(map, 1);
+  }
+
+  function hammerBarrels(units: THREE.Group): number[] {
+    const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
+    return (units.children as THREE.Group[]).map((body, i) =>
+      kinds[i] === "hammer" && getBarrel(body) ? barrelElevation(body) : NaN,
+    );
+  }
+
+  it("lobs shells over blocked canopy (near-vertical barrel) instead of firing flat", () => {
+    const scene = new THREE.Scene();
+    const units = makeArtilleryDuel();
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      // Crown centered on the flat arc between the hulls (x≈16 world).
+      treeStands: () => [{ x: 16, z: 8, groundY: 91, standing: true }],
+      strikeTree: () => {},
+    });
+    let lobbed = false;
+    for (let n = 0; n < 6000 && !lobbed; n++) {
+      fx.update(1 / 60);
+      lobbed = hammerBarrels(units).some((e) => e > 1.0);
+    }
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(lobbed).toBe(true);
+    fx.dispose();
+  });
+
+  it("fires the flat low root over the same ground with no wood (legacy)", () => {
+    const scene = new THREE.Scene();
+    const units = makeArtilleryDuel();
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    let flat = false;
+    for (let n = 0; n < 6000 && !flat; n++) {
+      fx.update(1 / 60);
+      // Low root for ~400 units sits near 0.1 rad — far below the rest
+      // pose (0.7) and the lob (>1.0).
+      flat = hammerBarrels(units).some((e) => e < 0.5);
+    }
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(flat).toBe(true);
+    fx.dispose();
+  });
+});
+
+describe("CombatFx slope-aware blasts (gradient wash)", () => {  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
   function blastGroups(scene: THREE.Scene): THREE.Group[] {
     return scene.children.filter(
       (c) => c instanceof THREE.Group && c.children.some((k) => (k as THREE.Points).isPoints),

@@ -21,6 +21,7 @@ import {
   inRange,
   isDestroyed,
   isHuskGone,
+  LOBBED_MAX_TIME,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
   MAX_SHOTS,
@@ -30,12 +31,14 @@ import {
   nextShotDelay,
   pickSkirmishPair,
   resolveScorchSeed,
+  rollTreeStick,
   scorchAnisotropy,
   scorchForKind,
   scorchSeed,
   scorchShade,
-  solveShot,
+  solveShotClearing,
   stepAngle,
+  treesOnSegment,
   TURRET_SLEW_RATE,
   wrapAngle,
   yawToTarget,
@@ -44,6 +47,7 @@ import {
   type ImpactKick,
   type PlacedUnit,
   type ScorchMark,
+  type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
 import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
@@ -249,6 +253,19 @@ export interface CombatEnv {
    * unit seating read the static core heightfield.
    */
   dentTerrain?: (x: number, z: number, radius: number, depth: number, slope?: BlastSlope) => void;
+  /**
+   * Live tree stands for projectile interception + canopy-aware aiming,
+   * indexed by feature id (round trees first, then pines — matching the
+   * trunk order). Absent reads as open ground (legacy behavior: every line
+   * of fire is clear, no round ever sticks).
+   */
+  treeStands?: () => TreeStand[];
+  /**
+   * A round stuck in tree `fid`: the canvas ignites/re-poses that tree
+   * through the graduated damage field (shell early bursts already scar
+   * through `blastFeatures`, so this mostly serves stuck bolt embers).
+   */
+  strikeTree?: (fid: number) => void;
 }
 
 export class CombatFx {
@@ -262,6 +279,8 @@ export class CombatFx {
   private nudges = new Map<number, Nudge>();
   private lights: THREE.PointLight[] = [];
   private fired = 0;
+  /** Rounds stuck in live wood (stuck bolt embers + shell early bursts). */
+  private stuck = 0;
   /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
   private aim: { hull: number; turret: number }[] = [];
   /** Attacker → target traverse goals, slewed every frame until aimed. */
@@ -377,6 +396,11 @@ export class CombatFx {
   /** Total shots fired since construction (gated by aim, for tests/HUD). */
   get totalFired(): number {
     return this.fired;
+  }
+
+  /** Rounds intercepted by live trees (stuck embers + early bursts). */
+  get stuckCount(): number {
+    return this.stuck;
   }
 
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
@@ -844,21 +868,35 @@ export class CombatFx {
     // Range admission (cf. retail spec 06 §3.3): too close to depress onto
     // or ballistically unreachable — keep traversing, retry on a new pair.
     if (!inRange(kind, approxDist)) return false;
-    const seed = solveShot(kind, approx, impact);
-    if (!seed) return false;
-    setBarrelElevation(attacker, clampElevation(seed.elevation));
+    // Canopy admission: shells lob the high root over live wood when it
+    // clears and fits the flight-time safety net, else fire flat into the
+    // branches (the interception roll may catch the round); flat bolts stay
+    // on the target line and accept the stick risk.
+    const stands = this.env?.treeStands?.() ?? [];
+    const seedClearing = solveShotClearing(
+      kind,
+      approx,
+      impact,
+      stands,
+    );
+    if (!seedClearing) return false;
+    setBarrelElevation(attacker, clampElevation(seedClearing.solution.elevation));
     attacker.updateMatrixWorld(true);
     const live = muzzleWorld(attacker);
     const start = live
       ? new THREE.Vector3(live.position.x, live.position.y, live.position.z)
       : new THREE.Vector3(approx.x, approx.y, approx.z);
-    const sol = solveShot(
+    const clearing = solveShotClearing(
       kind,
       { x: start.x, y: start.y, z: start.z },
       impact,
+      stands,
     );
-    // Shells at max ballistic range fly ~5.3s; anything longer is rejected.
-    if (!sol || sol.duration <= 0 || sol.duration > 6) return false;
+    // Shells at max ballistic range fly ~5.3s; canopy lobs hang ~7.4s —
+    // anything longer is rejected.
+    if (!clearing) return false;
+    const sol = clearing.solution;
+    if (sol.duration <= 0 || sol.duration > (clearing.elevated ? LOBBED_MAX_TIME : 6)) return false;
     const barrelDir = live
       ? new THREE.Vector3(live.direction.x, live.direction.y, live.direction.z)
       : new THREE.Vector3(
@@ -1246,6 +1284,7 @@ export class CombatFx {
   private advanceShots(dt: number): void {
     const done: Shot[] = [];
     const vel = new THREE.Vector3();
+    const stands = this.env?.treeStands?.() ?? null;
     for (const shot of this.shots) {
       shot.age += dt;
       const t = Math.min(shot.age, shot.dur);
@@ -1257,6 +1296,42 @@ export class CombatFx {
         t,
         shot.gravity,
       );
+      // Tree interception: the flown segment (previous pose → new pose)
+      // enters live crowns/trunks in ascending fid order, rolling the
+      // per-kind stick chance per tree on the seeded rng (open flights cost
+      // no entropy). Corridor-rejected per tree, so forest flyovers stay
+      // cheap. Shells detonate early with the full layered stack (the blast
+      // itself damages/ignites the wood); stuck bolts read as an ember
+      // caught in the branches (hot pop + pooled-light kick, no blast) and
+      // the canvas ignites the struck tree through the damage field.
+      if (stands && stands.length > 0 && shot.age < shot.dur) {
+        const q = ballisticPosition(
+          { x: shot.start.x, y: shot.start.y, z: shot.start.z },
+          { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
+          Math.max(t - dt, 0),
+          shot.gravity,
+        );
+        const crossed = treesOnSegment(q, p, stands);
+        const stuckFid = crossed.length > 0 ? rollTreeStick(crossed, shot.kind, this.rng) : -1;
+        if (stuckFid >= 0) {
+          const at = new THREE.Vector3(p.x, p.y, p.z);
+          const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
+          this.scene.remove(shot.mesh);
+          (shot.mesh.material as THREE.Material).dispose();
+          this.shots.splice(this.shots.indexOf(shot), 1);
+          this.stuck += 1;
+          this.env?.strikeTree?.(stuckFid);
+          if (shot.kind === "hammer") {
+            this.explode(at, color, shot.kind);
+            this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
+          } else {
+            this.spawnFlash(at, 0xffd34d, FLASH_MAX_AGE * 0.6);
+            this.spawnFlash(at, color, FLASH_MAX_AGE * 0.9, HALO_SCALE, HALO_GROWTH, HALO_PEAK);
+            this.kickLight(at, 0xff8a3c, 1400);
+          }
+          continue;
+        }
+      }
       shot.mesh.position.set(p.x, p.y, p.z);
       // Orient bolts head→tail along travel (nanolathe beam-stroke analog);
       // shells are spheres, so orienting them is harmless and free.
