@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   APP_NAME,
   CELL_PIXELS,
@@ -23,6 +23,7 @@ import {
 import {
   getUnitIconDataUrl,
   groupSelection,
+  scheduleUnitIconPreload,
   selectionGroupColor,
 } from "./renderer/selectionIcons";
 import { cn } from "./utils/cn";
@@ -48,6 +49,13 @@ export default function App() {
     panSpeed: 1,
     zoomSpeed: 1,
   });
+
+  // Cache selection-tray thumbnails on load (one idle-chunked 3D render
+  // per kind) so the first selection is pure cache hits, never mid-gesture
+  // thumbnail cost on the main loop.
+  useEffect(() => {
+    scheduleUnitIconPreload();
+  }, []);
 
   const map = useMemo(() => generateMap(preset, seed), [preset, seed]);
   // Minimap bakes terrain only: unit markers are a live overlay from the

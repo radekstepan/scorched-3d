@@ -426,3 +426,21 @@ describe("team ground rings", () => {
     expect(body.getObjectByName("select-marker")).toBeFalsy();
   });
 });
+
+describe("unit icon bodies (thumbnail source)", () => {
+  it("reuses the real hull construction without markers", async () => {
+    const { buildUnitIconBody } = await import("./units");
+    const { UNIT_KINDS } = await import("@scorched-3d/core");
+    for (const kind of UNIT_KINDS) {
+      const body = buildUnitIconBody(kind);
+      // Same turret subgroup + drive gear the field renders …
+      expect(getTurret(body)).not.toBeNull();
+      expect(getMuzzleTip(body)).not.toBeNull();
+      if (kind === "commander") expect(getLegs(body).length).toBe(2);
+      else expect(getWheels(body).length).toBe(6);
+      // … but no team ring or selection marker (tray chrome owns those).
+      expect(getTeamRing(body)).toBeNull();
+      expect(body.getObjectByName("select-marker")).toBeFalsy();
+    }
+  });
+});

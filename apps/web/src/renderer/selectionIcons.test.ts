@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TEAM_DEFS, UNIT_KINDS } from "@scorched-3d/core";
 import {
   clearUnitIconCache,
   getUnitIconDataUrl,
   groupSelection,
+  preloadUnitIcons,
+  scheduleUnitIconPreload,
   selectionGroupColor,
+  unitIconCameraPos,
   unitIconCacheSize,
+  unitIconFraming,
+  UNIT_ICON_CAM_DIR,
 } from "./selectionIcons";
 
 describe("selection tray icons (pre-rendered once, reused)", () => {
@@ -27,6 +32,83 @@ describe("selection tray icons (pre-rendered once, reused)", () => {
     const urls = new Set(UNIT_KINDS.map((k) => getUnitIconDataUrl(k)));
     expect(urls.size).toBe(UNIT_KINDS.length);
     clearUnitIconCache();
+  });
+
+  it("renders side-view silhouettes (flank + wheels / walker legs, not top-down discs)", () => {
+    clearUnitIconCache();
+    // Headless fallback is the side-view SVG: flank rects + wheel circles
+    // for tanks, leg rects for the walker — never the old top-down
+    // turret-disc + forward barrel-line composition.
+    for (const kind of UNIT_KINDS) {
+      const raw = decodeURIComponent(getUnitIconDataUrl(kind));
+      if (kind === "commander") {
+        // Walker flank: leg rects + torso, no wheel circles.
+        expect(raw).toContain('y="24" width="4" height="10"');
+        expect(raw).not.toContain("<circle");
+      } else {
+        // Tracked flank: hull side rect + three road-wheel circles +
+        // a side-reading (horizontal / climbing) barrel line.
+        expect(raw).toContain("<circle");
+        expect(raw).toContain("<line");
+      }
+    }
+    clearUnitIconCache();
+  });
+
+  it("frames thumbnails from the side and somewhat from above", () => {
+    // Camera direction is side-dominant (+X), elevated (+Y), slight +Z.
+    expect(UNIT_ICON_CAM_DIR.x).toBeGreaterThan(0.5);
+    expect(UNIT_ICON_CAM_DIR.y).toBeGreaterThan(0.3);
+    expect(UNIT_ICON_CAM_DIR.y).toBeLessThan(UNIT_ICON_CAM_DIR.x);
+    for (const kind of UNIT_KINDS) {
+      const framing = unitIconFraming(kind);
+      expect(framing.distance).toBeGreaterThan(80);
+      expect(framing.targetY).toBeGreaterThanOrEqual(8);
+      const pos = unitIconCameraPos(framing);
+      // Side view: |x| dominates; above: y sits over the hull top.
+      expect(Math.abs(pos.x)).toBeGreaterThan(Math.abs(pos.z) * 2);
+      expect(pos.y).toBeGreaterThan(framing.targetY + 20);
+    }
+    // Tall walker frames higher, long gun pulls back further.
+    expect(unitIconFraming("commander").targetY).toBeGreaterThan(
+      unitIconFraming("flash").targetY,
+    );
+    expect(unitIconFraming("hammer").distance).toBeGreaterThan(
+      unitIconFraming("flash").distance,
+    );
+  });
+});
+
+describe("preloadUnitIcons (cache on load)", () => {
+  it("caches every kind up front and returns the count", () => {
+    clearUnitIconCache();
+    expect(preloadUnitIcons()).toBe(UNIT_KINDS.length);
+    expect(unitIconCacheSize()).toBe(UNIT_KINDS.length);
+    // Second sweep is pure cache hits (same URLs, no re-render).
+    const before = UNIT_KINDS.map((k) => getUnitIconDataUrl(k));
+    expect(preloadUnitIcons()).toBe(UNIT_KINDS.length);
+    expect(UNIT_KINDS.map((k) => getUnitIconDataUrl(k))).toEqual(before);
+    clearUnitIconCache();
+  });
+
+  it("scheduleUnitIconPreload fills the cache without blocking (one per tick)", async () => {
+    clearUnitIconCache();
+    vi.useFakeTimers();
+    try {
+      scheduleUnitIconPreload();
+      // Idle-chunked: nothing (or at most the first) renders synchronously.
+      expect(unitIconCacheSize()).toBeLessThanOrEqual(1);
+      // Drain the timeout chain (no requestIdleCallback under node).
+      for (let n = 0; n < UNIT_KINDS.length + 1; n++) await vi.runAllTimersAsync();
+      expect(unitIconCacheSize()).toBe(UNIT_KINDS.length);
+      // A second schedule after a full cache is a no-op.
+      scheduleUnitIconPreload();
+      await vi.runAllTimersAsync();
+      expect(unitIconCacheSize()).toBe(UNIT_KINDS.length);
+    } finally {
+      vi.useRealTimers();
+      clearUnitIconCache();
+    }
   });
 });
 

@@ -235,6 +235,19 @@ export function getTurret(body: THREE.Group): THREE.Group | null {
 }
 
 /**
+ * Standalone unit body for icon/thumbnail renders: the same hull + turret +
+ * camo construction the battlefield uses, without team rings or selection
+ * markers (tray boxes carry team color on their own top border). Side +
+ * slightly-above thumbnail cameras pose this group directly.
+ */
+export function buildUnitIconBody(kind: UnitKind): THREE.Group {
+  const body = new THREE.Group();
+  buildBody(kind, body);
+  applyCamo(body, kind);
+  return body;
+}
+
+/**
  * Build one reinforcement body at world (x, z), yawed `yaw`: hull + camo +
  * team ring, seated flat on `groundY`. The movement re-snap seats the grade
  * tilt on the next tick; the hull drives out of the HQ hall from here.
