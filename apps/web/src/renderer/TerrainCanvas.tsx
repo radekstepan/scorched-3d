@@ -401,6 +401,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       damageStructures: (at, kind, shooter, _hostile, attack) => {
         hq?.splash(at.x, at.z, kind, shooter, attack);
       },
+      // Self-defense first: a fort-shelling gun answering a live enemy holds
+      // structure fire until the grudge clears (the hull duel aims it
+      // meanwhile). `movement` is assigned below; the hook only runs on
+      // later ticks, so the closure reads it live.
+      isEngaged: (index: number) => movement.isFighting(index),
     });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets

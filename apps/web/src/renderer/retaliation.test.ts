@@ -767,3 +767,92 @@ describe("waypoint pursuit display", () => {
     fx.dispose();
   });
 });
+
+describe("UnitMovement HQ assault", () => {
+  /** Assaulter + mate (team 0) vs one enemy (team 1) at `enemyX`. */
+  function makeAssaultMovement(enemyX: number): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "stump", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 11, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "hammer", cellX: 60, cellZ: 60, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(-100, 100, 0),
+      new THREE.Vector3(enemyX, 100, 0),
+    ]) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const routeSet = [0, -100, enemyX].map((ax) => [
+      { x: ax, z: 0 },
+      { x: ax, z: 400 },
+      { x: ax + 400, z: 400 },
+      { x: ax + 400, z: 0 },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("marks an obstructed fort shot as a structure assault", () => {
+    const { movement } = makeAssaultMovement(3000);
+    movement.seekEngage(0, -1, 400, 100);
+    expect(movement.moverState(0)?.threat).toMatchObject({ attacker: -1, structure: true });
+    movement.dispose();
+  });
+
+  it("holds the assault through the hunt sweep (no team-advance clobber)", () => {
+    const { movement } = makeAssaultMovement(3000);
+    movement.seekEngage(0, -1, 400, 100);
+    movement.sweepHunt();
+    // No live enemy in notice and no team contact: the fort push stands with
+    // its assault flag, instead of turning into a team-advance waypoint.
+    expect(movement.moverState(0)?.threat).toMatchObject({
+      attacker: -1,
+      x: 400,
+      z: 100,
+      structure: true,
+    });
+    movement.dispose();
+  });
+
+  it("still upgrades an assault to a live hunt when the enemy is in notice", () => {
+    const { movement } = makeAssaultMovement(500);
+    movement.seekEngage(0, -1, 400, 100);
+    movement.sweepHunt();
+    // The enemy stands inside the hunt eyes: self-defense preempts the fort.
+    expect(movement.moverState(0)?.threat?.attacker).toBe(2);
+    movement.dispose();
+  });
+
+  it("turns an assault onto a consistent challenger through threatenUnit", () => {
+    const { movement } = makeAssaultMovement(3000);
+    movement.seekEngage(0, -1, 400, 100);
+    // Two stray splashes from the far gun: the push holds, counting them.
+    movement.threatenUnit(0, 2, 500, 300);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(-1);
+    movement.threatenUnit(0, 2, 510, 310);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(-1);
+    // The third in a row: the hull turns to deal with the enemy first.
+    movement.threatenUnit(0, 2, 520, 320);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(2);
+    movement.dispose();
+  });
+
+  it("reports fighting only for live enemy grudges (the gun-layer gate)", () => {
+    const { movement } = makeAssaultMovement(3000);
+    expect(movement.isFighting(0)).toBe(false);
+    movement.seekEngage(0, -1, 400, 100);
+    // Assaulting a fort is not fighting: unpressured guns keep shelling.
+    expect(movement.isFighting(0)).toBe(false);
+    movement.threatenUnit(0, 2, 500, 300);
+    movement.threatenUnit(0, 2, 510, 310);
+    expect(movement.isFighting(0)).toBe(false);
+    movement.threatenUnit(0, 2, 520, 320);
+    expect(movement.isFighting(0)).toBe(true);
+    movement.dispose();
+  });
+});

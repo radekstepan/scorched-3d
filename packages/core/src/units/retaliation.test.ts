@@ -10,6 +10,7 @@ import {
 import {
   HUNT_ENGAGE_RADIUS,
   HUNT_LEASH_RADIUS,
+  HQ_DEFENSE_HITS,
   THREAT_DISENGAGE_RADIUS,
   THREAT_ENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
@@ -21,6 +22,7 @@ import {
   notifyThreat,
   pursueStandOff,
   seekEngage,
+  seekStructure,
   tickThreat,
 } from "./retaliation.js";
 
@@ -496,5 +498,156 @@ describe("acquireHunt", () => {
     expect(acquireHunt(mover, 9, teams, foesNear, alive, anchor).threat).toBeUndefined();
     const nanFoes = [{ x: Number.NaN, z: 0 }, ...foesNear.slice(1)];
     expect(acquireHunt(mover, 0, teams, nanFoes, alive, anchor).threat).toBeUndefined();
+  });
+});
+
+describe("seekStructure", () => {
+  it("marks an HQ assault distinct from a team-advance waypoint", () => {
+    const mover = initMover(flatRoute(), 0);
+    const next = seekStructure(mover, mover, 400, 100, { x: 0, z: 0 });
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat).toMatchObject({
+      attacker: -1,
+      x: 400,
+      z: 100,
+      ttl: THREAT_MEMORY_DURATION,
+      structure: true,
+    });
+    // Pure: the input mover is untouched.
+    expect(mover.threat).toBeUndefined();
+  });
+
+  it("lets player orders win and keeps the local leash", () => {
+    const route = flatRoute();
+    const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
+    expect(seekStructure(ordered, ordered, 100, 0, route[0]).threat).toBeUndefined();
+    const holding: Mover = { ...initMover(route, 0), hold: true };
+    expect(seekStructure(holding, holding, 100, 0, route[0]).threat).toBeUndefined();
+    // Past the patrol-anchor leash: no cross-map fort pushes.
+    const mover = initMover(route, 0);
+    expect(seekStructure(mover, mover, THREAT_LEASH_RADIUS + 50, 0, route[0]).threat).toBeUndefined();
+  });
+
+  it("never overwrites a live grudge (finish the enemy first)", () => {
+    const route = flatRoute();
+    const fighting = notifyThreat(initMover(route, 0), { x: 0, z: 0 }, 1, 300, 0, route[0]);
+    expect(fighting.threat?.attacker).toBe(1);
+    // An obstructed fort shot while brawling leaves the grudge alone.
+    const next = seekStructure(fighting, fighting, 400, 100, route[0]);
+    expect(next.threat?.attacker).toBe(1);
+    expect(next.threat?.structure).toBeUndefined();
+  });
+
+  it("takes over a team-advance waypoint, keeping the carried leash", () => {
+    const route = flatRoute();
+    const advancing: Mover = { ...initMover(route, 0), threat: advanceMemory(500, 0)! };
+    const next = seekStructure(advancing, advancing, 400, 100, route[0]);
+    expect(next.threat).toMatchObject({ attacker: -1, structure: true, x: 400, z: 100 });
+    // The wide advance leash survives the takeover (no mid-push collapse).
+    expect(next.threat?.leash).toBe(HUNT_LEASH_RADIUS);
+  });
+
+  it("refreshes a live assault in place, preserving its challenger", () => {
+    const route = flatRoute();
+    const assaulting: Mover = {
+      ...initMover(route, 0),
+      threat: {
+        attacker: -1, x: 400, z: 100, ttl: 6, structure: true,
+        challenger: { attacker: 1, hits: 2, x: 300, z: 0 },
+      },
+    };
+    const next = seekStructure(assaulting, assaulting, 410, 110, route[0]);
+    expect(next.threat).toMatchObject({ attacker: -1, structure: true, x: 410, z: 110 });
+    expect(next.threat?.challenger).toEqual({ attacker: 1, hits: 2, x: 300, z: 0 });
+  });
+
+  it("rejects non-finite targets", () => {
+    const mover = initMover(flatRoute(), 0);
+    expect(seekStructure(mover, mover, Number.NaN, 0, null).threat).toBeUndefined();
+  });
+});
+
+describe("HQ defense (assault under fire)", () => {
+  function assaulting(): Mover {
+    const route = flatRoute();
+    return seekStructure(initMover(route, 0), { x: 0, z: 0 }, 400, 100, route[0]);
+  }
+
+  it("holds the fort through stray splashes, counting the challenger", () => {
+    const route = flatRoute();
+    const first = notifyThreat(assaulting(), { x: 0, z: 0 }, 1, 300, 0, route[0]);
+    expect(first.threat?.attacker).toBe(-1);
+    expect(first.threat?.structure).toBe(true);
+    expect(first.threat?.challenger).toEqual({ attacker: 1, hits: 1, x: 300, z: 0 });
+    const second = notifyThreat(first, { x: 0, z: 0 }, 1, 320, 20, route[0]);
+    expect(second.threat?.attacker).toBe(-1);
+    expect(second.threat?.challenger).toMatchObject({ attacker: 1, hits: 2, x: 320, z: 20 });
+  });
+
+  it("retargets onto a consistent attacker at the threshold, then fights normally", () => {
+    const route = flatRoute();
+    let mover = assaulting();
+    mover = notifyThreat(mover, { x: 0, z: 0 }, 1, 300, 0, route[0]);
+    mover = notifyThreat(mover, { x: 0, z: 0 }, 1, 310, 10, route[0]);
+    const turned = notifyThreat(mover, { x: 0, z: 0 }, 1, 320, 20, route[0]);
+    expect(turned.threat).toMatchObject({ attacker: 1, x: 320, z: 20, ttl: THREAT_MEMORY_DURATION });
+    // A live grudge now: no fort flag, no challenger count, squad-focusable.
+    expect(turned.threat?.structure).toBeUndefined();
+    expect(turned.threat?.challenger).toBeUndefined();
+    expect(HQ_DEFENSE_HITS).toBe(3);
+  });
+
+  it("restarts the count when a different gun chips in", () => {
+    const route = flatRoute();
+    let mover = notifyThreat(assaulting(), { x: 0, z: 0 }, 1, 300, 0, route[0]);
+    mover = notifyThreat(mover, { x: 0, z: 0 }, 1, 310, 0, route[0]);
+    const switched = notifyThreat(mover, { x: 0, z: 0 }, 2, 200, 50, route[0]);
+    expect(switched.threat?.attacker).toBe(-1);
+    expect(switched.threat?.challenger).toMatchObject({ attacker: 2, hits: 1 });
+  });
+
+  it("ignores distant chips without touching the count", () => {
+    const route = flatRoute();
+    const chipped = notifyThreat(assaulting(), { x: 0, z: 0 }, 1, 300, 0, route[0]);
+    // Past the engage gate: not worth turning for, count untouched.
+    const far = notifyThreat(chipped, { x: 0, z: 0 }, 1, THREAT_ENGAGE_RADIUS + 100, 0, route[0]);
+    expect(far.threat?.challenger).toMatchObject({ attacker: 1, hits: 1 });
+    // Past the anchor leash: likewise ignored.
+    const unleashed = notifyThreat(chipped, { x: 0, z: 0 }, 1, 300, 0, { x: -5000, z: 0 });
+    expect(unleashed.threat?.challenger).toMatchObject({ attacker: 1, hits: 1 });
+  });
+
+  it("keeps position waypoints stealing immediately (no assault, no count)", () => {
+    const route = flatRoute();
+    const advancing: Mover = { ...initMover(route, 0), threat: advanceMemory(500, 0)! };
+    const stolen = notifyThreat(advancing, advancing, 1, 300, 0, route[0]);
+    expect(stolen.threat).toMatchObject({ attacker: 1, x: 300, z: 0, ttl: THREAT_MEMORY_DURATION });
+    expect(stolen.threat?.structure).toBeUndefined();
+    expect(stolen.threat?.challenger).toBeUndefined();
+  });
+
+  it("carries the assault and its challenger through the drive, tracking live positions", () => {
+    const route = flatRoute();
+    const pushing: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: {
+        attacker: -1, x: 400, z: 100, ttl: THREAT_MEMORY_DURATION,
+        structure: true, challenger: { attacker: 1, hits: 2, x: 500, z: 0 },
+      },
+    };
+    // The challenger sidesteps east; the stored position follows.
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 520, z: 40 },
+    ];
+    const next = advanceMover("stump", pushing, route, 1, 1, null, null, foes);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat?.attacker).toBe(-1);
+    expect(next.threat?.structure).toBe(true);
+    expect(next.threat?.challenger).toEqual({ attacker: 1, hits: 2, x: 520, z: 40 });
+    // Still marching on the fort (not the challenger).
+    const before = Math.hypot(pushing.x - 400, pushing.z - 100);
+    expect(Math.hypot(next.x - 400, next.z - 100)).toBeLessThan(before);
   });
 });

@@ -2085,7 +2085,7 @@ describe("CombatFx projectile glow", () => {
 });
 
 describe("CombatFx structure fire (HQ forts)", () => {
-  function hqDuel(hqX: number) {
+  function hqDuel(hqX: number, isEngaged?: (index: number) => boolean) {
     const scene = new THREE.Scene();
     const group = new THREE.Group();
     // Attacker (team 0 hammer) vs a far teammate-less enemy: the hull duel
@@ -2111,6 +2111,7 @@ describe("CombatFx structure fire (HQ forts)", () => {
       damageStructures: (at, _kind, shooter) => {
         splashes.push({ x: at.x, z: at.z, shooter });
       },
+      ...(isEngaged ? { isEngaged } : {}),
     });
     return { fx, splashes };
   }
@@ -2133,6 +2134,33 @@ describe("CombatFx structure fire (HQ forts)", () => {
     for (let n = 0; n < 1200; n++) fx.update(1 / 60);
     expect(fx.totalFired).toBe(0);
     expect(splashes).toHaveLength(0);
+    fx.dispose();
+  });
+
+  it("holds structure fire while the gun answers a live enemy (self-defense first)", () => {
+    // The only admitted gun is engaged from the first tick: no fort volley
+    // ever leaves, and no fort aim is ever recorded.
+    const { fx, splashes } = hqDuel(600, (i) => i === 0);
+    for (let n = 0; n < 60 * 40; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBe(0);
+    expect(splashes).toHaveLength(0);
+    expect((fx as unknown as { pendingHq: Map<number, number> }).pendingHq.size).toBe(0);
+    fx.dispose();
+  });
+
+  it("drops a stale fort aim once its gun answers a live enemy", () => {
+    let engaged = false;
+    const { fx, splashes } = hqDuel(600, () => engaged);
+    const pendingHq = (fx as unknown as { pendingHq: Map<number, number> }).pendingHq;
+    // A traverse goal left over from shelling the fort…
+    pendingHq.set(0, 1);
+    expect(splashes).toHaveLength(0);
+    // …is dropped once the gun gets engaged, so the turret rejoins the
+    // hull duel instead of lingering on the HQ (the ambient scheduler only
+    // reaches the fire gate every few ticks, so sweep a short window).
+    engaged = true;
+    for (let n = 0; n < 600 && pendingHq.size > 0; n++) fx.update(1 / 60);
+    expect(pendingHq.size).toBe(0);
     fx.dispose();
   });
 

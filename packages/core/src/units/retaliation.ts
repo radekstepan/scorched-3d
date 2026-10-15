@@ -51,6 +51,16 @@ import type { UnitKind } from "./types.js";
  */
 
 /** Last-known threat on a mover: who shot, from where, for how much longer. */
+export interface ThreatChallenger {
+  /** Roster index of the live enemy chipping an HQ assault. */
+  attacker: number;
+  /** Consecutive hits from `attacker` while the assault stands. */
+  hits: number;
+  /** Last-known challenger position, world units. */
+  x: number;
+  z: number;
+}
+
 export interface ThreatMemory {
   /** Roster index of the attacker (resolved to live positions per tick). */
   attacker: number;
@@ -67,6 +77,22 @@ export interface ThreatMemory {
    * the drive (`pursueStep`) honors whichever leash the memory carries.
    */
   leash?: number;
+  /**
+   * True when this position memory is an HQ/structure assault (see
+   * `seekStructure`), not a team-advance waypoint: the hull is engaging an
+   * enemy fort and must finish consistent challengers before resuming it.
+   * The sweep never clobbers an assault with a team advance, and a hit while
+   * assaulting counts toward `challenger` instead of stealing immediately.
+   */
+  structure?: boolean;
+  /**
+   * Consistent-attacker record while assaulting a structure: consecutive hits
+   * from one live enemy (`hits` reaching `HQ_DEFENSE_HITS` retargets the
+   * assault onto the challenger — self-defense first, HQ after). A hit from
+   * a different attacker restarts the count; the record dies with the memory
+   * (or on retarget), so stale chips never preempt later assaults.
+   */
+  challenger?: ThreatChallenger;
 }
 
 /**
@@ -114,6 +140,15 @@ export const HUNT_LEASH_RADIUS = 1400;
 export const THREAT_MIN_STANDOFF = 150;
 /** Cap on the weapons-range stand-off (artillery holds at shell distance). */
 export const THREAT_MAX_STANDOFF = 800;
+/**
+ * Consistent hits from one live enemy before a hull assaulting an HQ
+ * retargets onto its challenger (see `notifyThreat`). One stray splash is
+ * not worth abandoning the fort for — three in a row from the same gun
+ * means the assault is under honest fire and the enemy must be dealt with
+ * first. Low enough to answer real pressure, high enough that chip damage
+ * never yanks a push off its target.
+ */
+export const HQ_DEFENSE_HITS = 3;
 
 /**
  * Weapons-range stand-off per kind, world units: a pursuer drives to this
@@ -168,6 +203,12 @@ export interface ThreatAnchor {
  * - A hit from a *new* attacker steals the memory only inside the engage
  *   gate — the latest close hit is the most salient — otherwise the old
  *   pursuit stands.
+ * - HQ assaults are the exception: a hull engaging a fort (`structure`, see
+ *   `seekStructure`) never drops the push on a single splash. Hits from one
+ *   live enemy count up on `challenger`, and only `HQ_DEFENSE_HITS` in a row
+ *   from the same gun retargets the hull onto the challenger — self-defense
+ *   first, the fort after. A different attacker restarts the count; distant
+ *   chips (past the engage gate or the leash) record nothing.
  */
 export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
   mover: M,
@@ -188,6 +229,11 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   if (!(dist >= 0)) return mover;
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
   if (live) {
+    // An HQ assault under fire holds its push until the fire proves
+    // consistent — one splash is chip damage, not a reason to turn.
+    if (live.attacker === -1 && live.structure === true) {
+      return noteAssaultHit(mover, live, attacker, ax, az, dist, anchor);
+    }
     if (attacker === live.attacker) {
       if (dist > THREAT_DISENGAGE_RADIUS) {
         const { threat: _dropped, ...rest } = mover;
@@ -202,6 +248,37 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   if (dist > THREAT_ENGAGE_RADIUS) return mover;
   if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
   return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+}
+
+/**
+ * Count one hit from `attacker` against a hull assaulting an HQ (see
+ * `notifyThreat`): consecutive hits from the same gun accumulate on the
+ * assault's `challenger` record, and the `HQ_DEFENSE_HITS`-th in a row
+ * retargets the hull onto the challenger through a normal retaliation
+ * memory — the enemy is dealt with first, and the fort is re-engaged once
+ * the grudge clears (obstructed guns re-seek, the scheduler re-picks
+ * admitted forts). A hit from a different gun restarts the count at 1;
+ * chips from past the engage gate or the anchor leash record nothing.
+ *
+ * Pure: no rng, no clocks.
+ */
+function noteAssaultHit<M extends { threat?: ThreatMemory }>(
+  mover: M,
+  live: ThreatMemory,
+  attacker: number,
+  ax: number,
+  az: number,
+  dist: number,
+  anchor?: ThreatAnchor | null,
+): M {
+  if (dist > THREAT_ENGAGE_RADIUS) return mover;
+  if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
+  const prev = live.challenger;
+  const hits = prev && prev.attacker === attacker ? prev.hits + 1 : 1;
+  if (hits >= HQ_DEFENSE_HITS) {
+    return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+  }
+  return { ...mover, threat: { ...live, challenger: { attacker, hits, x: ax, z: az } } };
 }
 
 /**
@@ -263,6 +340,65 @@ export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; h
     };
   }
   return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+}
+
+/**
+ * HQ/structure assault: point an idle/patrolling hull at an enemy fort it is
+ * shelling but cannot reach from where it stands (see `seekEngage`, whose
+ * `-1` convention this shares), so the hull closes toward the fort, holds at
+ * weapons-range stand-off, and resumes patrol if the fight moves on.
+ *
+ * Compared to `seekEngage`, two deliberate differences — the assault is a
+ * commitment, not a waypoint:
+ *
+ * - The memory carries `structure: true`: the hunt sweep never clobbers it
+ *   with a team advance (position waypoints still upgrade to live hunts, the
+ *   assault is *restored* when no hunt acquires), and hits taken while
+ *   assaulting count toward a challenger instead of stealing immediately
+ *   (see `notifyThreat` + `HQ_DEFENSE_HITS`) — the hull deals with a
+ *   consistent attacker first, then resumes the fort.
+ * - A live grudge against a roster enemy (`attacker >= 0`) is never
+ *   overwritten: a hull already fighting someone finishes that fight instead
+ *   of turning for the fort mid-brawl. Live position waypoints (team
+ *   advances) still yield to the assault like any other seek.
+ *
+ * Ordered/holding movers ignore the assault (player orders win) and the
+ * patrol-anchor leash still applies (local pushes only). Pure: no rng, no
+ * clocks.
+ */
+export function seekStructure<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
+  mover: M,
+  victim: { x: number; z: number },
+  x: number,
+  z: number,
+  anchor?: ThreatAnchor | null,
+): M {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return mover;
+  if (!victim || !Number.isFinite(victim.x) || !Number.isFinite(victim.z)) return mover;
+  if (mover.hold) return mover;
+  const order = mover.order as { at?: number; points?: readonly unknown[] } | undefined;
+  if (order && (order.at ?? 0) >= 0 && (order.at ?? 0) < (order.points?.length ?? 0)) return mover;
+  if (anchor && Math.hypot(x - anchor.x, z - anchor.z) > THREAT_LEASH_RADIUS) return mover;
+  const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
+  if (live) {
+    // Already answering a live enemy: finish that fight first (self-defense
+    // before forts). The challenger record on an older assault survives —
+    // the hull is already doing what the count would ask for.
+    if (live.attacker >= 0) return mover;
+    return {
+      ...mover,
+      threat: {
+        attacker: -1,
+        x,
+        z,
+        ttl: THREAT_MEMORY_DURATION,
+        structure: true,
+        ...(live.leash !== undefined ? { leash: live.leash } : {}),
+        ...(live.challenger !== undefined ? { challenger: { ...live.challenger } } : {}),
+      },
+    };
+  }
+  return { ...mover, threat: { attacker: -1, x, z, ttl: THREAT_MEMORY_DURATION, structure: true } };
 }
 
 /**

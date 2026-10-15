@@ -17,6 +17,7 @@ import {
   notifyThreat,
   orderMover,
   seekEngage,
+  seekStructure,
   shouldHold,
   slewTilt,
   snappedFormationTargets,
@@ -229,20 +230,39 @@ export class UnitMovement {
   }
 
   /**
+   * True while the unit is answering a live enemy: a live grudge against a
+   * roster hull (`threat.attacker >= 0`) on its drive. The gun layer reads
+   * this to hold HQ structure fire until the fight clears (self-defense
+   * first, forts after). Assaulting a fort (attacker -1), patrolling, or
+   * carrying no memory reads false, so unpressured guns keep shelling.
+   */
+  isFighting(index: number): boolean {
+    const threat = this.movers[index]?.threat;
+    return !!threat && threat.ttl > 0 && threat.attacker >= 0;
+  }
+
+  /**
    * Reposition a live hull whose gun cannot engage because terrain hides
    * the target (core `seekEngage` through the retaliation pursuit drive, so
    * the hull closes toward the target — a higher vantage or shorter range —
    * holds at weapons-range stand-off, and resumes patrol if the fight moves
-   * on). Wrecks refuse (they hold forever), a hull never seeks itself, and
-   * ordered/holding hulls refuse (player orders win). Idempotent per tick:
-   * re-seeks refresh the memory, they never stack.
+   * on). Structure targets (an HQ fort, `target -1`) assault through core
+   * `seekStructure` instead: the push survives the hunt sweep (never
+   * clobbered by a team advance) and yields to consistent challengers
+   * before resuming the fort. Wrecks refuse (they hold forever), a hull
+   * never seeks itself, and ordered/holding hulls refuse (player orders
+   * win). Idempotent per tick: re-seeks refresh the memory, they never
+   * stack.
    */
   seekEngage(seeker: number, target: number, x: number, z: number): void {
     const mover = this.movers[seeker];
     if (!mover || this.destroyed[seeker]) return;
     if (seeker === target) return;
     const anchor = this.routes[seeker]?.[0] ?? null;
-    this.movers[seeker] = seekEngage(mover, mover, target, x, z, anchor);
+    this.movers[seeker] =
+      target === -1
+        ? seekStructure(mover, mover, x, z, anchor)
+        : seekEngage(mover, mover, target, x, z, anchor);
   }
 
   /**
@@ -349,11 +369,19 @@ export class UnitMovement {
       const anchor = this.routes[i]?.[0] ?? null;
       // A hull carrying only an advance still upgrades: clear the position
       // memory for the acquisition attempt so a live enemy in notice takes
-      // over the push the same tick.
+      // over the push the same tick. An HQ assault (`structure`) is restored
+      // untouched when no hunt acquires — the sweep never clobbers a fort
+      // push with a team advance; consistent challengers preempt through
+      // the threat hook instead (see `threatenUnit` + `HQ_DEFENSE_HITS`).
+      const assault =
+        mover.threat?.attacker === -1 && mover.threat.structure === true ? mover.threat : undefined;
       const free = mover.threat?.attacker === -1 ? clearThreat(mover) : mover;
       let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds);
       if (!next.threat || next.threat.ttl <= 0) {
-        next = this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined);
+        next =
+          assault !== undefined
+            ? mover
+            : this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined);
       }
       this.movers[i] = next;
     }

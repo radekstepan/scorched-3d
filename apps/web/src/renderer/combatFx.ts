@@ -510,6 +510,15 @@ export interface CombatEnv {
     hostile: boolean,
     attack?: AttackMode,
   ) => void;
+  /**
+   * True while a hull is answering a live enemy (a live retaliation/hunt
+   * grudge on its drive — see `UnitMovement`): HQ fire skips engaged guns,
+   * so a hull shelling the fort that comes under consistent enemy fire deals
+   * with the enemy first and resumes the fort once the grudge clears.
+   * Absent reads as nobody engaged (legacy behavior: every admitted gun may
+   * draw structure fire).
+   */
+  isEngaged?: (index: number) => boolean;
 }
 
 export class CombatFx {
@@ -1655,6 +1664,13 @@ export class CombatFx {
     const count = this.units.children.length;
     if (count < 2) return true;
     if (this.shots.length >= MAX_SHOTS) return true;
+    // Self-defense first: an engaged gun's fort aim is stale — drop it so
+    // the traverse rejoins the hull duel instead of lingering on the HQ.
+    if (this.env?.isEngaged) {
+      for (const attacker of [...this.pendingHq.keys()]) {
+        if (this.env.isEngaged(attacker)) this.pendingHq.delete(attacker);
+      }
+    }
     const hqPick = this.pickHqShot();
     if (hqPick) {
       const hq = this.hqTargetOf(hqPick.team);
@@ -1671,8 +1687,11 @@ export class CombatFx {
    * enemy HQ. Null most volleys (`HQ_TARGET_CHANCE`), when no HQ is fielded
    * (legacy headless groups), when every HQ is wrecked, or when no live
    * enemy hull is even near admitted range — so structure fire only ever
-   * answers push-ins, never cross-map pairs. Consumes rng only when it
-   * proceeds, so hull-duel streams replay untouched without HQs.
+   * answers push-ins, never cross-map pairs. Guns answering a live enemy
+   * (`isEngaged`) never draw structure fire: a hull under consistent fire
+   * deals with the enemy first through the hull duel, and resumes the fort
+   * once the grudge clears. Consumes rng only when it proceeds, so
+   * hull-duel streams replay untouched without HQs.
    */
   private pickHqShot(): { attacker: number; team: number } | null {
     const targets = this.env?.hqTargets?.() ?? [];
@@ -1680,10 +1699,12 @@ export class CombatFx {
     const placed = this.units.userData.units as PlacedUnit[] | undefined;
     if (!placed) return null;
     if (this.rng() >= HQ_TARGET_CHANCE) return null;
+    const engaged = this.env?.isEngaged;
     const pairs: { attacker: number; team: number }[] = [];
     for (const t of targets) {
       for (let i = 0; i < this.units.children.length; i++) {
         if (this.destroyed[i]) continue;
+        if (engaged?.(i)) continue;
         const side = placed[i]?.team;
         if (side === undefined || side === t.team) continue;
         const body = this.units.children[i] as THREE.Group | undefined;

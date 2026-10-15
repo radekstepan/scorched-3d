@@ -623,12 +623,27 @@ function pursueStep(
   // survives every tick of the chase instead of collapsing after one step.
   const anchor = route.length > 0 ? (route[0] as RoutePoint) : { x: mover.x, z: mover.z };
   if (Math.hypot(tx - anchor.x, tz - anchor.z) > (threat.leash ?? THREAT_LEASH_RADIUS)) return null;
+  // An HQ assault carries its challenger record with it (refreshed against
+  // the live roster when the challenger is still up — the count survives the
+  // march, so consistent fire preempts mid-push, not just on arrival).
+  const foeChallenger = threat.challenger ? foes?.[threat.challenger.attacker] : undefined;
   const memory: ThreatMemory = {
     attacker: threat.attacker,
     x: tx,
     z: tz,
     ttl,
     ...(threat.leash !== undefined ? { leash: threat.leash } : {}),
+    ...(threat.structure === true ? { structure: true as const } : {}),
+    ...(threat.challenger !== undefined
+      ? {
+          challenger: {
+            attacker: threat.challenger.attacker,
+            hits: threat.challenger.hits,
+            x: foeChallenger?.x ?? threat.challenger.x,
+            z: foeChallenger?.z ?? threat.challenger.z,
+          },
+        }
+      : {}),
   };
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });
