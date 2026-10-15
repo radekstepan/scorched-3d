@@ -18,6 +18,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers, team + unit legend, probe readout. |
 | `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, hover picking. |
 | `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, team ground rings, and exaggeration re-snapping. |
+| `apps/web/src/renderer/camo.ts` | Subtle procedural hull camo: one shared near-white grayscale texture per kind bound as hull-material map (hue-preserving, no hull tint), deterministic bake. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |

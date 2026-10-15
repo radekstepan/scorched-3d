@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyCamo } from "./camo";
 import {
   advanceGait,
   GAIT_SETTLE_RATE,
@@ -453,6 +454,9 @@ export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {
   for (const unit of map.units) {
     const body = new THREE.Group();
     buildBody(unit.kind, body);
+    // Subtle procedural camo on the hull paint (shared per-kind texture;
+    // wheels stay flat rubber, markers are skipped inside applyCamo).
+    applyCamo(body, unit.kind);
     // Team ground ring: side identity without hull tint (see buildTeamRing).
     body.add(buildTeamRing(unit.team ?? 0));
     // YXZ so hull pitch/roll pose in the hull frame after yawing.
