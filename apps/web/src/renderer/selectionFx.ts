@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { scorchDisplayRGB } from "@scorched-3d/core";
 
 /**
  * High-contrast RTS selection visuals.
@@ -106,15 +107,14 @@ export function hueDistance(a: number, b: number): number {
 }
 
 /**
- * Approximate scorch-decal sRGB triple for a core `intensity` (0..1),
- * mirroring the `CombatFx.syncScorch` tone ramp
- * (`tone = 0.17 - intensity * 0.12`, ember-warmed red > green > blue).
- * Contrast math treats the triple as sRGB — approximate past ACES
- * tonemapping, but exact enough to pin the design policy in tests.
+ * Approximate scorch-decal sRGB triple for a core `intensity` (0..1): the
+ * baked char-center color times the per-mark shade (see `craters.ts` +
+ * `CombatFx.syncScorch`). Contrast math treats the triple as sRGB —
+ * approximate past ACES tonemapping, but exact enough to pin the design
+ * policy in tests.
  */
 export function scorchToneRGB(intensity: number): [number, number, number] {
-  const tone = 0.17 - intensity * 0.12;
-  return [tone, tone * 0.72, tone * 0.58];
+  return scorchDisplayRGB(intensity);
 }
 
 /** Pack an sRGB 0..1 triple back to 0xRRGGBB for the contrast helpers. */

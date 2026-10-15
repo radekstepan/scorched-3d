@@ -24,6 +24,12 @@ export interface ScorchMark {
   radius: number;
   /** Darkness 0..1 (higher = blacker). */
   intensity: number;
+  /**
+   * Deterministic 0..1 variant for the decal's irregular edge (anisotropic
+   * squash + texture rotation). Resolved from position when absent so older
+   * marks without one still render deterministically.
+   */
+  seed?: number;
 }
 
 /** Perf cap: persistent scorch decals (separate from shot/explosion caps). */
@@ -298,6 +304,121 @@ export function tickDamage(
 export function addScorchMark(marks: ScorchMark[], mark: ScorchMark): ScorchMark[] {
   if (marks.length >= MAX_SCORCH_MARKS) return [...marks.slice(1), mark];
   return [...marks, mark];
+}
+
+/**
+ * Believable blast scorch: a charred center fading to a scorched rim with an
+ * irregular (wobbling, non-circular) edge, plus a tiny terrain dent. The old
+ * flat brown disc read as mud because it was one solid tone with a hard
+ * circular silhouette; the renderer bakes the two-tone gradient + wobble into
+ * a shared texture, tints per-mark from `scorchDisplayRGB`, squashes each
+ * mark elliptically from its seed, and dents the visual heightfield only.
+ * Pathing and unit seating read the static core heightfield, so scorch and
+ * craters stay purely visual and can never trap a unit.
+ */
+
+/** Charred center of the baked scorch gradient (sRGB 0..1, near-black warm). */
+export const SCORCH_CORE_RGB: [number, number, number] = [0.09, 0.066, 0.047];
+/** Scorched rim of the baked scorch gradient (sRGB 0..1, dark burnt brown). */
+export const SCORCH_RIM_RGB: [number, number, number] = [0.29, 0.18, 0.11];
+
+/**
+ * Per-mark brightness multiplier from blast intensity: heavier shells scar
+ * darker. Multiplies the baked texture, so the charred-center gradient keeps
+ * its shape while kinds still read differently.
+ */
+export function scorchShade(intensity: number): number {
+  const clamped = Math.min(Math.max(intensity, 0), 1);
+  return 1 - clamped * 0.3;
+}
+
+/**
+ * Effective displayed center color of a scorch mark (baked char core times
+ * the per-mark shade), for contrast policy + tests. Red > green > blue:
+ * burnt ground, not mud.
+ */
+export function scorchDisplayRGB(intensity: number): [number, number, number] {
+  const s = scorchShade(intensity);
+  return [SCORCH_CORE_RGB[0]! * s, SCORCH_CORE_RGB[1]! * s, SCORCH_CORE_RGB[2]! * s];
+}
+
+/**
+ * Deterministic 0..1 variant seed from a blast position (integer hash, no
+ * trig/rng — stable across sessions and replays).
+ */
+export function scorchSeed(x: number, z: number): number {
+  const xi = Math.floor(x * 13.7 + 0.5);
+  const zi = Math.floor(z * 7.3 + 0.5);
+  let h = (xi * 374761393 + zi * 668265263) | 0;
+  h = (h ^ (h >> 13)) | 0;
+  h = (h * 1274126177) | 0;
+  h = (h ^ (h >> 16)) >>> 0;
+  return (h % 100000) / 100000;
+}
+
+/** Seed of a mark, falling back to the position hash when absent. */
+export function resolveScorchSeed(mark: ScorchMark): number {
+  return typeof mark.seed === "number" ? mark.seed : scorchSeed(mark.x, mark.z);
+}
+
+/**
+ * Elliptical squash for a mark's silhouette from its seed: +14% along one
+ * axis, −14% along the other (area-preserving, so radii stay comparable).
+ * Combined with per-mark rotation, no two blotches share a silhouette.
+ */
+export function scorchAnisotropy(seed: number): [number, number] {
+  const clamped = Math.min(Math.max(seed, 0), 1);
+  const d = (clamped - 0.5) * 0.28;
+  return [1 + d, 1 - d];
+}
+
+/** Deepest a single blast dents the visual heightfield (pre-exaggeration height units). */
+export const MAX_CRATER_DEPTH = 1.0;
+/** Cap on accumulated dent at one spot (overlapping bowls never dig a pit). */
+export const MAX_CRATER_TOTAL = 2.0;
+
+/**
+ * Dent depth for a blast intensity: hammer shells dig the full 1.0 height
+ * unit (~3.6 world units at the default exaggeration — a shallow bowl, not a
+ * pit), lighter bolts barely dimple the ground.
+ */
+export function craterDepthForIntensity(intensity: number): number {
+  const clamped = Math.min(Math.max(intensity, 0), 1);
+  return 0.25 + clamped * 0.75;
+}
+
+/** Smooth bowl profile: 1 at ground zero, 0 past the rim (t = dist/radius). */
+export function craterFalloff(t: number): number {
+  if (!(t < 1)) return 0;
+  if (!(t > 0)) return 1;
+  const u = 1 - t * t;
+  return u * u;
+}
+
+export interface Crater {
+  x: number;
+  z: number;
+  radius: number;
+  /** Dent depth in pre-exaggeration height units. */
+  depth: number;
+}
+
+/**
+ * Total visual dent at world (x, z) from nearby blast bowls, capped so
+ * overlapping impacts never dig a pit. Pure + deterministic; feeds the
+ * renderer mesh displacement and scorch seating only — never pathing.
+ */
+export function craterDepthAt(craters: readonly Crater[], x: number, z: number): number {
+  let total = 0;
+  for (const c of craters) {
+    if (!(c.radius > 0) || !(c.depth > 0)) continue;
+    const dx = x - c.x;
+    const dz = z - c.z;
+    const t = Math.sqrt(dx * dx + dz * dz) / c.radius;
+    const f = craterFalloff(t);
+    if (f > 0) total += c.depth * f;
+  }
+  return Math.min(total, MAX_CRATER_TOTAL);
 }
 
 export interface BlastPoint {

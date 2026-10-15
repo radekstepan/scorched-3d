@@ -7,15 +7,27 @@ import {
   BLAST_RADIUS,
   BURN_DURATION,
   burningCount,
+  craterDepthAt,
+  craterDepthForIntensity,
+  craterFalloff,
   createDamageField,
   igniteTree,
   indicesInBlast,
   isTerminalTree,
+  MAX_CRATER_DEPTH,
+  MAX_CRATER_TOTAL,
   MAX_FELLED_PER_BLAST,
   MAX_FIRES,
   MAX_SCORCH_MARKS,
+  resolveScorchSeed,
   resolveTerminal,
+  scorchAnisotropy,
+  scorchDisplayRGB,
   scorchForKind,
+  SCORCH_CORE_RGB,
+  SCORCH_RIM_RGB,
+  scorchSeed,
+  scorchShade,
   SMOULDER_DURATION,
   tickDamage,
   type ScorchMark,
@@ -66,6 +78,100 @@ describe("addScorchMark", () => {
     // The first five (x = 0..4) were evicted; x = 5 is now oldest.
     expect(marks[0]!.x).toBe(5);
     expect(marks[marks.length - 1]!.x).toBe(MAX_SCORCH_MARKS + 4);
+  });
+});
+
+describe("believable scorch (charred center, irregular edge)", () => {
+  it("hashes deterministic 0..1 seeds from blast positions", () => {
+    expect(scorchSeed(10, 20)).toBe(scorchSeed(10, 20));
+    for (const s of [scorchSeed(0, 0), scorchSeed(-500, 300), scorchSeed(123.4, -99.9)]) {
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThan(1);
+    }
+    // Distinct blasts (almost surely) get distinct variants.
+    const seeds = new Set(
+      [
+        [0, 0],
+        [10, 0],
+        [0, 10],
+        [500, -300],
+        [-123, 456],
+      ].map(([x, z]) => scorchSeed(x!, z!)),
+    );
+    expect(seeds.size).toBeGreaterThan(1);
+  });
+
+  it("resolves explicit seeds and falls back to the position hash", () => {
+    expect(resolveScorchSeed({ x: 1, z: 2, radius: 24, intensity: 0.6, seed: 0.42 })).toBe(0.42);
+    expect(resolveScorchSeed({ x: 1, z: 2, radius: 24, intensity: 0.6 })).toBe(scorchSeed(1, 2));
+  });
+
+  it("squashes silhouettes elliptically without changing decal area much", () => {
+    for (const seed of [0, 0.25, 0.5, 0.75, 1]) {
+      const [ax, az] = scorchAnisotropy(seed);
+      expect(ax).toBeGreaterThanOrEqual(0.86 - 1e-9);
+      expect(ax).toBeLessThanOrEqual(1.14 + 1e-9);
+      expect(az).toBeGreaterThanOrEqual(0.86 - 1e-9);
+      expect(az).toBeLessThanOrEqual(1.14 + 1e-9);
+      // Opposite squashes: area-preserving to within 1%.
+      expect(ax * az).toBeCloseTo(1, 1);
+    }
+    // Neutral seed leaves the disc circular.
+    expect(scorchAnisotropy(0.5)).toEqual([1, 1]);
+  });
+
+  it("shades heavier blasts darker while staying burnt (red > green > blue)", () => {
+    expect(scorchShade(0.8)).toBeLessThan(scorchShade(0.55));
+    for (const i of [0, 0.55, 0.8, 1]) {
+      const [r, g, b] = scorchDisplayRGB(i);
+      expect(r).toBeGreaterThan(g);
+      expect(g).toBeGreaterThan(b);
+      expect(r).toBeLessThanOrEqual(SCORCH_CORE_RGB[0]);
+    }
+    // Hammer centers read near-black, flash centers merely dark.
+    expect(scorchDisplayRGB(0.8)[0]).toBeLessThan(0.075);
+    expect(scorchDisplayRGB(0.55)[0]).toBeGreaterThan(scorchDisplayRGB(0.8)[0]);
+    // The rim stays a dark burnt brown, never mud-bright.
+    expect(SCORCH_RIM_RGB[0]).toBeLessThan(0.35);
+  });
+});
+
+describe("crater dents (tiny, visual-only)", () => {
+  it("digs at most one height unit, deeper for heavier blasts", () => {
+    expect(craterDepthForIntensity(0.8)).toBeGreaterThan(craterDepthForIntensity(0.55));
+    for (const i of [0, 0.55, 0.8, 1]) {
+      expect(craterDepthForIntensity(i)).toBeGreaterThan(0);
+      expect(craterDepthForIntensity(i)).toBeLessThanOrEqual(MAX_CRATER_DEPTH);
+    }
+    expect(MAX_CRATER_DEPTH).toBe(1);
+  });
+
+  it("profiles a smooth bowl: full depth at ground zero, none past the rim", () => {
+    expect(craterFalloff(0)).toBe(1);
+    expect(craterFalloff(1)).toBe(0);
+    expect(craterFalloff(1.5)).toBe(0);
+    let prev = Infinity;
+    for (const t of [0, 0.25, 0.5, 0.75, 0.99]) {
+      const f = craterFalloff(t);
+      expect(f).toBeLessThanOrEqual(prev);
+      prev = f;
+    }
+    expect(craterFalloff(0.5)).toBeGreaterThan(0.25);
+  });
+
+  it("sums overlapping bowls and caps the total so pits never form", () => {
+    expect(craterDepthAt([], 0, 0)).toBe(0);
+    const single = [{ x: 0, z: 0, radius: 40, depth: 0.8 }];
+    expect(craterDepthAt(single, 0, 0)).toBeCloseTo(0.8, 9);
+    expect(craterDepthAt(single, 400, 0)).toBe(0);
+    expect(craterDepthAt(single, 20, 0)).toBeGreaterThan(0);
+    expect(craterDepthAt(single, 20, 0)).toBeLessThan(0.8);
+    // Degenerate bowls contribute nothing.
+    expect(craterDepthAt([{ x: 0, z: 0, radius: 0, depth: 5 }], 0, 0)).toBe(0);
+    // Ten stacked heavies still cap instead of digging a pit.
+    const stacked = Array.from({ length: 10 }, () => ({ x: 0, z: 0, radius: 46, depth: 1 }));
+    expect(craterDepthAt(stacked, 0, 0)).toBe(MAX_CRATER_TOTAL);
+    expect(MAX_CRATER_TOTAL).toBe(2);
   });
 });
 

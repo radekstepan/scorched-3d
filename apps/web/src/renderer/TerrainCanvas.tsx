@@ -6,6 +6,7 @@ import {
   applyBlastToTrees,
   CELL_PIXELS,
   createDamageField,
+  craterDepthAt,
   FEATURE_EMPTY,
   FEATURE_FRINGE,
   composeAlbedo,
@@ -16,6 +17,7 @@ import {
   seatHull,
   tickDamage,
   worldSize,
+  type Crater,
   type HoverInfo,
   type TNTMap,
   type UnitKind,
@@ -31,6 +33,7 @@ import {
 } from "./shaders";
 import { buildUnits } from "./units";
 import { CombatFx } from "./combatFx";
+import { applyCraters } from "./craters";
 import { FireFx } from "./fireFx";
 import {
   buildRocks,
@@ -208,16 +211,20 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     // Ambient skirmish: units trade tracer/shell fire with muzzle flashes,
     // impact explosions, and recoil kicks, driven by the render-loop clock.
-    // Impacts scar the ground (persistent capped scorch decals, re-seated on
-    // exaggeration change) and damage the environment in graduated stages —
+    // Impacts scar the ground (persistent capped scorch decals with charred
+    // centers and irregular edges, re-seated on exaggeration change, plus a
+    // tiny visual crater dent in the terrain mesh) and damage the environment
+    // in graduated stages —
     // blast cores flatten trees to toppled/stump/snag and bury rocks, while
     // the fringe ignites burning → smouldering → terminal states with spread;
     // units themselves are never moved by blasts.
     // Bilinear surface sampling (continuous across cell edges, so hulls,
     // scorch, and probes never pop by whole height steps mid-cell) tracking
-    // the live exaggeration slider.
+    // the live exaggeration slider, minus the accumulated crater bowls.
+    const craters: Crater[] = [];
     const groundY = (x: number, z: number): number =>
-      sampleHeightBilinear(map, x, z) * optsRef.current.exaggeration;
+      (sampleHeightBilinear(map, x, z) - craterDepthAt(craters, x, z)) *
+      optsRef.current.exaggeration;
     const seat = (x: number, z: number, hull: number, kind: UnitKind) =>
       seatHull(map, kind, x, z, hull, optsRef.current.exaggeration);
     // Graduated collateral state: caller-owned core DamageField indexed by
@@ -253,7 +260,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
       for (const i of rockChanged) poseRock(i);
     };
-    const combat = new CombatFx(scene, units, Math.random, { groundY, blastFeatures });
+    // Shallow visual crater per impact (≤1 height unit each, oldest evicted
+    // with the scorch cap so the bowl count never grows unbounded). The dent
+    // lives only in the terrain mesh + groundY seating: core pathing and unit
+    // seating read the static heightfield, so bowls never trap units.
+    const dentTerrain = (x: number, z: number, radius: number, depth: number): void => {
+      craters.push({ x, z, radius, depth });
+      if (craters.length > 48) craters.shift();
+      applyCraters(geometry, map, craters, optsRef.current.exaggeration);
+    };
+    const combat = new CombatFx(scene, units, Math.random, { groundY, blastFeatures, dentTerrain });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets
     // (external hulls) so units fire on the move. Recoil anchors follow the
@@ -524,7 +540,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         camera.position.y += dy;
         controls.target.y += dy;
         lastExag = opt.exaggeration;
-        applyExaggeration(geometry, map, lastExag);
+        applyCraters(geometry, map, craters, lastExag);
         geometry.computeVertexNormals();
         water.position.y = map.seaLevel * lastExag + 0.6;
         // Damage survives: re-seat from the persistent field, drop in-flight
@@ -726,20 +742,6 @@ function buildTerrainGeometry(map: TNTMap, exaggeration: number): THREE.BufferGe
   geo.computeVertexNormals();
   geo.computeBoundingSphere();
   return geo;
-}
-
-function applyExaggeration(geo: THREE.BufferGeometry, map: TNTMap, exaggeration: number) {
-  const pos = geo.getAttribute("position") as THREE.BufferAttribute;
-  const w = map.width;
-  const h = map.height;
-  for (let z = 0; z < h; z++) {
-    for (let x = 0; x < w; x++) {
-      const i = z * w + x;
-      pos.setY(i, (map.heights[i] ?? 0) * exaggeration);
-    }
-  }
-  pos.needsUpdate = true;
-  geo.computeBoundingSphere();
 }
 
 function hitToInfo(map: TNTMap, point: THREE.Vector3): HoverInfo {

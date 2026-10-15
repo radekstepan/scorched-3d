@@ -364,9 +364,11 @@ describe("CombatFx unit damage", () => {
 describe("CombatFx destruction", () => {
   function makeEnv() {
     const calls: { x: number; z: number; radius: number }[] = [];
+    const dents: { x: number; z: number; radius: number; depth: number }[] = [];
     let height = 100;
     return {
       calls,
+      dents,
       setHeight(h: number) {
         height = h;
       },
@@ -374,6 +376,9 @@ describe("CombatFx destruction", () => {
         groundY: () => height,
         blastFeatures: (x: number, z: number, radius: number) => {
           calls.push({ x, z, radius });
+        },
+        dentTerrain: (x: number, z: number, radius: number, depth: number) => {
+          dents.push({ x, z, radius, depth });
         },
       },
     };
@@ -448,5 +453,49 @@ describe("CombatFx destruction", () => {
     fx.dispose();
     expect(fx.scorchCount).toBe(0);
     expect(hasScorchMesh(scene)).toBe(false);
+  });
+
+  it("seeds scorch marks, tints over the char texture, and dents shallow bowls", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const ctl = makeEnv();
+    const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
+    for (let n = 0; n < 200; n++) fx.update(0.05);
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    // One shallow dent per scar, capped at one height unit (visual only —
+    // pathing and unit seating never see it).
+    expect(ctl.dents.length).toBe(fx.scorchCount);
+    for (const d of ctl.dents) {
+      expect(d.radius).toBeGreaterThan(0);
+      expect(d.depth).toBeGreaterThan(0);
+      expect(d.depth).toBeLessThanOrEqual(1);
+    }
+    // Instance tints are near-white multipliers over the baked char-center
+    // texture (the gradient carries the darkness now, not the tint).
+    const mesh = scene.children.find(
+      (c) => (c as THREE.InstancedMesh).isInstancedMesh,
+    ) as THREE.InstancedMesh;
+    const color = new THREE.Color();
+    for (let i = 0; i < fx.scorchCount; i++) {
+      mesh.getColorAt(i, color);
+      expect(color.r).toBeGreaterThan(0.7);
+      expect(color.r).toBeLessThanOrEqual(1);
+      // Warm-neutral multiplier: channels track each other closely.
+      expect(Math.abs(color.r - color.g)).toBeLessThan(0.05);
+      expect(Math.abs(color.r - color.b)).toBeLessThan(0.08);
+    }
+    // Decals are elliptical, never perfect circles sharing one silhouette.
+    const m = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    let varied = false;
+    for (let i = 0; i < fx.scorchCount; i++) {
+      mesh.getMatrixAt(i, m);
+      m.decompose(pos, quat, scale);
+      if (Math.abs(scale.x - scale.z) > 1e-6) varied = true;
+    }
+    expect(varied).toBe(true);
+    fx.dispose();
   });
 });

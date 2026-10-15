@@ -9,6 +9,7 @@ import {
   canFire,
   clampElevation,
   clampTurret,
+  craterDepthForIntensity,
   createUnitDamage,
   GRAVITY,
   inRange,
@@ -20,7 +21,11 @@ import {
   muzzleYaw,
   nextShotDelay,
   pickSkirmishPair,
+  resolveScorchSeed,
+  scorchAnisotropy,
   scorchForKind,
+  scorchSeed,
+  scorchShade,
   solveShot,
   stepAngle,
   TURRET_SLEW_RATE,
@@ -33,6 +38,7 @@ import {
 } from "@scorched-3d/core";
 import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
 import { applyUnitDamageTint, UnitDamageFx } from "./unitDamageFx";
+import { disposeScorchTexture, getScorchTexture } from "./craters";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -146,6 +152,13 @@ export interface CombatEnv {
    * core flattens, fringe ignites/chips. Units are untouched.
    */
   blastFeatures: (x: number, z: number, radius: number) => void;
+  /**
+   * Optional shallow visual dent of the terrain mesh at world (x, z):
+   * `depth` is pre-exaggeration height units (≤1 per blast). Implemented by
+   * the canvas, which owns the terrain geometry; purely visual — pathing and
+   * unit seating read the static core heightfield.
+   */
+  dentTerrain?: (x: number, z: number, radius: number, depth: number) => void;
 }
 
 export class CombatFx {
@@ -167,12 +180,13 @@ export class CombatFx {
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
   private shockGeo = new THREE.SphereGeometry(10, 14, 10);
-  /** Persistent scorch decals: one shared instanced disc, capped in core. */
-  private scorchGeo = new THREE.CircleGeometry(1, 18);
+  /** Persistent scorch decals: one shared instanced textured disc, capped in core. */
+  private scorchGeo = new THREE.CircleGeometry(1, 28);
   private scorchMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
+    map: getScorchTexture(),
     transparent: true,
-    opacity: 0.62,
+    opacity: 0.92,
     depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: -2,
@@ -362,6 +376,7 @@ export class CombatFx {
     this.shockGeo.dispose();
     this.scorchGeo.dispose();
     this.scorchMat.dispose();
+    disposeScorchTexture();
   }
 
   private unitKind(index: number): UnitKind | null {
@@ -651,9 +666,11 @@ export class CombatFx {
       z: at.z,
       radius: shape.radius,
       intensity: shape.intensity,
+      seed: scorchSeed(at.x, at.z),
     });
     this.syncScorch(at.y);
     this.env?.blastFeatures(at.x, at.z, BLAST_RADIUS[kind]);
+    this.env?.dentTerrain?.(at.x, at.z, shape.radius, craterDepthForIntensity(shape.intensity));
   }
 
   /** Rewrite scorch instance matrices/colors from the mark list. */
@@ -663,14 +680,18 @@ export class CombatFx {
       const mark = this.scorchMarks[i]!;
       const y = this.env ? this.env.groundY(mark.x, mark.z) + 1.2 : fallbackY;
       dummy.position.set(mark.x, y, mark.z);
-      dummy.rotation.set(0, (i * 2.39996) % Math.PI, 0);
-      dummy.scale.setScalar(Math.max(mark.radius, 0.5));
+      // Deterministic per-mark orientation: golden-angle spread plus the
+      // position-hashed seed, so the baked irregular edge never aligns.
+      dummy.rotation.set(0, ((i * 2.39996) % Math.PI) + resolveScorchSeed(mark) * Math.PI, 0);
+      // Elliptical squash from the seed: no two blotches share a silhouette.
+      const [ax, az] = scorchAnisotropy(resolveScorchSeed(mark));
+      dummy.scale.set(Math.max(mark.radius, 0.5) * ax, 1, Math.max(mark.radius, 0.5) * az);
       dummy.updateMatrix();
       this.scorchMesh.setMatrixAt(i, dummy.matrix);
-      // Char-black core warming toward ember brown (burnt ground, not mud:
-      // red > green > blue keeps the disc reading as scorch at demo scale).
-      const tone = 0.17 - mark.intensity * 0.12;
-      this.scorchTint.setRGB(tone, tone * 0.72, tone * 0.58);
+      // Near-white warm multiplier over the baked char-center texture:
+      // heavier blasts scar darker, but the gradient shape always reads.
+      const shade = scorchShade(mark.intensity);
+      this.scorchTint.setRGB(shade, shade * 0.97, shade * 0.94);
       this.scorchMesh.setColorAt(i, this.scorchTint);
     }
     this.scorchMesh.count = this.scorchMarks.length;
