@@ -16,18 +16,28 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Make the tracks behind units a bit more visible.
+a unit wants to close in, but a forest that slows it down plus makes it harder for projectiles to get through. It should have a logic in pathfinding to try to go around if overall that were a better path.
 
----
+2x default zoom speed and be able to zoom in closer still
 
-if a unit is "dead", don't show it's blue outline when behind obstructions anymore.
+Pan speed is tooo slow, 3x the current speed and increase the default
 
-Some of the projectiles are flying "through" terrain. Make sure it does not happen. If a unit cannot engage because its view is obstructed it has to move to a higher vantage point or closer.
+A peewee should have a faster firing (commander like) gun that does less damage but faster rate of fire. And close up it can lob "grenades"
 
-Be able to zoom in closer
+At some point the units remain stationery even after engaging with enemy. Maybe the smallest unit, the peewee should work as a scout and look for enemy which then engages the rest.
 
-Be able to click anywhere on the minimap to move to that area, preserve the angle of view and zoom level.
+Speed up the overall movement of uniots especially through rough terrain/woods
 
-At the larger map and some point the units are just guarding and not attacking. If a "team" has found the enemy direction/HQ, try to keep going there.
+If we have a group of units selected, they try to move as a group rather than faster units cutting ahead.
 
-Make the tracks behind vehicles a bit more visible.
+Make the default height scale 1.5x
+
+A dead unit still shows a "circle" around itself. Remove it immediately after exploding/dying.
+
+If a group/unit is attacking the HQ, but it's attacked by enemy consistently, deal with the enemy first.
+
+Show health over HQ (if toggled)
+
+Make clicking on minimap more natural. Given the angle I am looking at, if I click at say HQ on minimap, the HQ should be in the center of my view after the click.
+
+Do not show dead units on the minimap.
