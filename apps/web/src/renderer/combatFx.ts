@@ -66,9 +66,12 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   low-angle firing solution, and the barrel pitches to that solution
  *   before the shot leaves the exact barrel-tip muzzle. Out-of-range pairs
  *   hold fire like the retail admission range test.
- * - Explosions pair an expanding flash sphere with gravity-driven spark
- *   particles and a short-lived pooled light, echoing nanolathe's
- *   explosion-sprite + art-light pairing. Every impact also scars the
+ * - Explosions pair a weapon-tinted flash shell with a rising fireball,
+ *   cool-grey smoke puffs, an expanding ground shockwave ring, gravity-driven
+ *   spark particles, a lingering ground glow, and a short-lived pooled light,
+ *   echoing nanolathe's explosion-sprite + art-light pairing
+ *   (`internal/meshscene/battle_sprites_projectiles.go` projectile families;
+ *   flash-shell + smoke-column + sparks pairing from `internal/effects`). Every impact also scars the
  *   ground with a persistent scorch decal (capped separately in core) and
  *   damages nearby trees/rocks through the CombatEnv blast hook (blast
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
@@ -91,17 +94,34 @@ interface Flash {
   mat: THREE.MeshBasicMaterial;
   life: number;
   maxLife: number;
+  /** Initial scale multiplier (halos start large and faint). */
+  base: number;
+  /** Growth multiplier over life (halos expand wider than cores). */
+  growth: number;
+  /** Starting opacity (cores hot, halos faint). */
+  peak: number;
 }
 
 interface Explosion {
   group: THREE.Group;
   flashMat: THREE.MeshBasicMaterial;
   flashMesh: THREE.Mesh;
+  fireMat: THREE.MeshBasicMaterial;
+  fireMesh: THREE.Mesh;
+  smokeMat: THREE.MeshBasicMaterial;
+  smokes: THREE.Mesh[];
+  smokeVel: Float32Array;
+  ringMat: THREE.MeshBasicMaterial;
+  ringMesh: THREE.Mesh;
+  glowMat: THREE.MeshBasicMaterial;
+  glowMesh: THREE.Mesh;
   points: THREE.Points;
   pointsMat: THREE.PointsMaterial;
   velocities: Float32Array;
   age: number;
   maxAge: number;
+  /** Ground-seated glow radius (kind scorch radius), for tests. */
+  glowRadius: number;
 }
 
 interface Recoil {
@@ -112,8 +132,17 @@ interface Recoil {
 
 const LIGHT_COUNT = 2;
 const FLASH_MAX_AGE = 0.35;
-const EXPLOSION_MAX_AGE = 0.8;
-const SPARKS_PER_EXPLOSION = 26;
+/** Layered explosions live a beat longer than the old single flash. */
+const EXPLOSION_MAX_AGE = 1.0;
+const SPARKS_PER_EXPLOSION = 36;
+/** Cool-grey smoke puffs per explosion (never brown — task 25 palette). */
+const SMOKE_PER_EXPLOSION = 3;
+/** Muzzle + impact flashes share one bounded pool (cores + halos). */
+const MAX_FLASHES = 24;
+/** Muzzle halo: large faint shell around the hot core. */
+const HALO_SCALE = 1.9;
+const HALO_GROWTH = 2.4;
+const HALO_PEAK = 0.4;
 
 /** Muzzle world position for a unit body at `pos` yawed by `rotationY`. */
 export function muzzlePoint(
@@ -180,6 +209,11 @@ export class CombatFx {
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
   private shockGeo = new THREE.SphereGeometry(10, 14, 10);
+  /** Layered-explosion shared geos: fireball, smoke puff, shock ring, glow. */
+  private fireGeo = new THREE.SphereGeometry(9, 12, 10);
+  private smokeGeo = new THREE.SphereGeometry(8, 8, 6);
+  private ringGeo = new THREE.RingGeometry(1, 1.32, 40);
+  private glowGeo = new THREE.CircleGeometry(1, 24);
   /** Persistent scorch decals: one shared instanced textured disc, capped in core. */
   private scorchGeo = new THREE.CircleGeometry(1, 28);
   private scorchMat = new THREE.MeshBasicMaterial({
@@ -223,6 +257,8 @@ export class CombatFx {
     this.env = env ?? null;
     this.timer = nextShotDelay(rng);
     this.scorchGeo.rotateX(-Math.PI / 2);
+    this.ringGeo.rotateX(-Math.PI / 2);
+    this.glowGeo.rotateX(-Math.PI / 2);
     this.scorchMesh = new THREE.InstancedMesh(this.scorchGeo, this.scorchMat, MAX_SCORCH_MARKS);
     this.scorchMesh.count = 0;
     this.scorchMesh.frustumCulled = false;
@@ -243,6 +279,16 @@ export class CombatFx {
 
   get shotCount(): number {
     return this.shots.length;
+  }
+
+  /** Live muzzle/impact flash count (cores + halos, bounded by pool). */
+  get flashCount(): number {
+    return this.flashes.length;
+  }
+
+  /** Live layered-explosion count (bounded by MAX_EXPLOSIONS). */
+  get explosionCount(): number {
+    return this.explosions.length;
   }
 
   /** Total shots fired since construction (gated by aim, for tests/HUD). */
@@ -374,6 +420,10 @@ export class CombatFx {
     this.shellGeo.dispose();
     this.flashGeo.dispose();
     this.shockGeo.dispose();
+    this.fireGeo.dispose();
+    this.smokeGeo.dispose();
+    this.ringGeo.dispose();
+    this.glowGeo.dispose();
     this.scorchGeo.dispose();
     this.scorchMat.dispose();
     disposeScorchTexture();
@@ -552,7 +602,7 @@ export class CombatFx {
     });
     this.fired += 1;
 
-    this.spawnFlash(start, profile.color, profile.flashTime);
+    this.spawnMuzzle(start, profile.color, profile.flashTime);
     this.kickLight(start, profile.color);
     this.kickRecoil(pair.attacker, attacker, barrelDir);
     return true;
@@ -568,18 +618,46 @@ export class CombatFx {
     this.recoils.set(index, { base: body.position.clone(), dir, t: 1 });
   }
 
-  private spawnFlash(at: THREE.Vector3, color: number, life: number): void {
+  private spawnFlash(
+    at: THREE.Vector3,
+    color: number,
+    life: number,
+    base = 1,
+    growth = 1.6,
+    peak = 0.95,
+  ): void {
+    // Bounded pool: the oldest flash is evicted so a muzzle volley plus a
+    // burst of impacts can never grow the transient list without limit.
+    if (this.flashes.length >= MAX_FLASHES) {
+      const oldest = this.flashes.shift();
+      if (oldest) {
+        this.scene.remove(oldest.mesh);
+        oldest.mat.dispose();
+      }
+    }
     const mat = new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.95,
+      opacity: peak,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     const mesh = new THREE.Mesh(this.flashGeo, mat);
     mesh.position.copy(at);
+    mesh.scale.setScalar(base);
     this.scene.add(mesh);
-    this.flashes.push({ mesh, mat, life, maxLife: Math.max(life, 0.05) });
+    this.flashes.push({ mesh, mat, life, maxLife: Math.max(life, 0.05), base, growth, peak });
+  }
+
+  /**
+   * Layered muzzle flash: a hot white-ish core plus a larger faint halo, both
+   * additive so the pop reads against hull paint and against trees/rocks and
+   * dirt alike. The pooled point-light kick (see call site) does the actual
+   * illumination of whatever is nearby — units or environment.
+   */
+  private spawnMuzzle(at: THREE.Vector3, color: number, life: number): void {
+    this.spawnFlash(at, 0xfff3d6, life, 0.8, 1.4, 1);
+    this.spawnFlash(at, color, life * 1.4, HALO_SCALE, HALO_GROWTH, HALO_PEAK);
   }
 
   private kickLight(at: THREE.Vector3, color: number): void {
@@ -592,6 +670,18 @@ export class CombatFx {
     light.intensity = 2600;
   }
 
+  /**
+   * Layered AAA explosion (nanolathe flash-shell + smoke-column + sparks
+   * pairing, adapted from sprites to three.js meshes): a weapon-tinted
+   * additive flash shell, a rising orange fireball, cool-grey smoke puffs, an
+   * expanding ground shockwave ring, gravity-driven spark debris, a pooled
+   * light kick, and a lingering ground glow seated on the terrain — so the
+   * blast reads against dirt, trees, and rocks exactly the way the muzzle
+   * flash already reads against hull paint. One extra material per layer
+   * (fire/smoke/ring/glow) is owned per explosion and disposed with it;
+   * geometries stay shared. Smoke stays cool grey per the gentler-scorch
+   * palette (never brown) and unit-damage smoke stays subtle (untouched).
+   */
   private explode(at: THREE.Vector3, color: number, kind: UnitKind): void {
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
@@ -599,6 +689,8 @@ export class CombatFx {
     }
     const group = new THREE.Group();
     group.position.copy(at);
+    const ground = this.env ? this.env.groundY(at.x, at.z) : at.y;
+    const shape = scorchForKind(kind);
 
     const flashMat = new THREE.MeshBasicMaterial({
       color,
@@ -609,6 +701,67 @@ export class CombatFx {
     });
     const flashMesh = new THREE.Mesh(this.shockGeo, flashMat);
     group.add(flashMesh);
+
+    // Fireball: hot orange heart that balloons then collapses as it rises.
+    const fireMat = new THREE.MeshBasicMaterial({
+      color: 0xffa03c,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const fireMesh = new THREE.Mesh(this.fireGeo, fireMat);
+    fireMesh.scale.setScalar(0.5);
+    group.add(fireMesh);
+
+    // Smoke: cool-grey puffs (shared material, per-puff rise velocities)
+    // that climb and swell while the flash dies.
+    const smokeMat = new THREE.MeshBasicMaterial({
+      color: 0x8f959e,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    });
+    const smokes: THREE.Mesh[] = [];
+    const smokeVel = new Float32Array(SMOKE_PER_EXPLOSION * 3);
+    for (let i = 0; i < SMOKE_PER_EXPLOSION; i++) {
+      const puff = new THREE.Mesh(this.smokeGeo, smokeMat);
+      const theta = this.rng() * Math.PI * 2;
+      const r = 4 + this.rng() * 10;
+      puff.position.set(Math.cos(theta) * r, this.rng() * 6, Math.sin(theta) * r);
+      puff.scale.setScalar(0.5 + this.rng() * 0.4);
+      group.add(puff);
+      smokes.push(puff);
+      smokeVel[i * 3] = Math.cos(theta + Math.PI / 2) * (4 + this.rng() * 8);
+      smokeVel[i * 3 + 1] = 26 + this.rng() * 22;
+      smokeVel[i * 3 + 2] = Math.sin(theta + Math.PI / 2) * (4 + this.rng() * 8);
+    }
+
+    // Shockwave ring + lingering glow: ground-seated so the blast footprint
+    // reads on dirt and undergrowth, not just on hulls.
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0xffe2b8,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const ringMesh = new THREE.Mesh(this.ringGeo, ringMat);
+    ringMesh.position.y = ground - at.y + 1.6;
+    ringMesh.scale.setScalar(Math.max(shape.radius * 0.4, 1));
+    group.add(ringMesh);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0xff9a3c,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const glowMesh = new THREE.Mesh(this.glowGeo, glowMat);
+    glowMesh.position.y = ground - at.y + 1.4;
+    glowMesh.scale.setScalar(Math.max(shape.radius * 1.1, 1));
+    group.add(glowMesh);
 
     const positions = new Float32Array(SPARKS_PER_EXPLOSION * 3);
     const velocities = new Float32Array(SPARKS_PER_EXPLOSION * 3);
@@ -640,11 +793,21 @@ export class CombatFx {
       group,
       flashMat,
       flashMesh,
+      fireMat,
+      fireMesh,
+      smokeMat,
+      smokes,
+      smokeVel,
+      ringMat,
+      ringMesh,
+      glowMat,
+      glowMesh,
       points,
       pointsMat,
       velocities,
       age: 0,
       maxAge: EXPLOSION_MAX_AGE,
+      glowRadius: shape.radius,
     });
     this.kickLight(at, 0xff8a3c);
     this.scarGround(at, kind);
@@ -702,6 +865,10 @@ export class CombatFx {
   private removeExplosion(ex: Explosion): void {
     this.scene.remove(ex.group);
     ex.flashMat.dispose();
+    ex.fireMat.dispose();
+    ex.smokeMat.dispose();
+    ex.ringMat.dispose();
+    ex.glowMat.dispose();
     ex.points.geometry.dispose();
     ex.pointsMat.dispose();
   }
@@ -756,8 +923,8 @@ export class CombatFx {
         continue;
       }
       const k = 1 - flash.life / flash.maxLife;
-      flash.mesh.scale.setScalar(1 + k * 1.6);
-      flash.mat.opacity = 0.95 * (1 - k);
+      flash.mesh.scale.setScalar(flash.base + k * flash.growth);
+      flash.mat.opacity = flash.peak * (1 - k);
     }
     for (const light of this.lights) {
       if (light.intensity > 0) light.intensity = Math.max(0, light.intensity - dt * 14000);
@@ -769,8 +936,30 @@ export class CombatFx {
       const ex = this.explosions[i]!;
       ex.age += dt;
       const k = Math.min(ex.age / ex.maxAge, 1);
+      // Flash shell: fast-expanding additive pop.
       ex.flashMesh.scale.setScalar(1 + k * 5);
       ex.flashMat.opacity = 0.9 * (1 - k);
+      // Fireball: balloons in the first quarter, then collapses and lifts.
+      const fireK = Math.min(k / 0.25, 1);
+      const dieK = Math.max((k - 0.25) / 0.75, 0);
+      ex.fireMesh.scale.setScalar(0.5 + fireK * 0.9 - dieK * 1.1);
+      ex.fireMesh.position.y = k * 14;
+      ex.fireMat.opacity = 0.95 * (1 - k);
+      // Smoke: climb, drift, and swell while fading with the shared mat.
+      for (let s = 0; s < ex.smokes.length; s++) {
+        const puff = ex.smokes[s]!;
+        puff.position.x += ex.smokeVel[s * 3]! * dt;
+        puff.position.y += ex.smokeVel[s * 3 + 1]! * dt;
+        puff.position.z += ex.smokeVel[s * 3 + 2]! * dt;
+        puff.scale.setScalar(puff.scale.x + dt * 6);
+      }
+      ex.smokeMat.opacity = 0.34 * (1 - k);
+      // Shockwave ring: ground footprint racing outward past the scorch.
+      ex.ringMesh.scale.setScalar(ex.glowRadius * (0.4 + k * 2.0));
+      ex.ringMat.opacity = 0.7 * (1 - k);
+      // Lingering glow: ground light pooling under the blast, slowest fade.
+      ex.glowMesh.scale.setScalar(ex.glowRadius * 1.1 * (0.8 + 0.4 * k));
+      ex.glowMat.opacity = 0.5 * (1 - k) * (1 - k * 0.3);
       const pos = ex.points.geometry.getAttribute("position") as THREE.BufferAttribute;
       for (let p = 0; p < SPARKS_PER_EXPLOSION; p++) {
         ex.velocities[p * 3 + 1] = ex.velocities[p * 3 + 1]! - 320 * dt;

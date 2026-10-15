@@ -104,11 +104,13 @@ describe("CombatFx", () => {
     // Step ~10 simulated seconds: several scheduler firings must occur and
     // the first flights (<=3s) must complete into explosions/cleanup.
     for (let n = 0; n < 200; n++) fx.update(0.05);
-    // Shots are capped; explosions decay after 0.8s, so the scene only ever
-    // holds a handful of transients besides the 2 pooled lights.
+    // Shots are capped; explosions decay after 1.0s, so the scene only ever
+    // holds a handful of transients besides the 2 pooled lights + scorch.
     expect(fx.shotCount).toBeLessThanOrEqual(6);
+    expect(fx.explosionCount).toBeLessThanOrEqual(8);
+    expect(fx.flashCount).toBeLessThanOrEqual(24);
     expect(fx.totalFired).toBeGreaterThan(0);
-    expect(scene.children.length).toBeLessThan(2 + 6 + 8 * 2 + 6);
+    expect(scene.children.length).toBeLessThan(2 + 1 + 6 + 24 + 8 + 1);
     fx.dispose();
   });
 
@@ -295,6 +297,159 @@ describe("CombatFx", () => {
     // Exactly the firing hull rode the shifted anchor home.
     expect(shifted).toBe(1);
     fx.dispose();
+  });
+});
+
+describe("CombatFx AAA muzzle/explosion layering", () => {
+  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
+  function explosionGroups(scene: THREE.Scene): THREE.Group[] {
+    return scene.children.filter(
+      (c) => c instanceof THREE.Group && c.children.some((k) => (k as THREE.Points).isPoints),
+    ) as THREE.Group[];
+  }
+
+  function stepToExplosion(
+    fx: CombatFx,
+    scene: THREE.Scene,
+    units: THREE.Group,
+    maxSteps = 4000,
+  ): void {
+    void units;
+    void scene;
+    for (let n = 0; n < maxSteps && fx.explosionCount === 0; n++) fx.update(1 / 60);
+    expect(fx.explosionCount).toBeGreaterThan(0);
+  }
+
+  it("spawns a layered muzzle flash (hot core + faint halo) and kicks light", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 2000 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    // One shot leaves two flashes: the white-hot core plus the halo shell.
+    expect(fx.flashCount).toBeGreaterThanOrEqual(2);
+    // The pooled light carries the pop to whatever is nearby — hulls or
+    // trees/rocks/dirt — with no per-shot light objects.
+    const lit = scene.children.some(
+      (c) => (c as THREE.PointLight).isPointLight && (c as THREE.PointLight).intensity > 0,
+    );
+    expect(lit).toBe(true);
+    expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(2);
+    fx.dispose();
+  });
+
+  it("builds layered explosions: flash + fireball + smoke + ring + glow + sparks", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    stepToExplosion(fx, scene, units);
+    const groups = explosionGroups(scene);
+    expect(groups.length).toBe(fx.explosionCount);
+    const ex = groups[0]!;
+    // 1 flash shell + 1 fireball + 3 smoke puffs + 1 ring + 1 glow + sparks.
+    expect(ex.children.length).toBe(8);
+    expect(ex.children.filter((k) => (k as THREE.Points).isPoints).length).toBe(1);
+    const mats = new Map<string, number>();
+    ex.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshBasicMaterial | undefined;
+      if (mat && "color" in mat) {
+        const geo = (mesh as THREE.Mesh).geometry;
+        const tag =
+          geo?.type === "RingGeometry"
+            ? "ring"
+            : geo?.type === "CircleGeometry"
+              ? "glow"
+              : (mat.blending === THREE.NormalBlending ? "smoke" : "hot");
+        mats.set(`${tag}:${(mat.color as THREE.Color).getHex().toString(16)}`, 1);
+      }
+    });
+    // Fireball burns orange, the ring glows pale, smoke is one shared grey.
+    const hexes = [...mats.keys()].join(",");
+    expect(hexes).toContain("ffa03c");
+    expect(hexes).toContain("ffe2b8");
+    expect(hexes).toContain("ff9a3c");
+    expect(hexes).toContain("8f959e");
+    // Impact also leaves its weapon-tinted flash pop beside the explosion.
+    expect(fx.flashCount).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("caps flashes and explosions under a long barrage", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    for (let n = 0; n < 4000; n++) {
+      fx.update(0.05);
+      expect(fx.explosionCount).toBeLessThanOrEqual(8);
+      expect(fx.flashCount).toBeLessThanOrEqual(24);
+      expect(fx.shotCount).toBeLessThanOrEqual(6);
+    }
+    expect(fx.totalFired).toBeGreaterThan(0);
+    // Impacts happened along the way (persistent scars outlive the 1.0s
+    // explosion layers, so none need be alive on the final tick).
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("seats the ring and glow on the terrain with cool-grey smoke", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const ground = 100;
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => ground,
+      blastFeatures: () => {},
+    });
+    stepToExplosion(fx, scene, units);
+    const ex = explosionGroups(scene)[0]!;
+    const world = new THREE.Vector3();
+    let ringY = -1;
+    let glowY = -1;
+    let smokeHex = -1;
+    ex.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshBasicMaterial | undefined;
+      if (!mat || !("color" in mat)) return;
+      if (mesh.geometry?.type === "RingGeometry") {
+        mesh.getWorldPosition(world);
+        ringY = world.y;
+      } else if (mesh.geometry?.type === "CircleGeometry") {
+        mesh.getWorldPosition(world);
+        glowY = world.y;
+      } else if (mat.blending === THREE.NormalBlending) {
+        smokeHex = (mat.color as THREE.Color).getHex();
+      }
+    });
+    // Ground footprint reads on dirt/undergrowth, not up on the hull.
+    expect(ringY).toBeCloseTo(ground + 1.6, 5);
+    expect(glowY).toBeCloseTo(ground + 1.4, 5);
+    // Cool grey per the gentler-scorch palette — never brown, never mud.
+    expect(smokeHex).toBe(0x8f959e);
+    fx.dispose();
+  });
+
+  it("clears and disposes every layer without leaking scene objects", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const before = scene.children.length;
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    for (let n = 0; n < 300; n++) fx.update(0.05);
+    expect(fx.activeCount).toBeGreaterThan(0);
+    fx.clearTransients();
+    expect(fx.shotCount).toBe(0);
+    expect(fx.flashCount).toBe(0);
+    expect(fx.explosionCount).toBe(0);
+    // Only the pooled lights + the persistent scorch layer + the two
+    // damage-view instanced draws (smoke/embers, owned by UnitDamageFx)
+    // survive a clear.
+    expect(scene.children.length).toBe(before + 5);
+    fx.dispose();
+    expect(scene.children.length).toBe(before);
   });
 });
 
