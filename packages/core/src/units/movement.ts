@@ -119,7 +119,12 @@ export const ORDER_SPACING_FLOOR = 0.3;
  * Separation: lateral push-out inside this distance to another mover (world
  * units). Equals `STOP_RADIUS` on purpose — the forward-drive stop is what
  * deadlocks (both hulls read scale 0 and grind forever), so the push acts on
- * exactly the pairs the drive refuses to close.
+ * exactly the pairs the drive refuses to close. There is deliberately no
+ * push beyond this radius: a slow-zone neighbour (crawling at `SLOW_SCALE`)
+ * is a convoy, not a collision — shoving cruising hulls apart fights their
+ * homing drive into a wider, slower weave (measured: parallel lanes arrive
+ * later with an outer band than with the crawl alone), so the crawl stands
+ * and separation only un-stacks the deadlock band.
  */
 export const SEPARATION_RADIUS = STOP_RADIUS;
 /**
@@ -816,23 +821,54 @@ export function predictDrivenPath(
  * along their pair axes (plus a perpendicular sidestep so head-on crossings
  * open a passing lane instead of backing up into each other), so mutually
  * stopped units (`spacingScale` 0 both ways) still exit the hold instead of
- * deadlocking. The radial shove runs at constant magnitude — deliberately
+ * deadlocking. The radial shove runs at constant magnitude - deliberately
  * not a distance falloff, which would approach the stop radius
- * asymptotically and stall the pair exactly on it. Computed from one
- * snapshot so the resolve is symmetric and deterministic (no
- * order-of-application bias), then gated by `stepBlocked` when terrain is
- * known — a push into water/steep ground degrades to axis slides, then to
- * holding, instead of clipping. Pure: returns new movers.
+ * asymptotically and stall the pair exactly on it - and there is
+ * deliberately no push beyond the radius: a slow-zone neighbour (crawling
+ * at `SLOW_SCALE`) is a convoy, not a collision, and shoving cruising hulls
+ * apart fights their homing drive into a wider, measurably slower weave.
+ * Ordered hulls additionally never take the radial half of a push that
+ * points back away from their goal (the sidestep circulation is always
+ * kept): a trailer following a leader sidesteps off the line instead of
+ * losing ground, so files and crossings move faster while arrival still
+ * closes. Computed from one snapshot so the resolve is symmetric and
+ * deterministic (no order-of-application bias), then gated by `stepBlocked`
+ * when terrain is known - a push into water/steep ground degrades to axis
+ * slides, then to holding, instead of clipping. Pure: returns new movers.
  */
 export function separationVector(
   self: number,
   positions: readonly { x: number; z: number }[],
   radius = SEPARATION_RADIUS,
 ): { x: number; z: number } {
+  const { radial, side } = separationComponents(self, positions, radius);
+  return { x: radial.x + side.x, z: radial.z + side.z };
+}
+
+/**
+ * The two halves of `separationVector`, kept separate so the resolve can
+ * treat them differently: the radial shove pushes hulls apart along the
+ * pair axis (this is what must never fight an ordered hull's goal), while
+ * the sidestep circulation breaks mirror symmetry so crossings and
+ * side-by-side pairs stagger past each other instead of backing up in
+ * lockstep. `coincident` flags a hull with no pair axis at all (sharing a
+ * point with another hull): its deterministic split heading is arbitrary,
+ * so the resolve keeps it whole instead of judging it against the goal.
+ */
+function separationComponents(
+  self: number,
+  positions: readonly { x: number; z: number }[],
+  radius: number,
+): {
+  radial: { x: number; z: number };
+  side: { x: number; z: number };
+  coincident: boolean;
+} {
+  const radial = { x: 0, z: 0 };
+  const side = { x: 0, z: 0 };
+  let coincident = false;
   const me = positions[self];
-  if (!me || !(radius > 0)) return { x: 0, z: 0 };
-  let px = 0;
-  let pz = 0;
+  if (!me || !(radius > 0)) return { radial, side, coincident };
   for (let i = 0; i < positions.length; i++) {
     if (i === self) continue;
     const other = positions[i];
@@ -850,17 +886,37 @@ export function separationVector(
       const inv = 1 / d;
       const rx = dx * inv;
       const rz = dz * inv;
-      px += rx - rz * SEPARATION_SIDESTEP;
-      pz += rz + rx * SEPARATION_SIDESTEP;
+      radial.x += rx;
+      radial.z += rz;
+      side.x += -rz * SEPARATION_SIDESTEP;
+      side.z += rx * SEPARATION_SIDESTEP;
     } else {
       // Coincident hulls have no pair axis: split along a deterministic
       // per-index heading (golden-angle hash) so the pair still opens.
+      coincident = true;
       const angle = (self * 2.39996322972865332) % (Math.PI * 2);
-      px += Math.sin(angle);
-      pz += Math.cos(angle);
+      radial.x += Math.sin(angle);
+      radial.z += Math.cos(angle);
     }
   }
-  return { x: px, z: pz };
+  return { radial, side, coincident };
+}
+
+/**
+ * Unit direction from a mover to its live order target (the cursor
+ * waypoint), or null when it has no order — or sits on the cursor, where no
+ * direction is meaningful. Used to keep separation from fighting player
+ * intent (see `resolveSeparation`).
+ */
+function orderGoalDir(mover: Mover): { x: number; z: number } | null {
+  const order = mover.order;
+  if (!order || order.at < 0 || order.at >= order.points.length) return null;
+  const target = order.points[order.at]!;
+  const dx = target.x - mover.x;
+  const dz = target.z - mover.z;
+  const d = Math.hypot(dx, dz);
+  if (!(d > 1e-6)) return null;
+  return { x: dx / d, z: dz / d };
 }
 
 function resolveSeparation(
@@ -869,14 +925,33 @@ function resolveSeparation(
   dt: number,
   terrain?: SeatField | null,
 ): Mover[] {
-  const pushes = movers.map((_, i) => separationVector(i, movers));
   const step = SEPARATION_SPEED * dt;
   const unstacked = movers.map((mover, i) => {
     const kind = kinds[i] ?? "flash";
-    const push = pushes[i] ?? { x: 0, z: 0 };
-    if (push.x === 0 && push.z === 0) return mover;
-    const nx = mover.x + push.x * step;
-    const nz = mover.z + push.z * step;
+    const { radial, side, coincident } = separationComponents(i, movers, SEPARATION_RADIUS);
+    let pushX = radial.x + side.x;
+    let pushZ = radial.z + side.z;
+    if (pushX === 0 && pushZ === 0) return mover;
+    // Ordered hulls keep the lane-opening shove but never the radial part
+    // that pushes them back away from their goal: a trailer following a
+    // leader still sidesteps off the line (the circulation half is always
+    // kept - it is what staggers pairs instead of letting them mirror in
+    // lockstep), it just never loses ground. Coincident splits are exempt:
+    // with no pair axis "away from the goal" is meaningless, so the
+    // deterministic split stays whole and drive still opens the pair.
+    // Arrival still closes, and the full-weight inner radial still opens
+    // ordered deadlocks.
+    const goal = coincident ? null : orderGoalDir(mover);
+    if (goal) {
+      const along = radial.x * goal.x + radial.z * goal.z;
+      if (along < 0) {
+        pushX -= along * goal.x;
+        pushZ -= along * goal.z;
+        if (pushX === 0 && pushZ === 0) return mover;
+      }
+    }
+    const nx = mover.x + pushX * step;
+    const nz = mover.z + pushZ * step;
     if (!terrain || !stepBlocked(terrain, mover.x, mover.z, nx, nz, kind)) {
       return { ...mover, x: nx, z: nz };
     }

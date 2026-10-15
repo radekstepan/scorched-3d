@@ -23,7 +23,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
 | `packages/core/src/units/place.ts` | Seeded roster placement on dry, gentle, separated ground, mustered as even Blue (west) / Orange (east) team halves on opposite map sides. |
-| `packages/core/src/units/movement.ts` | Patrol routes + forward-drive hull physics with steep-slope clamp/skip, lateral separation steering, and an ordered-hull spacing floor. |
+| `packages/core/src/units/movement.ts` | Patrol routes + forward-drive hull physics with steep-slope clamp/skip, goal-aware lateral separation steering (ordered hulls never shoved backwards), and an ordered-hull spacing floor. |
 | `packages/core/src/units/retaliation.ts` | Retaliation AI: per-hull threat memory (attacker + last-known position + countdown) with engage/disengage hysteresis, a patrol-anchor leash, and per-kind weapons-range stand-off; idle hulls pursue through the movement drive while ordered/holding hulls refuse. Hunt acquisition points idle hulls at nearby live enemies on a wider leash through the same pipeline. |
 | `packages/core/src/units/strategy.ts` | Strategic skirmish layer: health-weighted local odds (allies around me vs enemies around the threat) gating hunt acquisition and holding outnumbered pursuits in place for backup, squad-focus + wounded + threat + sticky target scoring for hunts and gun aims. |
 | `packages/core/src/units/terrain.ts` | Bilinear seating, hull pitch/roll, and step blocking for movers. |

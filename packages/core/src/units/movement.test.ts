@@ -479,6 +479,134 @@ describe("adjacent-unit deadlock", () => {
   });
 });
 
+describe("crowd separation", () => {
+  it("never shoves an ordered mover backwards off its goal", () => {
+    // Single file into the same destination with the drive held by stun, so
+    // only separation moves the trailer: the radial push away from the
+    // leader points opposite the goal and must be stripped, leaving just
+    // the sideways lane-opening. Without the strip the trailer would lose
+    // ground on this tick.
+    const kinds = ["flash", "flash"] as const;
+    const routes: RoutePoint[][] = [[], []];
+    const movers: Mover[] = [
+      orderMover({ x: 0, z: 20, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]),
+      stunMover(orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]), 0.16),
+    ];
+    const next = advanceMovers([...kinds], movers, routes, 1 / 60);
+    // No backward shove (z untouched), only the sidestep off the lane.
+    expect(next[1]!.z).toBe(0);
+    expect(Math.abs(next[1]!.x)).toBeGreaterThan(0);
+    // The leader's forward-aiding push is kept, never stripped.
+    expect(next[0]!.z).toBeGreaterThan(20);
+  });
+
+  it("moves single-file columns forward instead of grinding", () => {
+    // Trailer 20 behind the leader, same lane, same goal: the old full push
+    // shoved the trailer backwards at 22 u/s against its floor drive, so
+    // the column ground through the stop. Stripping the opposed radial half
+    // keeps every tick's progress while the kept sidestep still opens the
+    // lane (measured: trailer z at tick 60 goes 14.9 -> 20.6, lane offset
+    // 3.5 -> 7.5, arrival 1204 -> 1123 ticks).
+    const field = openField();
+    const kinds = ["flash", "flash"] as const;
+    let movers: Mover[] = [
+      orderMover({ x: 0, z: 20, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]),
+      orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]),
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    for (let n = 0; n < 60; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    expect(movers[1]!.z).toBeGreaterThan(18);
+    expect(Math.abs(movers[1]!.x)).toBeGreaterThan(5);
+    let arrivedAt = -1;
+    for (let n = 60; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      if (!hasOrder(movers[0]!) && !hasOrder(movers[1]!)) {
+        arrivedAt = n;
+        break;
+      }
+    }
+    expect(arrivedAt).toBeGreaterThanOrEqual(0);
+    expect(arrivedAt).toBeLessThan(1180);
+  });
+
+  it("passes head-on crossings through instead of backing both up", () => {
+    // Same lane, opposite goals: each radial shove opposes its owner's
+    // goal, so both strip to the counter-stepping sidestep and the pair
+    // drives through at floor speed (measured arrival 559 -> 521 ticks)
+    // instead of retreating from each other.
+    const field = openField();
+    const kinds = ["flash", "flash"] as const;
+    let movers: Mover[] = [
+      orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]),
+      orderMover({ x: 0, z: 200, hull: Math.PI, leg: 0 }, [{ x: 0, z: -200 }]),
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    let arrivedAt = -1;
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      if (!hasOrder(movers[0]!) && !hasOrder(movers[1]!)) {
+        arrivedAt = n;
+        break;
+      }
+    }
+    expect(arrivedAt).toBeGreaterThanOrEqual(0);
+    expect(arrivedAt).toBeLessThan(545);
+  });
+
+  it("un-stacks coincident orders without parking either hull", () => {
+    // Same point, same goal: the deterministic split opens the pair (kept
+    // whole - with no pair axis "away from the goal" is meaningless) and
+    // both still arrive (measured 1277 -> 1199 ticks).
+    const field = openField();
+    const kinds = ["flash", "flash"] as const;
+    let movers: Mover[] = [
+      orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]),
+      orderMover({ x: 0, z: 0, hull: Math.PI, leg: 0 }, [{ x: 0, z: 400 }]),
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    let arrivedAt = -1;
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      if (!hasOrder(movers[0]!) && !hasOrder(movers[1]!)) {
+        arrivedAt = n;
+        break;
+      }
+    }
+    expect(arrivedAt).toBeGreaterThanOrEqual(0);
+    expect(arrivedAt).toBeLessThan(1250);
+  });
+
+  it("slides separation along walls instead of clipping into them", () => {
+    // A held pair with one hull between its neighbour and a steep wall: the
+    // eastward shove is unwalkable, so it must degrade to sliding along the
+    // wall (or holding) — never entering it — while the pair still opens.
+    const field = walledField();
+    const kinds = ["flash", "flash"] as const;
+    let movers: Mover[] = [
+      { x: worldX(field, 14), z: 0, hull: 0, leg: 0, hold: true },
+      { x: worldX(field, 15), z: 0, hull: 0, leg: 0, hold: true },
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const dt = 1 / 60;
+    const wallX = worldX(field, 16);
+    for (let n = 0; n < 300; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      for (const m of movers) {
+        const { cellX, cellZ } = cellFromWorld(field, m.x, m.z);
+        expect(isWalkable(field, cellX, cellZ)).toBe(true);
+        expect(m.x).toBeLessThan(wallX);
+      }
+    }
+    const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
+    expect(gap).toBeGreaterThan(16);
+  });
+});
+
 /** Synthetic field: flat 100 plateau, steep 40/cell ramp wall east of x=16. */
 function walledField(): SeatField {
   const w = 40;
