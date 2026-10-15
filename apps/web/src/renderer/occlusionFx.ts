@@ -324,9 +324,9 @@ export class OcclusionFx {
 
   /**
    * Per-tick refresh: mirror each body pose into its silhouette ghost and
-   * show it exactly while occluded. Gone husks (fully decayed) show nothing;
-   * live units, damaged units, and present (smouldering/sinking) husks all
-   * ghost alike — wreck state never gates the signal, only full decay does.
+   * show it exactly while occluded. Dead units (destroyed, including
+   * present/smouldering husks) and fully-decayed husks show nothing.
+   * Only live units ghost, matching the health-bar policy.
    */
   update(
     cam: Vec3Like,
@@ -339,7 +339,8 @@ export class OcclusionFx {
       const ghost = this.ghosts[i]!;
       const body = bodies[i];
       const gone = health.isHuskGoneAt?.(i) ?? false;
-      if (!body || gone) {
+      const dead = health.isDestroyedAt(i);
+      if (!body || dead || gone) {
         ghost.visible = false;
         continue;
       }

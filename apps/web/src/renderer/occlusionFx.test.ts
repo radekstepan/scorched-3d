@@ -209,17 +209,22 @@ describe("OcclusionFx ghost policy", () => {
     }
   });
 
-  it("ghosts damaged and wrecked hulls alike, hiding only fully-gone husks", () => {
+  it("ghosts live units only, never dead ones behind obstructions", () => {
     const scene = new THREE.Scene();
     const fx = new OcclusionFx(scene, kinds);
     try {
       const list = bodies();
       const env = { groundY: ridge, stands: [] as TreeStand[] };
-      // Wreck (destroyed but present): still ghosts — the smouldering husk
-      // behind the ridge stays locatable.
+      // Alive behind the ridge: ghost on.
+      const alive = { isDestroyedAt: () => false, isHuskGoneAt: () => false };
+      fx.update(cam, list, env, alive);
+      expect(fx.isShown(0)).toBe(true);
+      expect(fx.isShown(1)).toBe(true);
+      // Destroyed but present (smouldering husk): no blue outline.
       const wreck = { isDestroyedAt: () => true, isHuskGoneAt: () => false };
       fx.update(cam, list, env, wreck);
-      expect(fx.isShown(0)).toBe(true);
+      expect(fx.isShown(0)).toBe(false);
+      expect(fx.isShown(1)).toBe(false);
       // Fully decayed husk: nothing left to outline.
       const gone = { isDestroyedAt: () => true, isHuskGoneAt: () => true };
       fx.update(cam, list, env, gone);
