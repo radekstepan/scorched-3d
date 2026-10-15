@@ -8,6 +8,7 @@ import {
 } from "@scorched-3d/core";
 import {
   applyUnitDamageTint,
+  applyWreckChar,
   baseColorOf,
   CHAR_MAX_MIX,
   CHAR_TARGET,
@@ -23,6 +24,7 @@ import {
   puffDuty,
   puffPhase,
   UnitDamageFx,
+  wreckCharredColor,
 } from "./unitDamageFx";
 import { buildUnits } from "./units";
 
@@ -154,6 +156,65 @@ describe("applyUnitDamageTint", () => {
     body.add(marker);
     applyUnitDamageTint(body, 1);
     expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0x22d3ee);
+  });
+});
+
+describe("applyWreckChar", () => {
+  it("pushes fully-charred hulls past the readable cap toward near-black", () => {
+    for (const base of [UNIT_DEFS.stump.color, UNIT_DEFS.flash.color, UNIT_DEFS.commander.color]) {
+      const live = charredColor(base, 1);
+      const wreck = wreckCharredColor(base);
+      expect(wreck).not.toBe(live);
+      expect(lum(wreck)).toBeLessThan(lum(live));
+      expect(lum(wreck)).toBeLessThan(0.03);
+      // Pure: same base always gives the same wreck color.
+      expect(wreckCharredColor(base)).toBe(wreck);
+    }
+  });
+
+  it("chars a killed body past the live cap, stably and idempotently", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[0] as THREE.Group; // stump
+    applyUnitDamageTint(body, 1);
+    const pinned = lambertHexes(body);
+    for (const hex of pinned) expect(lum(hex)).toBeGreaterThan(0.03);
+    applyWreckChar(body);
+    expect(body.userData.wreckCharred).toBe(true);
+    const wrecked = lambertHexes(body);
+    expect(wrecked).not.toEqual(pinned);
+    // Every hull mesh reads exactly its base-derived wreck color.
+    const bases: number[] = [];
+    body.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
+      if (mat && "emissive" in mat && typeof mesh.userData.baseColor === "number") {
+        bases.push(mesh.userData.baseColor as number);
+        expect((mat.color as THREE.Color).getHex()).toBe(
+          wreckCharredColor(mesh.userData.baseColor as number),
+        );
+      }
+    });
+    expect(bases.length).toBeGreaterThan(0);
+    // Re-applying (including after a post-death barrage re-tint) is stable.
+    applyUnitDamageTint(body, 1);
+    applyWreckChar(body);
+    expect(lambertHexes(body)).toEqual(wrecked);
+  });
+
+  it("is a no-op on plain groups and skips noHighlight meshes", () => {
+    const bare = new THREE.Group();
+    expect(() => applyWreckChar(bare)).not.toThrow();
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[0] as THREE.Group;
+    const plate = new THREE.Mesh(
+      new THREE.BoxGeometry(2, 2, 2),
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+    );
+    plate.userData.noHighlight = true;
+    body.add(plate);
+    applyWreckChar(body);
+    expect((plate.material as THREE.MeshLambertMaterial).color.getHex()).toBe(0xffffff);
+    expect(typeof plate.userData.baseColor).toBe("undefined");
   });
 });
 

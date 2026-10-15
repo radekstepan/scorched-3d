@@ -32,7 +32,10 @@ export { UNIT_HEAVY_DAMAGE, UNIT_SMOKE_DAMAGE };
 export const CHAR_TARGET = 0x4a3a2c;
 /** Cap on the effective char lerp: hulls keep their hue, never go near-black. */
 export const CHAR_MAX_MIX = 0.45;
-/** Hull height the smoke puff rises across one emission window, world units. */
+/** Wreck-char target: exploded husks go past the readable cap, near-black. */
+export const WRECK_CHAR_TARGET = 0x14100b;
+/** Lerp of the fully-charred hull color toward the wreck target. */
+export const WRECK_CHAR_MIX = 0.9;/** Hull height the smoke puff rises across one emission window, world units. */
 export const UNIT_SMOKE_RISE = 32;
 /** Perf cap: one smoke puff per hull is plenty (rosters are small). */
 export const MAX_UNIT_SMOKE = 32;
@@ -63,6 +66,19 @@ export function charredColor(baseHex: number, damage: number): number {
   if (k <= 0) return baseHex;
   _base.setHex(baseHex);
   _out.copy(_base).lerp(_char, k);
+  return _out.getHex();
+}
+
+const _wreckTarget = new THREE.Color(WRECK_CHAR_TARGET);
+
+/**
+ * Exploded-husk color for a base hull color: the fully-charred live color
+ * pushed past the readable cap toward near-black. Pure for tests — the husk
+ * reads as burnt-out wreckage, never as a merely battered hull.
+ */
+export function wreckCharredColor(baseHex: number): number {
+  _base.setHex(charredColor(baseHex, 1));
+  _out.copy(_base).lerp(_wreckTarget, WRECK_CHAR_MIX);
   return _out.getHex();
 }
 
@@ -136,6 +152,32 @@ export function baseColorOf(body: THREE.Object3D): number | null {
     if (typeof mesh.userData.baseColor === "number") found = mesh.userData.baseColor;
   });
   return found;
+}
+
+/**
+ * Deepen a killed body to exploded-husk char: every Lambert hull mesh goes
+ * from its stashed base color straight to `wreckCharredColor` (past the
+ * readable cap live hulls keep, toward near-black). Selection markers and
+ * wreck-dressing meshes (`userData.noHighlight`) are never touched.
+ * Idempotent and stable under re-application — including after a post-death
+ * barrage re-tints the body through the capped live char — because the wreck
+ * color derives purely from the stashed base. Headless-test groups without
+ * meshes are a no-op.
+ */
+export function applyWreckChar(body: THREE.Object3D): void {
+  body.userData.wreckCharred = true;
+  body.traverse((child) => {
+    if (child.userData.noHighlight) return;
+    const mesh = child as THREE.Mesh;
+    const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
+    if (!mat || !("emissive" in mat) || !("color" in mat)) return;
+    if (typeof mesh.userData.baseColor !== "number") {
+      mesh.userData.baseColor = (mat.color as THREE.Color).getHex();
+    }
+    (mat.color as THREE.Color).setHex(
+      wreckCharredColor(mesh.userData.baseColor as number),
+    );
+  });
 }
 
 export class UnitDamageFx {

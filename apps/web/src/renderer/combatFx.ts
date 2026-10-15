@@ -50,8 +50,8 @@ import {
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
-import { muzzleWorld, setBarrelElevation, setUnitAim } from "./units";
-import { applyUnitDamageTint, UnitDamageFx } from "./unitDamageFx";
+import { muzzleWorld, getTurret, setBarrelElevation, setUnitAim } from "./units";
+import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 
 /**
@@ -91,7 +91,10 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
  *   accumulating damage (charring hull tint, damage smoke, heavy-hit
  *   embers — hulls are rocked by every splash (decaying directional shove + tilt, plus a brief drive hesitation while the rock plays); a hull that exhausts its
- *   health dies once, epicly, and lingers as a smouldering husk that slowly sinks, gutters out, and vanishes).
+ *   health dies once, epicly, and leaves an exploded husk — tanks pop their
+ *   turret clear and keep a breached ring, the walker slumps its torso, all
+ *   charred past the live cap — that smoulders, slowly sinks, gutters out,
+ *   and vanishes).
  */
 
 interface Shot {
@@ -176,6 +179,31 @@ interface Nudge {
   appliedRoll: number;
 }
 
+/**
+ * Popped tank turret in flight: the actual detached turret subgroup (charred
+ * with the wreck, barrel and all), thrown on `wreckPopVelocity(index)` and
+ * integrated analytically under core `GRAVITY` — renderer-side, like the
+ * impact rock: movers never see it. It tumbles in flight, lands on the live
+ * surface, and rests there as charred litter until its husk finishes decaying
+ * (`poseHusks` hides it with the body; the roster slot is retained).
+ */
+interface TurretDebris {
+  /** The detached turret group, reparented to the scene. */
+  group: THREE.Group;
+  /** Analytic flight origin (turret world position at the kill). */
+  start: THREE.Vector3;
+  /** Launch velocity (see `wreckPopVelocity`). */
+  vel: THREE.Vector3;
+  /** Seconds since the kill (drives the analytic arc + tumble). */
+  age: number;
+  /** Tumble direction (+1 / -1, golden-hash stepped). */
+  spin: number;
+  /** Takeoff pitch (turret aim pose at the kill, kept through the flight). */
+  pitch0: number;
+  /** True once the chunk has landed (pose frozen, waits out the husk). */
+  landed: boolean;
+}
+
 /** Attacker recoil: straight-back kick, world units at full envelope. */
 const RECOIL_KICK = 5;
 /** Attacker recoil envelope, seconds (snappy kick, faster than hit rock). */
@@ -193,6 +221,66 @@ const EPIC_SMOKE_PUFFS = 6;
 const EPIC_SPARKS = 80;
 const EPIC_RADIUS_SCALE = 1.6;
 const EPIC_LIGHT_PEAK = 5200;
+
+/**
+ * Exploded wreck dressing. Tanks lose the turret (it pops off ballistically,
+ * see `wreckPopVelocity` + `TurretDebris`) and keep a breached turret ring;
+ * the commander keeps its torso, slumped forward. All deterministic functions
+ * of the roster index (golden-angle phasing, no rng) so replays match.
+ */
+/** Upward kick of a popped turret, world units/s (retail turret-pop read). */
+const WRECK_POP_UP = 150;
+/** Horizontal throw of a popped turret, world units/s. */
+const WRECK_POP_OUT = 95;
+/** Turret tumble rate in flight, rad/s (frozen on landing). */
+const WRECK_TUMBLE = 5.2;
+/** Rest height of landed turret litter above the ground, world units. */
+const WRECK_DEBRIS_REST = 2;
+/** Breached turret-ring seat height per kind (matches the build poses). */
+const WRECK_BREACH_Y: Record<UnitKind, number> = {
+  flash: 7,
+  stump: 9,
+  hammer: 9,
+  commander: 0,
+};
+/** Breached turret-ring collar radius per kind (tank turret widths). */
+const WRECK_BREACH_R: Record<UnitKind, number> = {
+  flash: 4.5,
+  stump: 6.5,
+  hammer: 5.5,
+  commander: 0,
+};
+/** Breach collar fore/aft seat per kind (turret box centers). */
+const WRECK_BREACH_Z: Record<UnitKind, number> = {
+  flash: -1,
+  stump: -2,
+  hammer: -2,
+  commander: 0,
+};
+
+/** Fractional hash 0..1 of a roster index (golden-ratio phasing, no rng). */
+function wreckHash(index: number): number {
+  return (((index * 0.61803398875) % 1) + 1) % 1;
+}
+
+/**
+ * Popped-turret launch velocity for wreck `index`: up and outward on a
+ * golden-angle bearing, stepped by index so neighbouring kills throw in
+ * visibly different directions. Pure for tests. The flight integrates under
+ * core `GRAVITY` through `ballisticPosition`, so headless tests can pin the
+ * arc exactly and replays match frame for frame.
+ */
+export function wreckPopVelocity(index: number): { x: number; y: number; z: number } {
+  const h = wreckHash(index);
+  const bearing = h * Math.PI * 2 + Math.PI / 4;
+  const out = WRECK_POP_OUT + (index % 3) * 25;
+  return {
+    x: Math.sin(bearing) * out,
+    y: WRECK_POP_UP + (index % 2) * 35,
+    z: Math.cos(bearing) * out,
+  };
+}
+
 /** Muzzle + impact flashes share one bounded pool (cores + halos). */
 const MAX_FLASHES = 24;
 /** Muzzle halo: large faint shell around the hot core. */
@@ -297,8 +385,7 @@ export class CombatFx {
   private ringGeo = new THREE.RingGeometry(1, 1.32, 40);
   private glowGeo = new THREE.CircleGeometry(1, 24);
   /** Persistent scorch decals: one shared instanced textured disc, capped in core. */
-  private scorchGeo = new THREE.CircleGeometry(1, 28);
-  private scorchMat = new THREE.MeshBasicMaterial({
+  private scorchGeo = new THREE.CircleGeometry(1, 28);  private scorchMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
     map: getScorchTexture(),
     transparent: true,
@@ -311,6 +398,14 @@ export class CombatFx {
   private scorchMarks: ScorchMark[] = [];
   private scorchDummy = new THREE.Object3D();
   private scorchTint = new THREE.Color();
+  /**
+   * Shared exploded-wreck dressing: one breached-ring geometry + one
+   * near-black char material for every tank collar (per-wreck meshes share
+   * both; only instance transforms differ). Owned by the fx, disposed with
+   * it; wreck bodies are reverted (collars removed) on dispose.
+   */
+  private wreckCollarGeo = new THREE.CylinderGeometry(1, 1.15, 0.5, 12);
+  private wreckCollarMat = new THREE.MeshLambertMaterial({ color: 0x14100b });
   /** Per-unit accumulated damage 0..1 (core state; char/smoke are views). */
   private damage: number[] = [];
   /**
@@ -329,6 +424,19 @@ export class CombatFx {
   private killedAt: (number | null)[] = [];
   /** Units killed so far (wrecks persist in the roster buffers). */
   private deathCount = 0;
+  /**
+   * Wreck-dressing flags per unit (persistent like the kill flags): the
+   * exploded-husk transform (turret pop / torso slump, breach collar,
+   * deepened char) applies exactly once per kill, lazily if needed — see
+   * `poseWreck` / `poseHusks`.
+   */
+  private wreckPosed: boolean[] = [];
+  /**
+   * Popped-turret debris per unit (tanks only; null otherwise), sized with
+   * `damage` and persistent like the kill clock — `clearTransients` never
+   * touches it, dispose drops it from the scene.
+   */
+  private debris: (TurretDebris | null)[] = [];
   /**
    * Fired once per kill with the wreck index so the canvas can hold the
    * mover, drop targeting/selection, and dim the minimap dot. Assigned by
@@ -470,6 +578,31 @@ export class CombatFx {
     return gone;
   }
 
+  /** True once the unit's exploded-husk transform has applied (turret popped or torso slumped). */
+  isWreckPosedAt(index: number): boolean {
+    return this.wreckPosed[index] ?? false;
+  }
+
+  /** Live popped-turret debris count (tanks only, hidden husks excluded). */
+  get debrisCount(): number {
+    let n = 0;
+    for (const d of this.debris) {
+      if (d && d.group.visible) n++;
+    }
+    return n;
+  }
+
+  /**
+   * World position of a unit's popped turret (null while attached, for
+   * non-tank wrecks, or once hidden with its husk). For tests.
+   */
+  debrisAt(index: number): { x: number; y: number; z: number } | null {
+    const d = this.debris[index];
+    if (!d || !d.group.visible) return null;
+    const p = d.group.position;
+    return { x: p.x, y: p.y, z: p.z };
+  }
+
   /** Live (targetable, drivable) unit count: roster minus wrecks. */
   get aliveCount(): number {
     let alive = 0;
@@ -549,6 +682,7 @@ export class CombatFx {
     this.advanceFlashes(dt);
     this.advanceExplosions(dt);
     this.advanceNudges(dt);
+    this.advanceDebris(dt);
     // Husks decay after every other pose (movement re-seats bodies and recoil
     // restores them above, so the sink must win last); smoke/embers ride the
     // sunk hulls and gutter out through the same decay fractions.
@@ -556,7 +690,11 @@ export class CombatFx {
     this.damageFx.update(this.damage, this.units.children, this.elapsed, husk);
   }
 
-  /** Drop in-flight shots, flashes, and explosions (e.g. on exaggeration re-snap). */
+  /**
+   * Drop in-flight shots, flashes, and explosions (e.g. on exaggeration
+   * re-snap). Kill flags, the kill clock, wreck dressing, and turret debris
+   * persist like scorch — a clear never resurrects or re-dresses a husk.
+   */
   clearTransients(): void {
     for (const shot of this.shots) {
       this.scene.remove(shot.mesh);
@@ -597,6 +735,16 @@ export class CombatFx {
     if (this.disposed) return;
     this.disposed = true;
     this.clearTransients();
+    // Wreck dressing reverts with the fx: collars leave their bodies and
+    // popped turrets leave the scene (their geometries belong to the body
+    // build, owned by the canvas/regen — only shared fx assets dispose here).
+    for (let i = 0; i < this.units.children.length; i++) {
+      const body = this.units.children[i] as THREE.Group | undefined;
+      if (body) this.stripWreckDressing(body);
+      const d = this.debris[i];
+      if (d) this.scene.remove(d.group);
+      this.debris[i] = null;
+    }
     this.scene.remove(this.scorchMesh);
     this.scorchMarks = [];
     this.damageFx.dispose();
@@ -612,6 +760,8 @@ export class CombatFx {
     this.glowGeo.dispose();
     this.scorchGeo.dispose();
     this.scorchMat.dispose();
+    this.wreckCollarGeo.dispose();
+    this.wreckCollarMat.dispose();
     disposeScorchTexture();
   }
 
@@ -633,6 +783,10 @@ export class CombatFx {
     if (this.destroyed.length > count) this.destroyed.length = count;
     while (this.killedAt.length < count) this.killedAt.push(null);
     if (this.killedAt.length > count) this.killedAt.length = count;
+    while (this.wreckPosed.length < count) this.wreckPosed.push(false);
+    if (this.wreckPosed.length > count) this.wreckPosed.length = count;
+    while (this.debris.length < count) this.debris.push(null);
+    if (this.debris.length > count) this.debris.length = count;
   }
 
   /**
@@ -667,8 +821,7 @@ export class CombatFx {
     for (const i of touched) {
       const body = bodies[i];
       if (body) applyUnitDamageTint(body, this.damage[i]!);
-      const added = this.damage[i]! - before[i]!;
-      if (body && added > 0 && !this.destroyed[i]) {
+      const added = this.damage[i]! - before[i]!;      if (body && added > 0 && !this.destroyed[i]) {
         this.kickImpact(i, body, at, added);
       }
       if (!this.destroyed[i] && !isDestroyed(before[i]!) && isDestroyed(this.damage[i]!)) {
@@ -679,6 +832,10 @@ export class CombatFx {
         if (wreck) {
           this.settleNudge(i, wreck);
           this.explodeDeath(new THREE.Vector3(wreck.position.x, wreck.position.y, wreck.position.z));
+          // Exploded husk, not a charred twin: pop/slump the wreck in place
+          // (after the nudge settles, so the burst and the husk share the
+          // same seated hull).
+          this.poseWreck(i, wreck);
         }
         this.onUnitKilled?.(i);
       }
@@ -688,6 +845,9 @@ export class CombatFx {
       if (added > 0 && !this.destroyed[i]) {
         this.onUnitStunned?.(i, added);
       }
+      // Post-death barrages re-tint the wreck through the capped live char —
+      // keep the deepened husk char on top (idempotent).
+      if (this.destroyed[i] && body) applyWreckChar(body);
     }
   }
 
@@ -740,6 +900,139 @@ export class CombatFx {
     body.rotation.z -= nudge.appliedRoll;
     this.nudges.delete(index);
   }
+
+  /**
+   * Explode a killed hull into its husk — once per wreck, idempotent.
+   * Children-only surgery, so the movement seat (body origin + hull yaw +
+   * grade tilt, re-posed every tick) and the husk sink (absolute Y offset in
+   * `poseHusks`) both keep working over it, and wrecks still never rock,
+   * stun, tremble, or drive:
+   *
+   * - Tanks (`flash`/`stump`/`hammer`): the turret subgroup detaches into a
+   *   ballistic `TurretDebris` chunk (charred, barrel and all), a breached
+   *   turret-ring collar stays on the hull, and the hull boxes settle with a
+   *   small deterministic slump. The husk reads as a headless breached hull.
+   * - Commander (walker): the torso stays aboard but slumps — pitched
+   *   forward, dropped, yawed askew — with splayed legs (rotation.z only;
+   *   locomotion owns rotation.x/position.y even for wrecks, settling gait
+   *   to neutral on zero travel).
+   * - Every wreck takes the deepened wreck char (`applyWreckChar`), past the
+   *   readable cap live hulls keep.
+   *
+   * Picking is unaffected (the canvas raycasts `units.children` only, and
+   * scene-level debris never intercepts); the occlusion ghost rebuilds from
+   * the changed hierarchy, so a turret-less husk ghosts turret-less while it
+   * smoulders and hides entirely once gone.
+   */
+  private poseWreck(index: number, body: THREE.Group): void {
+    if (this.wreckPosed[index]) return;
+    this.wreckPosed[index] = true;
+    const kind = this.unitKind(index);
+    applyUnitDamageTint(body, 1);
+    applyWreckChar(body);
+    if (!kind) return;
+    const h = wreckHash(index);
+    if (kind === "commander") {
+      const torso = getTurret(body);
+      if (torso) {
+        torso.rotation.x += 0.5;
+        torso.rotation.z += 0.3;
+        torso.rotation.y += 0.6;
+        torso.position.y -= 4;
+      }
+      const legs = body.children.filter(
+        (c): c is THREE.Mesh => c.type === "Mesh" && c.name === "leg",
+      );
+      legs.forEach((leg, li) => {
+        leg.rotation.z += (li === 0 ? 1 : -1) * (0.22 + h * 0.12);
+      });
+      return;
+    }
+    // Tanks: pop the turret, breach the ring, settle the hull boxes.
+    const turret = getTurret(body);
+    if (turret) {
+      body.updateMatrixWorld(true);
+      const start = new THREE.Vector3();
+      turret.getWorldPosition(start);
+      const pitch0 = turret.rotation.x;
+      body.remove(turret);
+      body.userData.turret = undefined;
+      this.scene.add(turret);
+      turret.position.copy(start);
+      const vel = wreckPopVelocity(index);
+      this.debris[index] = {
+        group: turret,
+        start: start.clone(),
+        vel: new THREE.Vector3(vel.x, vel.y, vel.z),
+        age: 0,
+        spin: h < 0.5 ? 1 : -1,
+        pitch0,
+        landed: false,
+      };
+      const collar = new THREE.Mesh(this.wreckCollarGeo, this.wreckCollarMat);
+      collar.name = "wreck-collar";
+      collar.userData.noHighlight = true;
+      collar.userData.wreckDressing = true;
+      collar.scale.set(WRECK_BREACH_R[kind] ?? 5, 1, WRECK_BREACH_R[kind] ?? 5);
+      collar.position.set(0, WRECK_BREACH_Y[kind] ?? 8, WRECK_BREACH_Z[kind] ?? -1);
+      body.add(collar);
+    }
+    for (const child of body.children) {
+      if (child.type !== "Mesh" || child.name !== "" || child.userData.wreckDressing) continue;
+      const mesh = child as THREE.Mesh;
+      mesh.rotation.z += (h - 0.5) * 0.14;
+      mesh.rotation.x += (wreckHash(index + 7) - 0.5) * 0.1;
+      mesh.position.y -= 1;
+    }
+  }
+
+  /**
+   * Remove wreck dressing from a body (dispose path): breach collars leave,
+   * hull/leg/torso slumps stay (bodies are dropped wholesale on regen).
+   */
+  private stripWreckDressing(body: THREE.Group): void {
+    for (let i = body.children.length - 1; i >= 0; i--) {
+      const child = body.children[i]!;
+      if (child.userData.wreckDressing) body.remove(child);
+    }
+  }
+
+  /**
+   * Fly every popped turret one step: analytic ballistic arc under core
+   * `GRAVITY` (frame-rate independent — the same kill replays the same arc
+   * for any dt sequence), tumbling in flight, then resting tilted on the
+   * live surface once the arc reaches it. Husk-gone debris hides with its
+   * husk in `poseHusks`; mid-flight `clearTransients` never touches it.
+   */
+  private advanceDebris(dt: number): void {
+    for (let i = 0; i < this.debris.length; i++) {
+      const d = this.debris[i];
+      if (!d || d.landed) continue;
+      d.age += dt;
+      const p = ballisticPosition(
+        { x: d.start.x, y: d.start.y, z: d.start.z },
+        { x: d.vel.x, y: d.vel.y, z: d.vel.z },
+        d.age,
+        GRAVITY,
+      );
+      const ground = this.env ? this.env.groundY(p.x, p.z) : d.start.y - 12;
+      const rest = ground + WRECK_DEBRIS_REST;
+      if (p.y <= rest) {
+        d.landed = true;
+        d.group.position.set(p.x, rest, p.z);
+        // Rest on its side where it fell: frozen tumble + a deterministic
+        // lie, so the litter reads as thrown wreckage, not a parked turret.
+        d.group.rotation.set(
+          d.pitch0 + d.spin * WRECK_TUMBLE * d.age,
+          d.group.rotation.y,
+          d.spin * 1.25,
+        );
+        continue;
+      }
+      d.group.position.set(p.x, p.y, p.z);
+      d.group.rotation.x = d.pitch0 + d.spin * WRECK_TUMBLE * d.age;
+    }
+  }
   /**
    * Sink and retire husks: every wreck lowers by the core sink for its decay
    * fraction (absolute offset — movement re-seats the body from the frozen
@@ -760,11 +1053,19 @@ export class CombatFx {
       decay[i] = d;
       const body = bodies[i] as THREE.Group | undefined;
       if (!body) continue;
-      if (d >= 1) {
+      // Belt-and-braces: white-box kills that bypass the splash still dress
+      // their husk (turret pop included) on the first decay tick.
+      if (!this.wreckPosed[i]) this.poseWreck(i, body);
+      const gone = d >= 1;
+      if (gone) {
         body.visible = false;
       } else {
         body.position.y -= huskSink(d);
       }
+      // Popped-turret litter rests beside the wreck (it never sinks) and
+      // hides with the husk once fully decayed.
+      const debris = this.debris[i];
+      if (debris) debris.group.visible = !gone;
     }
     return decay;
   }

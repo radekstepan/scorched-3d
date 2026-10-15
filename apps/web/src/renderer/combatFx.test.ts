@@ -4,13 +4,16 @@ import {
   HUSK_DECAY_DURATION,
   HUSK_SMOKE_END,
   MAX_SCORCH_MARKS,
+  ballisticPosition,
+  GRAVITY,
   mulberry32,
   TURRET_LIMIT,
   type TNTMap,
   type UnitKind,
 } from "@scorched-3d/core";
-import { CombatFx, impactPoint, muzzlePoint } from "./combatFx";
+import { CombatFx, impactPoint, muzzlePoint, wreckPopVelocity } from "./combatFx";
 import { barrelElevation, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
+import { wreckCharredColor } from "./unitDamageFx";
 
 function makeUnits(): THREE.Group {
   const group = new THREE.Group();
@@ -1021,7 +1024,261 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
   });
 });
 
-describe("CombatFx slope-aware blasts (gradient wash)", () => {  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
+describe("CombatFx exploded husks", () => {
+  function primeDamage(fx: CombatFx, index: number, value: number): void {
+    (fx as unknown as { damage: number[] }).damage[index] = value;
+  }
+
+  function stepUntilKill(fx: CombatFx, maxSteps = 4000): void {
+    for (let n = 0; n < maxSteps && fx.killCount === 0; n++) fx.update(1 / 60);
+    expect(fx.killCount).toBeGreaterThan(0);
+  }
+
+  /** Commander (walker, with legs) plus a flash target so the pair can fight. */
+  function makeWalkerPair(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "commander", cellX: 1, cellZ: 1, rotation: 0 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: Math.PI },
+    ];
+    const walker = new THREE.Group();
+    walker.position.set(0, 100, 0);
+    const torso = new THREE.Group();
+    torso.name = "turret";
+    walker.add(torso);
+    walker.userData.turret = torso;
+    for (const x of [-4, 4]) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(5, 14, 6), new THREE.MeshLambertMaterial({ color: 0x2f6db3 }));
+      leg.name = "leg";
+      leg.position.set(x, 14, 0);
+      walker.add(leg);
+    }
+    const flash = new THREE.Group();
+    flash.position.set(500, 100, 300);
+    flash.rotation.y = Math.PI;
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    flash.add(turret);
+    flash.userData.turret = turret;
+    group.add(walker, flash);
+    return group;
+  }
+
+  function wreckMeshColors(body: THREE.Group): { base: number; hex: number }[] {
+    const out: { base: number; hex: number }[] = [];
+    body.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
+      if (mat && "emissive" in mat && typeof mesh.userData.baseColor === "number") {
+        out.push({
+          base: mesh.userData.baseColor as number,
+          hex: (mat.color as THREE.Color).getHex(),
+        });
+      }
+    });
+    return out;
+  }
+
+  it("pops a tank turret into ballistic debris and breaches the hull", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    expect(fx.isWreckPosedAt(0)).toBe(false);
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.isWreckPosedAt(0)).toBe(true);
+    const body = units.children[0] as THREE.Group;
+    // The turret left the hull: no turret aboard, breach collar in its ring.
+    expect(getTurret(body)).toBeNull();
+    const collar = body.getObjectByName("wreck-collar");
+    expect(collar).toBeDefined();
+    // The popped turret flies as scene-level debris (never a picking target:
+    // the canvas raycasts units.children only).
+    expect(fx.debrisCount).toBe(1);
+    const at = fx.debrisAt(0)!;
+    expect(at).toBeDefined();
+    const internals = fx as unknown as { debris: ({ group: THREE.Group } | null)[] };
+    expect(scene.children).toContain(internals.debris[0]!.group);
+    fx.dispose();
+  });
+
+  it("flies the popped turret on the analytic arc, then lands and rests", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    // Turret world position at the kill == the seated body origin here
+    // (turret local origin), so the whole flight is pinned analytically.
+    const start = { x: 0, y: 100, z: 0 };
+    const vel = wreckPopVelocity(0);
+    expect(vel.y).toBeGreaterThan(0);
+    // Mid-flight (0.5 s of debris age): still airborne, on the arc exactly.
+    // The kill lands mid-tick, so age the debris off its live clock instead
+    // of counting ticks: advance to ~0.5 s and compare against the same age.
+    for (let n = 0; n < 30; n++) fx.update(1 / 60);
+    const mid = fx.debrisAt(0)!;
+    const internals = fx as unknown as { debris: { age: number }[] };
+    const age = internals.debris[0]!.age;
+    expect(age).toBeCloseTo(0.5, 1);
+    const expected = ballisticPosition(start, vel, age, GRAVITY);
+    expect(mid.x).toBeCloseTo(expected.x, 6);
+    expect(mid.y).toBeCloseTo(expected.y, 6);
+    expect(mid.z).toBeCloseTo(expected.z, 6);
+    expect(mid.y).toBeGreaterThan(start.y);
+    // After the fall it rests on the ground and never moves again.
+    for (let n = 0; n < 360; n++) fx.update(1 / 60);
+    const landed = fx.debrisAt(0)!;
+    expect(landed.y).toBeCloseTo(start.y - 12 + 2, 6);
+    fx.update(1 / 60);
+    expect(fx.debrisAt(0)).toEqual(landed);
+    fx.dispose();
+  });
+
+  it("throws neighbouring kills on different bearings, deterministically", () => {
+    const first = wreckPopVelocity(0);
+    const second = wreckPopVelocity(1);
+    expect([first, second].map((v) => Math.atan2(v.x, v.z))).not.toEqual([
+      Math.atan2(first.x, first.z),
+      Math.atan2(first.x, first.z),
+    ]);
+    // Same index, same throw — every run.
+    expect(wreckPopVelocity(3)).toEqual(wreckPopVelocity(3));
+    // End to end: two identical runs land the turret on the same spot.
+    const run = (): { x: number; y: number; z: number } => {
+      const scene = new THREE.Scene();
+      const units = makeUnits();
+      const fx = new CombatFx(scene, units, mulberry32(21));
+      (fx as unknown as { damage: number[] }).damage[0] = 0.99;
+      for (let n = 0; n < 4000 && fx.killCount === 0; n++) fx.update(1 / 60);
+      for (let n = 0; n < 240; n++) fx.update(1 / 60);
+      const at = fx.debrisAt(0)!;
+      fx.dispose();
+      return at;
+    };
+    expect(run()).toEqual(run());
+  });
+
+  it("slumps a commander in place: torso stays aboard, legs splay, no debris", () => {
+    const scene = new THREE.Scene();
+    const units = makeWalkerPair();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.isWreckPosedAt(0)).toBe(true);
+    const body = units.children[0] as THREE.Group;
+    // Torso stays aboard but slumped: pitched, dropped, yawed askew.
+    const torso = getTurret(body);
+    expect(torso).not.toBeNull();
+    expect(torso!.rotation.x).toBeCloseTo(0.5, 9);
+    expect(torso!.position.y).toBeCloseTo(-4, 9);
+    const legs = body.children.filter((c) => c.name === "leg");
+    expect(legs.length).toBe(2);
+    expect((legs[0] as THREE.Group).rotation.z).toBeGreaterThan(0.15);
+    expect((legs[1] as THREE.Group).rotation.z).toBeLessThan(-0.15);
+    // Walkers never pop: no debris, no breach collar.
+    expect(fx.debrisCount).toBe(0);
+    expect(fx.debrisAt(0)).toBeNull();
+    expect(body.getObjectByName("wreck-collar")).toBeUndefined();
+    fx.dispose();
+  });
+
+  it("chars built wrecks past the live cap and keeps it through later barrages", () => {
+    const width = 32;
+    const height = 32;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "stump", cellX: 8, cellZ: 8, rotation: 0 },
+        { kind: "hammer", cellX: 20, cellZ: 20, rotation: 0 },
+        { kind: "flash", cellX: 12, cellZ: 20, rotation: 0 },
+      ],
+    } as unknown as TNTMap;
+    const scene = new THREE.Scene();
+    const units = buildUnits(map, 1);
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    const body = units.children[0] as THREE.Group;
+    const colors = wreckMeshColors(body);
+    expect(colors.length).toBeGreaterThan(0);
+    // Every hull mesh (including the popped turret's, charred pre-detach)
+    // reads exactly its base-derived wreck color.
+    for (const { base, hex } of colors) {
+      expect(hex).toBe(wreckCharredColor(base));
+    }
+    // Hull boxes settled with a slump; the turret left with its barrel.
+    expect(getTurret(body)).toBeNull();
+    // Post-death barrages re-tint through the capped live char — the deep
+    // husk char stays on top, and the dressing never re-applies.
+    const collars = body.children.filter((c) => c.name === "wreck-collar").length;
+    for (let n = 0; n < 2000; n++) fx.update(1 / 60);
+    expect(fx.isWreckPosedAt(0)).toBe(true);
+    expect(body.children.filter((c) => c.name === "wreck-collar").length).toBe(collars);
+    for (const { base, hex } of wreckMeshColors(body)) {
+      expect(hex).toBe(wreckCharredColor(base));
+    }
+    fx.dispose();
+  });
+
+  it("holds the wreck body still while debris flies, then hides both when gone", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    const body = units.children[0] as THREE.Group;
+    const x = body.position.x;
+    const z = body.position.z;
+    // Debris flight + decay never rock the husk: no nudge, X/Z pinned.
+    // (The skirmish keeps running — other hulls may die in the window, so
+    // all debris assertions below are index-scoped to this wreck.)
+    for (let n = 0; n < 180; n++) {
+      fx.update(1 / 60);
+      expect(body.position.x).toBeCloseTo(x, 9);
+      expect(body.position.z).toBeCloseTo(z, 9);
+      const kick = fx.impactAt(0);
+      expect(kick).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    }
+    expect(fx.debrisAt(0)).not.toBeNull();
+    // Fully decayed: the body and its litter hide together, slot retained.
+    const internals = fx as unknown as { killedAt: (number | null)[]; elapsed: number };
+    internals.killedAt[0] = internals.elapsed - HUSK_DECAY_DURATION - 1;
+    fx.update(1 / 60);
+    expect(fx.isHuskGoneAt(0)).toBe(true);
+    expect(body.visible).toBe(false);
+    expect(fx.debrisAt(0)).toBeNull();
+    expect(units.children.length).toBe(3);
+    fx.dispose();
+  });
+
+  it("keeps wreck dressing and debris through clearTransients", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    expect(fx.isWreckPosedAt(0)).toBe(true);
+    const at = fx.debrisAt(0);
+    expect(at).not.toBeNull();
+    fx.clearTransients();
+    // Dressing persists like scorch: still posed, debris still flying.
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.isWreckPosedAt(0)).toBe(true);
+    expect(fx.debrisAt(0)).toEqual(at);
+    expect((units.children[0] as THREE.Group).getObjectByName("wreck-collar")).toBeDefined();
+    fx.update(1 / 60);
+    expect(fx.debrisAt(0)).not.toEqual(at);
+    fx.dispose();
+  });
+});
+
+describe("CombatFx slope-aware blasts (gradient wash)", () => {
+  /** Explosion groups hold a THREE.Points spark field; the units group never does. */
   function blastGroups(scene: THREE.Scene): THREE.Group[] {
     return scene.children.filter(
       (c) => c instanceof THREE.Group && c.children.some((k) => (k as THREE.Points).isPoints),
