@@ -173,12 +173,13 @@ describe("camera speed sliders", () => {
     expect(ZOOM_SPEED_MAX).toBe(3);
   });
 
-  it("carries the absolute feel in base speeds (pan 3x, zoom 4x)", () => {
-    // Pan 1x preserves the old 3x default; zoom 1x doubles the old 2x
-    // default, so the slider reads 1x while zooming 2x faster than before.
-    expect(PAN_BASE_SPEED).toBe(3);
+  it("carries the absolute feel in base speeds (pan 4.5x, zoom 4x)", () => {
+    // Pan 1x is 1.5x the task-103 feel (4.5 absolute); zoom 1x doubles the
+    // old 2x default, so the slider reads 1x while zooming 2x faster than
+    // before.
+    expect(PAN_BASE_SPEED).toBe(4.5);
     expect(ZOOM_BASE_SPEED).toBe(4);
-    expect(effectivePanSpeed(DEFAULT_PAN_SPEED)).toBe(3);
+    expect(effectivePanSpeed(DEFAULT_PAN_SPEED)).toBe(4.5);
     expect(effectiveZoomSpeed(DEFAULT_ZOOM_SPEED)).toBe(4);
   });
 
@@ -225,12 +226,14 @@ describe("camera speed sliders", () => {
     expect(panStepDistance(1000, 0.016, 0.5)).toBeCloseTo(base * 0.5, 10);
   });
 
-  it("keeps the old 3x pan feel at the new 1x default", () => {
-    // The base factor is untouched; the whole 3x lives in PAN_BASE_SPEED
-    // so keyboard and right-drag panning scale together exactly as before.
+  it("keeps the old 1.5x pan feel at the new 1x default", () => {
+    // The base factor is untouched; the whole gain lives in PAN_BASE_SPEED
+    // so keyboard and right-drag panning scale together: new 1x equals the
+    // task-103 1.5x position exactly.
     expect(DEFAULT_PAN_SPEED).toBe(1);
     expect(PAN_SPEED_FACTOR).toBe(1.2);
-    expect(panStepDistance(1000, 0.016, DEFAULT_PAN_SPEED)).toBeCloseTo(1000 * 1.2 * 3 * 0.016, 10);
+    expect(panStepDistance(1000, 0.016, DEFAULT_PAN_SPEED)).toBeCloseTo(1000 * 1.2 * 4.5 * 0.016, 10);
+    expect(effectivePanSpeed(1)).toBeCloseTo(3 * 1.5, 10);
   });
 
   it("clamps out-of-range speeds before stepping", () => {
