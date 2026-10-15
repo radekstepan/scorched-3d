@@ -26,6 +26,7 @@ import {
   nearestWalkable,
   octileHeuristic,
   PATH_FORMATION_SPACING,
+  PATH_MAX_SLOPE,
   pathWorldToCell,
   smoothCellPath,
   snappedFormationTargets,
@@ -405,6 +406,30 @@ function ridgedGrid(w = 24, h = 24, x0 = 12, gapEnd = 3): PathGrid {
 }
 
 describe("steep slopes", () => {
+  it("holds the retail-tank climb limit", () => {
+    // Stock retail tank classes (TANKSH/TANKBH) block past MaxSlope 15;
+    // the old 24-gate let hulls scale grades no tank should climb.
+    expect(PATH_MAX_SLOPE).toBe(15);
+  });
+
+  it("refuses cone grades the old gate walked", () => {
+    // A 20-raw grade (typical archipelago volcano flank) is unwalkable now:
+    // A* must route around it instead of marching over the cone — while a
+    // 15-grade (the steepest legal climb) still walks.
+    const w = 32;
+    const h = 12;
+    const flank: PathGrid = { width: w, height: h, heights: new Uint8Array(w * h), seaLevel: 0 };
+    for (let z = 0; z < h; z++) {
+      for (let x = 0; x < w; x++) flank.heights[z * w + x] = x * 20;
+    }
+    expect(isWalkable(flank, 8, 5)).toBe(false);
+    const edge: PathGrid = { width: w, height: h, heights: new Uint8Array(w * h), seaLevel: 0 };
+    for (let z = 0; z < h; z++) {
+      for (let x = 0; x < w; x++) edge.heights[z * w + x] = 60 + x * 15;
+    }
+    expect(isWalkable(edge, 8, 5)).toBe(true);
+  });
+
   it("treats steep cells as unwalkable, like water", () => {
     const grid = ridgedGrid();
     // The ridge column reads steep through the slope probe; its dry
@@ -529,6 +554,25 @@ describe("rough-terrain costs", () => {
       for (let x = 0; x < 12; x++) ramped.heights[z * 12 + x] = 100 + x * 16;
     }
     expect(cellTraverseCost(ramped, 5, 5)).toBeGreaterThan(1);
+  });
+
+  it("tiers rough grades below the climb gate", () => {
+    // Cost bands sit at ~1/3, 3/5, 4/5 of the 15-gate: gentle ground stays
+    // 1, near-gate grades pay steep, and the top band stops where the
+    // walkability gate takes over (slopes past 15 never reach costing).
+    const ramp = (per: number): PathGrid => {
+      const g: PathGrid = { width: 12, height: 12, heights: new Uint8Array(12 * 12), seaLevel: 0 };
+      for (let z = 0; z < 12; z++) {
+        for (let x = 0; x < 12; x++) g.heights[z * 12 + x] = x * per;
+      }
+      return g;
+    };
+    expect(cellTraverseCost(ramp(4), 5, 5)).toBe(1);
+    expect(cellTraverseCost(ramp(8), 5, 5)).toBe(1.5);
+    expect(cellTraverseCost(ramp(11), 5, 5)).toBe(2.5);
+    expect(cellTraverseCost(ramp(14), 5, 5)).toBe(4);
+    expect(isWalkable(ramp(14), 5, 5)).toBe(true);
+    expect(isWalkable(ramp(16), 5, 5)).toBe(false);
   });
 
   it("detours around woods instead of marching through them", () => {

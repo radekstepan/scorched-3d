@@ -5,6 +5,7 @@ import { isWalkable } from "./pathfinding.js";
 import {
   HULL_CLEARANCE,
   HULL_FOOTPRINT,
+  HULL_TILT_SLEW,
   MAX_DRIVE_GRADE,
   MAX_HULL_TILT,
   ROCK_DRAG,
@@ -15,6 +16,7 @@ import {
   hullPitchRoll,
   sampleHeightBilinear,
   seatHull,
+  slewTilt,
   stepBlocked,
   terrainSpeedScale,
   type SeatField,
@@ -197,7 +199,7 @@ describe("stepBlocked", () => {
   });
 
   it("refuses grades steeper than the walkability gate, allows gentle ones", () => {
-    // 40 raw per cell = grade 2.5 > MAX_DRIVE_GRADE (1.5).
+    // 40 raw per cell = grade 2.5 > MAX_DRIVE_GRADE (15/16 ≈ 0.94).
     const steep = rampField(40);
     const a = worldOf(steep, 10, 10);
     const b = worldOf(steep, 11, 10);
@@ -207,7 +209,23 @@ describe("stepBlocked", () => {
     const c = worldOf(gentle, 10, 10);
     const d = worldOf(gentle, 11, 10);
     expect(stepBlocked(gentle, c.x, c.z, d.x, d.z)).toBe(false);
-    expect(MAX_DRIVE_GRADE).toBeCloseTo(24 / 16, 12);
+    expect(MAX_DRIVE_GRADE).toBeCloseTo(15 / 16, 12);
+  });
+
+  it("refuses the old climb band: grades the retired 24-gate allowed", () => {
+    // Retail tank profiles stop at MaxSlope 15; the old gate (24) let hulls
+    // scale volcanic-cone grades like these. 20 raw per cell used to drive
+    // and now holds position instead of clipping into the hillside.
+    // (base 0 keeps tall ramps inside the 0–255 byte without wrapping.)
+    const cone = rampField(20, 32, 32, 0);
+    const a = worldOf(cone, 10, 10);
+    const b = worldOf(cone, 11, 10);
+    expect(stepBlocked(cone, a.x, a.z, b.x, b.z)).toBe(true);
+    // The boundary still passes: 15 raw per cell is the steepest legal climb.
+    const edge = rampField(15, 32, 32, 0);
+    const c = worldOf(edge, 10, 10);
+    const d = worldOf(edge, 11, 10);
+    expect(stepBlocked(edge, c.x, c.z, d.x, d.z)).toBe(false);
   });
 });
 
@@ -233,20 +251,26 @@ describe("terrainSpeedScale", () => {
   });
 
   it("bleeds speed on grades, steeper dragging harder down to the floor", () => {
-    // 8 raw per cell = grade 0.5 (a third of the gate): partial drag.
+    // 8 raw per cell = grade 0.5 (about half the gate): partial drag.
     const gentle = rampField(8);
     const a = worldOf(gentle, 10, 10);
     const b = worldOf(gentle, 11, 10);
     const soft = terrainSpeedScale(gentle, a.x, a.z, b.x, b.z);
     expect(soft).toBeLessThan(1);
     expect(soft).toBeGreaterThan(ROUGH_SLOPE_FLOOR);
-    // 20 raw per cell = grade 1.25 (near the gate): harder drag.
-    const rough = rampField(20);
+    // 12 raw per cell = grade 0.75 (near the gate): harder drag.
+    const rough = rampField(12);
     const c = worldOf(rough, 10, 10);
     const d = worldOf(rough, 11, 10);
     const hard = terrainSpeedScale(rough, c.x, c.z, d.x, d.z);
     expect(hard).toBeLessThan(soft);
     expect(hard).toBeGreaterThanOrEqual(ROUGH_SLOPE_FLOOR);
+    // The steepest legal climb rides exactly on the floor; beyond the gate
+    // the ratio clamps, so forbidden grades never read faster than the floor.
+    const edge = rampField(15, 32, 32, 0);
+    const e = worldOf(edge, 10, 10);
+    const f = worldOf(edge, 11, 10);
+    expect(terrainSpeedScale(edge, e.x, e.z, f.x, f.z)).toBeCloseTo(ROUGH_SLOPE_FLOOR, 12);
     // Uphill and downhill drag equally: the hull labours over the grade.
     expect(terrainSpeedScale(rough, d.x, d.z, c.x, c.z)).toBeCloseTo(hard, 12);
   });
@@ -267,5 +291,31 @@ describe("terrainSpeedScale", () => {
     // The full step scale carries the feature drag on flat ground.
     expect(terrainSpeedScale(field, open.x, open.z, tree.x, tree.z)).toBe(TREE_DRAG);
     expect(terrainSpeedScale(field, open.x, open.z, rock.x, rock.z)).toBe(ROCK_DRAG);
+  });
+});
+
+describe("slewTilt", () => {
+  it("steps toward the seat by at most the allowance, both directions", () => {
+    expect(slewTilt(0, 0.3, 0.1)).toBeCloseTo(0.1, 12);
+    expect(slewTilt(0, -0.3, 0.1)).toBeCloseTo(-0.1, 12);
+    // Within reach lands exactly — no asymptotic crawl toward the seat.
+    expect(slewTilt(0.1, 0.15, 0.1)).toBeCloseTo(0.15, 12);
+    expect(slewTilt(0, 0, 0.1)).toBe(0);
+  });
+
+  it("holds on non-positive steps and snaps on infinite ones", () => {
+    expect(slewTilt(0.1, 0.4, 0)).toBe(0.1);
+    expect(slewTilt(0.1, 0.4, -1)).toBe(0.1);
+    expect(slewTilt(0.1, 0.4, Number.POSITIVE_INFINITY)).toBe(0.4);
+  });
+
+  it("settles a full-tilt swing inside half a second", () => {
+    // The renderer slews at HULL_TILT_SLEW per second: worst case
+    // (−max to +max tilt) must converge fast enough to read as suspension,
+    // not a stuck lean.
+    expect(HULL_TILT_SLEW).toBeGreaterThan(0);
+    let tilt = -MAX_HULL_TILT;
+    for (let n = 0; n < 30; n++) tilt = slewTilt(tilt, MAX_HULL_TILT, HULL_TILT_SLEW / 60);
+    expect(tilt).toBeCloseTo(MAX_HULL_TILT, 9);
   });
 });

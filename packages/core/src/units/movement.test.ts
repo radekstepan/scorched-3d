@@ -78,7 +78,7 @@ describe("planRoutes", () => {
             const h00 = map.heights[cellZ * map.width + cellX] ?? 0;
             const h10 = map.heights[cellZ * map.width + Math.min(map.width - 1, cellX + 1)] ?? 0;
             const h01 = map.heights[Math.min(map.height - 1, cellZ + 1) * map.width + cellX] ?? 0;
-            expect(Math.max(h00, h10, h01) - Math.min(h00, h10, h01)).toBeLessThanOrEqual(24);
+            expect(Math.max(h00, h10, h01) - Math.min(h00, h10, h01)).toBeLessThanOrEqual(15);
           }
         }
       }

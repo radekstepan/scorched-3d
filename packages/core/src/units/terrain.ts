@@ -64,6 +64,14 @@ export const HULL_CLEARANCE = 0.5;
 /** Hull tilt clamp, radians (~29°): posed, never snapped flat, never wild. */
 export const MAX_HULL_TILT = 0.5;
 /**
+ * Fastest hull tilt change, radians per second. The renderer slews posed
+ * pitch/roll toward the grade seat at this rate instead of snapping, so
+ * cresting a ridge reads as suspension settling (~0.25 s for a full-tilt
+ * swing) rather than a teleport. Re-snaps (exaggeration changes) still
+ * apply instantly.
+ */
+export const HULL_TILT_SLEW = 2.0;
+/**
  * Steepest raw grade a hull will drive: the same rise/run the walkability
  * gate tolerates (`PATH_MAX_SLOPE` over one cell edge). Steps steeper than
  * this hold position instead of clipping into the hillside.
@@ -121,6 +129,20 @@ function clampTilt(v: number): number {
   const c = v < -MAX_HULL_TILT ? -MAX_HULL_TILT : v > MAX_HULL_TILT ? MAX_HULL_TILT : v;
   // Normalize -0 (from -atan2 on flat ground) so flat poses read exactly 0.
   return c + 0;
+}
+
+/**
+ * One slew-limited tilt step: move `prev` toward `next` by at most
+ * `maxStep` radians (non-positive steps hold). Pitch/roll never wrap, so
+ * this is a plain clamp, not an angular wrap — the hull can't take the
+ * "long way around" a tilt. Pure, so the renderer and vitest share it.
+ */
+export function slewTilt(prev: number, next: number, maxStep: number): number {
+  if (!(maxStep > 0)) return prev;
+  const d = next - prev;
+  if (d > maxStep) return prev + maxStep;
+  if (d < -maxStep) return prev - maxStep;
+  return next;
 }
 
 /**

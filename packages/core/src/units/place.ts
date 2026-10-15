@@ -9,8 +9,12 @@ const MARGIN = 8;
 /** Strict placement wants open, flat, unoccupied ground. */
 const STRICT_SLOPE = 12;
 const STRICT_SEPARATION = 18;
-/** Relaxed pass still guarantees dry land, but tolerates rougher ground. */
-const RELAXED_SLOPE = 24;
+/**
+ * Relaxed pass still guarantees *drivable* land: it tolerates slopes up to
+ * the shared climb gate, never above it, so a spawn always sits on ground
+ * its hull may legally stand on.
+ */
+const RELAXED_SLOPE = 15;
 const RELAXED_SEPARATION = 10;
 
 /** Minimal heightfield view shared by generateMap and the tests. */

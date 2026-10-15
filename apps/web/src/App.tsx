@@ -28,7 +28,7 @@ export default function App() {
   const [selected, setSelected] = useState<number[]>([]);
   const [liveUnits, setLiveUnits] = useState<{ x: number; z: number }[]>([]);
   const [options, setOptions] = useState<ViewOptions>({
-    exaggeration: 3.6,
+    exaggeration: 2.0,
     showWater: true,
     showFeatures: true,
     showWire: false,

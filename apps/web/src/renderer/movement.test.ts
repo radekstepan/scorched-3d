@@ -292,6 +292,33 @@ describe("terrain seating", () => {
     movement.dispose();
   });
 
+  it("slews tilt toward the seat instead of snapping, and snaps on resnap", () => {
+    const field = rampField();
+    const ex = { v: 1 };
+    const units = rampGroup();
+    const routes: RoutePoint[][] = [[{ x: 0, z: -200 }, { x: 0, z: 200 }]];
+    const movement = new UnitMovement(units, routes, rampEnv(field, ex), field);
+    const body = units.children[0] as THREE.Group;
+    const state = movement.moverState(0)!;
+    const want = seatHull(field, "stump", state.x, state.z, state.hull, 1);
+    expect(Math.abs(want.pitch)).toBeGreaterThan(0.01);
+    // Knock the tilt far off the seat: one small tick only closes part of
+    // the gap (suspension settling, not a teleport)…
+    body.rotation.x = want.pitch > 0 ? -0.4 : 0.4;
+    const before = Math.abs(body.rotation.x - want.pitch);
+    movement.update(1 / 60);
+    const after = Math.abs(body.rotation.x - want.pitch);
+    expect(after).toBeLessThan(before);
+    expect(after).toBeGreaterThan(0);
+    // …while a re-snap (exaggeration change) lands exactly.
+    movement.resnap();
+    expect(body.rotation.x).toBeCloseTo(
+      seatHull(field, "stump", movement.moverState(0)!.x, movement.moverState(0)!.z, movement.moverState(0)!.hull, 1).pitch,
+      9,
+    );
+    movement.dispose();
+  });
+
   it("pins hulls against too-steep ground instead of clipping through", () => {
     // Cliff field: flat 100 west of x=20, plateau 200 east — the step reads
     // steep through the slope probe, so the drive clamp must pin the hull.

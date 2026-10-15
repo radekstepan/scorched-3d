@@ -4,8 +4,10 @@ import {
   findWorldPath,
   formationTargets,
   hasOrder,
+  HULL_TILT_SLEW,
   initMover,
   orderMover,
+  slewTilt,
   snappedFormationTargets,
   type HullSeat,
   type Mover,
@@ -138,7 +140,7 @@ export class UnitMovement {
       const dx = mover.x - prev.x;
       const dz = mover.z - prev.z;
       if (dx !== 0 || dz !== 0) this.env.onShift?.(i, dx, dz);
-      this.pose(body, mover, this.kinds[i] ?? "flash");
+      this.pose(body, mover, this.kinds[i] ?? "flash", dt);
     });
     this.movers = next;
   }
@@ -149,22 +151,27 @@ export class UnitMovement {
     this.movers.forEach((mover, i) => {
       const body = this.units.children[i] as THREE.Group | undefined;
       if (!body) return;
-      this.pose(body, mover, this.kinds[i] ?? "flash");
+      this.pose(body, mover, this.kinds[i] ?? "flash", Number.POSITIVE_INFINITY);
     });
   }
 
   /**
    * Seat one body: live X/Z, surface height + hull pitch/roll from the seat
    * (flat `groundY + 0.5` fallback), yaw from the mover. `YXZ` order so the
-   * pitch/roll apply in the hull frame after yawing — nose up uphill.
+   * pitch/roll apply in the hull frame after yawing — nose up uphill. Tilt
+   * slews toward the seat at `HULL_TILT_SLEW` (suspension settling instead
+   * of a snap when cresting a grade break); height applies instantly so
+   * tracks never float or sink, and re-snaps pass infinite `dt` to land
+   * exactly.
    */
-  private pose(body: THREE.Group, mover: Mover, kind: UnitKind): void {
+  private pose(body: THREE.Group, mover: Mover, kind: UnitKind, dt: number): void {
     const seat = this.env.seat?.(mover.x, mover.z, mover.hull, kind);
     body.position.set(mover.x, seat?.y ?? this.env.groundY(mover.x, mover.z) + 0.5, mover.z);
     body.rotation.order = "YXZ";
     body.rotation.y = mover.hull;
-    body.rotation.x = seat?.pitch ?? 0;
-    body.rotation.z = seat?.roll ?? 0;
+    const maxStep = HULL_TILT_SLEW * dt;
+    body.rotation.x = seat ? slewTilt(body.rotation.x, seat.pitch, maxStep) : 0;
+    body.rotation.z = seat ? slewTilt(body.rotation.z, seat.roll, maxStep) : 0;
   }
 
   dispose(): void {

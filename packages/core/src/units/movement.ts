@@ -101,8 +101,8 @@ export const SEPARATION_SIDESTEP = 0.6;
 export const BLOCKED_SKIP_AFTER = 2.5;
 /** Waypoints need dry land this far above the sea, matching placement. */
 const ROUTE_DRY_LIFT = 4;
-/** Waypoints tolerate relaxed-grade slopes, matching relaxed placement. */
-const ROUTE_MAX_SLOPE = 24;
+/** Waypoints tolerate the same climb gate the pathfinder drives (retail-tank grade). */
+const ROUTE_MAX_SLOPE = 15;
 /** Minimum separation between waypoints on one route, in cells. */
 const ROUTE_WP_SEPARATION = 12;
 /** Fresh RNG stream so routes never perturb terrain/unit snapshots. */

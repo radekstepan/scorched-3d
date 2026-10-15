@@ -64,8 +64,17 @@ export interface PathPoint {
 
 /** Cells need dry land this far above the sea, matching placement/routes. */
 export const PATH_DRY_LIFT = 4;
-/** Cells tolerate relaxed-grade slopes, matching relaxed placement/routes. */
-export const PATH_MAX_SLOPE = 24;
+/**
+ * Steepest cell grade a hull will stand on or drive, in raw height units
+ * over one cell edge. Matches retail tank movement classes (TANKSH/TANKBH
+ * `MaxSlope` 15 — our roster shares one movement profile, so tanks and the
+ * commander all climb like retail tanks) instead of the old 24, which let
+ * hulls scale near-vertical volcanic cones. `isWalkable`, the drive clamp
+ * (`stepBlocked` via `MAX_DRIVE_GRADE`), placement, and patrol waypoints all
+ * read this one gate, so a leg the pathfinder blesses never reads as
+ * blocked and vice versa.
+ */
+export const PATH_MAX_SLOPE = 15;
 /** Default spacing between formation fan slots, in world units. */
 export const PATH_FORMATION_SPACING = 56;
 /** Snap radius when seating an order endpoint onto walkable ground, cells. */
@@ -124,9 +133,13 @@ export function isObstructedCell(grid: PathGrid, x: number, z: number): boolean 
 export function cellTraverseCost(grid: PathGrid, x: number, z: number): number {
   const slope = cellSlope(grid, x, z);
   let cost = 1;
-  if (slope > 20) cost += 3;
-  else if (slope > 14) cost += 1.5;
-  else if (slope > 8) cost += 0.5;
+  // Rough-grade tiers at roughly 1/3, 3/5, 4/5 of the climb gate (retail
+  // stamps `BadSlope` ≈ `MaxSlope` / 2 as its soft tier; the extra bands
+  // keep near-gate grades expensive without ever blocking — blocking is the
+  // `isWalkable` gate's job alone).
+  if (slope > 12) cost += 3;
+  else if (slope > 9) cost += 1.5;
+  else if (slope > 5) cost += 0.5;
   if (isRockCell(grid, x, z)) cost += 2;
   else if (isTreeCell(grid, x, z)) cost += 1.25;
   return cost;

@@ -379,7 +379,7 @@ export const MAX_CRATER_TOTAL = 2.0;
 
 /**
  * Dent depth for a blast intensity: hammer shells dig the full 1.0 height
- * unit (~3.6 world units at the default exaggeration — a shallow bowl, not a
+ * unit (~2 world units at the default exaggeration — a shallow bowl, not a
  * pit), lighter bolts barely dimple the ground.
  */
 export function craterDepthForIntensity(intensity: number): number {

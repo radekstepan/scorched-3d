@@ -19,7 +19,7 @@ import {
  * instanced draw — the scene budget is untouched.
  *
  * Craters dent the visual terrain mesh only (a shallow bowl ≤1 height unit
- * per blast, ~3.6 world units at the default exaggeration). Pathing and unit
+ * per blast, ~2 world units at the default exaggeration). Pathing and unit
  * seating read the static core heightfield, so dents can never trap a unit;
  * only the mesh, scorch seating, and the hover probe dip into the bowl.
  */
