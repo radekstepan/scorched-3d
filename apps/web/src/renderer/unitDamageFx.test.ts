@@ -4,8 +4,19 @@ import { UNIT_DEFS, type TNTMap } from "@scorched-3d/core";
 import {
   applyUnitDamageTint,
   baseColorOf,
+  CHAR_MAX_MIX,
   CHAR_TARGET,
   charredColor,
+  EMBER_DUTY,
+  PUFF_DUTY_HEAVY,
+  PUFF_DUTY_LIGHT,
+  UNIT_EMBER_PERIOD,
+  UNIT_PUFF_PERIOD,
+  emberPhase,
+  isEmberVisible,
+  isPuffVisible,
+  puffDuty,
+  puffPhase,
   UnitDamageFx,
 } from "./unitDamageFx";
 import { buildUnits } from "./units";
@@ -34,26 +45,58 @@ function lambertHexes(body: THREE.Object3D): number[] {
   return out;
 }
 
+const lum = (hex: number): number => {
+  const c = new THREE.Color(hex);
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+};
+
+/** Elapsed time where unit `index` shows its puff (scan forward, always one). */
+function visibleAt(index: number, heavy: boolean): number {
+  for (let t = 0; t < UNIT_PUFF_PERIOD * 2; t += 0.05) {
+    if (isPuffVisible(index, t, heavy)) return t;
+  }
+  throw new Error("no visible puff found");
+}
+
+/** Elapsed time where unit `index` hides its puff (emission gap). */
+function gapAt(index: number, heavy: boolean): number {
+  for (let t = 0; t < UNIT_PUFF_PERIOD * 2; t += 0.05) {
+    if (!isPuffVisible(index, t, heavy)) return t;
+  }
+  throw new Error("no puff gap found");
+}
+
 describe("charredColor", () => {
-  it("returns the base color undamaged and the char target fully charred", () => {
+  it("returns the base color undamaged and a capped mix fully charred", () => {
     expect(charredColor(0x5a6b46, 0)).toBe(0x5a6b46);
-    expect(charredColor(0x5a6b46, 1)).toBe(CHAR_TARGET);
+    // Fully charred never reaches the raw target: the view caps the lerp.
+    const full = charredColor(0x5a6b46, 1);
+    expect(full).not.toBe(CHAR_TARGET);
+    const expected = new THREE.Color(0x5a6b46).lerp(new THREE.Color(CHAR_TARGET), CHAR_MAX_MIX).getHex();
+    expect(full).toBe(expected);
   });
 
-  it("darkens monotonically with damage, then pins at the char target", () => {
-    const lum = (hex: number): number => {
-      const c = new THREE.Color(hex);
-      return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
-    };
+  it("darkens monotonically with damage, then pins at the capped mix", () => {
     let prev = lum(charredColor(0x8a8f7a, 0));
     for (const d of [0.1, 0.2, 0.4, 0.6]) {
       const next = lum(charredColor(0x8a8f7a, d));
       expect(next).toBeLessThan(prev);
       prev = next;
     }
-    // Char saturates at UNIT_CHAR_SATURATE: 0.8 and 1.0 both pin to target.
-    expect(charredColor(0x8a8f7a, 0.8)).toBe(CHAR_TARGET);
-    expect(charredColor(0x8a8f7a, 1)).toBe(CHAR_TARGET);
+    // Char saturates at core UNIT_CHAR_SATURATE: 0.8 and 1.0 pin together.
+    expect(charredColor(0x8a8f7a, 0.8)).toBe(charredColor(0x8a8f7a, 1));
+  });
+
+  it("never chars to near-black and keeps a warm readable hue", () => {
+    expect(CHAR_MAX_MIX).toBeLessThanOrEqual(0.5);
+    for (const base of [0x5a6b46, 0x8a8f7a, UNIT_DEFS.stump.color, 0xffffff]) {
+      const hex = charredColor(base, 1);
+      // Luminance floor: fully charred stays well above near-black.
+      expect(lum(hex)).toBeGreaterThan(0.05);
+      const c = new THREE.Color(hex);
+      // Warm brown read: red channel leads blue.
+      expect(c.r).toBeGreaterThan(c.b);
+    }
   });
 });
 
@@ -69,22 +112,25 @@ describe("applyUnitDamageTint", () => {
     expect(baseColorOf(body)).not.toBeNull();
   });
 
-  it("darkens built hulls toward char without touching the stashed base", () => {
+  it("darkens built hulls softly without touching the stashed base", () => {
     const group = buildUnits(fakeMap(), 1);
     const body = group.children[0] as THREE.Group; // stump
     const before = lambertHexes(body);
     expect(before.length).toBeGreaterThan(0);
     applyUnitDamageTint(body, 0.5);
     const mid = lambertHexes(body);
-    // Every hull mesh moved off its base color toward the char target.
+    // Every hull mesh moved off its base color — but never to near-black.
     expect(mid).not.toEqual(before);
-    for (const hex of mid) expect(hex).not.toBe(CHAR_TARGET);
+    for (const hex of mid) {
+      expect(hex).not.toBe(CHAR_TARGET);
+      expect(lum(hex)).toBeGreaterThan(0.03);
+    }
     applyUnitDamageTint(body, 1);
-    for (const hex of lambertHexes(body)) expect(hex).toBe(CHAR_TARGET);
-    // Re-applying the same damage is stable (base stash, not double-lerp).
     const pinned = lambertHexes(body);
+    // Fully charred pins at the capped mix (stable, not double-lerped).
     applyUnitDamageTint(body, 1);
     expect(lambertHexes(body)).toEqual(pinned);
+    for (const hex of pinned) expect(lum(hex)).toBeGreaterThan(0.03);
     // And the def colors still describe the pristine hulls elsewhere.
     expect(before).toContain(UNIT_DEFS.stump.color);
   });
@@ -106,40 +152,141 @@ describe("applyUnitDamageTint", () => {
   });
 });
 
+describe("puff cadence", () => {
+  it("phases stay in 0..1, desync neighbours, and repeat every period", () => {
+    for (const t of [0, 0.7, 2.5, 10.2]) {
+      const p = puffPhase(0, t);
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThan(1);
+      expect(puffPhase(0, t + UNIT_PUFF_PERIOD)).toBeCloseTo(p, 10);
+    }
+    expect(puffPhase(0, 1.0)).not.toBeCloseTo(puffPhase(1, 1.0), 3);
+    for (const t of [0, 0.4, 1.9]) {
+      const p = emberPhase(2, t);
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThan(1);
+      expect(emberPhase(2, t + UNIT_EMBER_PERIOD)).toBeCloseTo(p, 10);
+    }
+  });
+
+  it("heavy hulls puff more often than light ones, both with gaps", () => {
+    expect(puffDuty(false)).toBe(PUFF_DUTY_LIGHT);
+    expect(puffDuty(true)).toBe(PUFF_DUTY_HEAVY);
+    expect(PUFF_DUTY_HEAVY).toBeGreaterThan(PUFF_DUTY_LIGHT);
+    for (const heavy of [false, true]) {
+      let seen = 0;
+      let gaps = 0;
+      for (let t = 0; t < UNIT_PUFF_PERIOD; t += 0.05) {
+        if (isPuffVisible(3, t, heavy)) seen++;
+        else gaps++;
+      }
+      expect(seen).toBeGreaterThan(0);
+      expect(gaps).toBeGreaterThan(0);
+    }
+    // Ember blinks have gaps too.
+    let eSeen = 0;
+    let eGaps = 0;
+    for (let t = 0; t < UNIT_EMBER_PERIOD; t += 0.05) {
+      if (isEmberVisible(1, t)) eSeen++;
+      else eGaps++;
+    }
+    expect(eSeen).toBeGreaterThan(0);
+    expect(eGaps).toBeGreaterThan(0);
+    expect(EMBER_DUTY).toBeLessThan(1);
+  });
+});
+
 describe("UnitDamageFx", () => {
-  it("stays empty for pristine hulls, smokes when scorched, embers when gutted", () => {
+  it("stays empty for pristine hulls, puffs when scorched, embers when gutted", () => {
     const scene = new THREE.Scene();
     const fx = new UnitDamageFx(scene);
     const units = buildUnits(fakeMap(), 1);
     fx.update([0, 0], units.children, 1.0);
     expect(fx.smokeCount).toBe(0);
     expect(fx.emberCount).toBe(0);
-    // One scorched hull smokes; the pristine one stays clean.
-    fx.update([0.35, 0], units.children, 2.0);
+    // Scorched hull shows its puff inside its emission window.
+    fx.update([0.35, 0], units.children, visibleAt(0, false));
     expect(fx.smokeCount).toBe(1);
     expect(fx.emberCount).toBe(0);
-    // A gutted hull adds dark smoke plus an ember flicker.
-    fx.update([0.35, 0.8], units.children, 3.0);
+    // A gutted hull adds a puff plus an ember spark (pick times both show).
+    let t = visibleAt(1, true);
+    if (!isEmberVisible(1, t)) {
+      for (let s = 0; s < UNIT_EMBER_PERIOD * 2; s += 0.05) {
+        if (isPuffVisible(1, s, true) && isEmberVisible(1, s)) {
+          t = s;
+          break;
+        }
+      }
+    }
+    fx.update([0.35, 0.8], units.children, t);
     expect(fx.smokeCount).toBe(2);
     expect(fx.emberCount).toBe(1);
     fx.dispose();
     expect(scene.children.length).toBe(0);
   });
 
+  it("leaves emission gaps: smoking hulls hide between puffs", () => {
+    const scene = new THREE.Scene();
+    const fx = new UnitDamageFx(scene);
+    const units = buildUnits(fakeMap(), 1);
+    fx.update([0.5, 0], units.children, visibleAt(0, false));
+    expect(fx.smokeCount).toBe(1);
+    fx.update([0.5, 0], units.children, gapAt(0, false));
+    expect(fx.smokeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("keeps puffs small, soft, and never near-black", () => {
+    const scene = new THREE.Scene();
+    const fx = new UnitDamageFx(scene);
+    const units = buildUnits(fakeMap(), 1);
+    const internals = fx as unknown as {
+      smokeMesh: THREE.InstancedMesh;
+      emberMesh: THREE.InstancedMesh;
+    };
+    expect((internals.smokeMesh.geometry as THREE.SphereGeometry).parameters.radius).toBeLessThanOrEqual(6);
+    expect((internals.smokeMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.25);
+    expect((internals.emberMesh.geometry as THREE.SphereGeometry).parameters.radius).toBeLessThanOrEqual(2.5);
+    expect((internals.emberMesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.75);
+    // Sweep visible windows: instance scales stay small, smoke tones grey.
+    const m = new THREE.Matrix4();
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    const col = new THREE.Color();
+    for (let t = 0; t < UNIT_PUFF_PERIOD; t += 0.1) {
+      fx.update([0.9, 0.9], units.children, t);
+      for (let s = 0; s < fx.smokeCount; s++) {
+        internals.smokeMesh.getMatrixAt(s, m);
+        m.decompose(pos, quat, scl);
+        expect(scl.x).toBeLessThanOrEqual(0.75);
+        internals.smokeMesh.getColorAt(s, col);
+        expect((col.r + col.g + col.b) / 3).toBeGreaterThanOrEqual(0.35);
+      }
+      for (let e = 0; e < fx.emberCount; e++) {
+        internals.emberMesh.getMatrixAt(e, m);
+        m.decompose(pos, quat, scl);
+        expect(scl.x).toBeLessThanOrEqual(0.65);
+      }
+    }
+    fx.dispose();
+  });
+
   it("rebuilds every tick from state (no latching, deterministic phases)", () => {
     const scene = new THREE.Scene();
     const fx = new UnitDamageFx(scene);
     const units = buildUnits(fakeMap(), 1);
+    const t = visibleAt(0, true);
     const m = new THREE.Matrix4();
-    fx.update([0.5, 0.9], units.children, 4.0);
+    fx.update([0.5, 0.9], units.children, t);
     const first = new THREE.Matrix4();
     (fx as unknown as { smokeMesh: THREE.InstancedMesh }).smokeMesh.getMatrixAt(0, first);
     // Same elapsed, same state: identical instances (deterministic).
-    fx.update([0.5, 0.9], units.children, 4.0);
+    fx.update([0.5, 0.9], units.children, t);
     (fx as unknown as { smokeMesh: THREE.InstancedMesh }).smokeMesh.getMatrixAt(0, m);
     expect(m.equals(first)).toBe(true);
     // Healed (tests only — the sim never heals): smoke clears next tick.
-    fx.update([0, 0], units.children, 5.0);
+    fx.update([0, 0], units.children, t + 1.0);
     expect(fx.smokeCount).toBe(0);
     expect(fx.emberCount).toBe(0);
     fx.dispose();

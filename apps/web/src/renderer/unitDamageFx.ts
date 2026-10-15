@@ -10,9 +10,11 @@ import {
 export { UNIT_HEAVY_DAMAGE, UNIT_SMOKE_DAMAGE };
 
 /**
- * Visible battle damage on unit hulls: progressive charring (body colors lerp
- * toward burnt umber with accumulated damage) plus one smoke puff per smoking
- * hull and one ember flicker per heavily-damaged hull.
+ * Visible battle damage on unit hulls: soft progressive charring (body colors
+ * lerp a capped way toward warm brown with accumulated damage — hulls stay
+ * readable, never near-black) plus small intermittent smoke puffs above
+ * scorched hulls (phased emission windows with gaps) and a soft blinking
+ * ember spark over heavily-damaged hulls.
  *
  * Cheap by construction: charring rewrites existing Lambert colors in place
  * (only when a blast lands, never per frame) and smoke/embers are two single
@@ -24,30 +26,75 @@ export { UNIT_HEAVY_DAMAGE, UNIT_SMOKE_DAMAGE };
  * never touch it.
  */
 
-/** Burnt-umber target the hull colors char toward (warm black, not pure). */
-export const CHAR_TARGET = 0x1b140f;
-/** Hull height the smoke column rises above before looping, world units. */
-export const UNIT_SMOKE_RISE = 52;
+/** Burnt-umber target the hull colors char toward (warm brown, never black). */
+export const CHAR_TARGET = 0x4a3a2c;
+/** Cap on the effective char lerp: hulls keep their hue, never go near-black. */
+export const CHAR_MAX_MIX = 0.45;
+/** Hull height the smoke puff rises across one emission window, world units. */
+export const UNIT_SMOKE_RISE = 32;
 /** Perf cap: one smoke puff per hull is plenty (rosters are small). */
 export const MAX_UNIT_SMOKE = 32;
 /** Perf cap: one ember flicker per heavily-damaged hull. */
 export const MAX_UNIT_EMBERS = 32;
+/** Puff emission period: each smoking hull emits intermittently, desynced. */
+export const UNIT_PUFF_PERIOD = 3.6;
+/** Fraction of each period a light-damage hull shows its puff. */
+export const PUFF_DUTY_LIGHT = 0.42;
+/** Fraction of each period a heavily-damaged hull shows its puff. */
+export const PUFF_DUTY_HEAVY = 0.6;
+/** Ember blink period (faster than smoke puffs). */
+export const UNIT_EMBER_PERIOD = 2.1;
+/** Fraction of each ember period the spark is visible. */
+export const EMBER_DUTY = 0.65;
 
 const _base = new THREE.Color();
 const _char = new THREE.Color(CHAR_TARGET);
 const _out = new THREE.Color();
 
 /**
- * Charred color for a base hull color at `damage` 0..1: lerp toward burnt
- * umber by the core char mix. Pure (no three.js scene state) for tests.
+ * Charred color for a base hull color at `damage` 0..1: lerp toward the char
+ * target by the core char mix, capped at `CHAR_MAX_MIX` so fully battered
+ * hulls stay a readable brown instead of near-black. Pure for tests.
  */
 export function charredColor(baseHex: number, damage: number): number {
-  const k = charMix(damage);
+  const k = charMix(damage) * CHAR_MAX_MIX;
   if (k <= 0) return baseHex;
-  if (k >= 1) return CHAR_TARGET;
   _base.setHex(baseHex);
   _out.copy(_base).lerp(_char, k);
   return _out.getHex();
+}
+
+/** Emission duty (visible fraction of each puff period) by damage weight. */
+export function puffDuty(heavy: boolean): number {
+  return heavy ? PUFF_DUTY_HEAVY : PUFF_DUTY_LIGHT;
+}
+
+/**
+ * Puff cycle phase 0..1 for a unit index at `elapsed`: golden-ratio offset
+ * desyncs neighbours deterministically (no rng). Pure for tests.
+ */
+export function puffPhase(index: number, elapsed: number): number {
+  const offset = ((index * 0.61803398875) % 1 + 1) % 1;
+  return (((elapsed / UNIT_PUFF_PERIOD + offset) % 1) + 1) % 1;
+}
+
+/** True while the smoke puff for a hull is visible (emission gaps else). */
+export function isPuffVisible(index: number, elapsed: number, heavy: boolean): boolean {
+  return puffPhase(index, elapsed) < puffDuty(heavy);
+}
+
+/**
+ * Ember blink phase 0..1: separate period/hash from smoke so sparks and
+ * puffs never pulse together. Pure for tests.
+ */
+export function emberPhase(index: number, elapsed: number): number {
+  const offset = ((index * 0.38196601125 + 0.25) % 1 + 1) % 1;
+  return (((elapsed / UNIT_EMBER_PERIOD + offset) % 1) + 1) % 1;
+}
+
+/** True while the ember spark for a hull is visible (blink gaps else). */
+export function isEmberVisible(index: number, elapsed: number): boolean {
+  return emberPhase(index, elapsed) < EMBER_DUTY;
 }
 
 /**
@@ -99,22 +146,22 @@ export class UnitDamageFx {
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
-    const smokeGeo = new THREE.SphereGeometry(9, 8, 6);
+    const smokeGeo = new THREE.SphereGeometry(5.5, 8, 6);
     const smokeMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.22,
       depthWrite: false,
     });
     this.smokeMesh = new THREE.InstancedMesh(smokeGeo, smokeMat, MAX_UNIT_SMOKE);
     this.smokeMesh.count = 0;
     this.smokeMesh.frustumCulled = false;
     this.smokeMesh.renderOrder = 3;
-    const emberGeo = new THREE.SphereGeometry(3.4, 6, 5);
+    const emberGeo = new THREE.SphereGeometry(2.2, 6, 5);
     const emberMat = new THREE.MeshBasicMaterial({
       color: 0xffa63c,
       transparent: true,
-      opacity: 0.95,
+      opacity: 0.7,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -140,7 +187,9 @@ export class UnitDamageFx {
   /**
    * Rebuild smoke/ember instances from per-unit damage. Bodies give live
    * X/Z/Y (patrol motion rides for free); `elapsed` drives the deterministic
-   * phase-hashed rise/flicker — no rng, so replays match frame for frame.
+   * phase-hashed puff cadence — each smoking hull emits one small puff per
+   * window with gaps between, so damage reads as intermittent wisps rather
+   * than a constant column. No rng, so replays match frame for frame.
    */
   update(damage: readonly number[], bodies: readonly THREE.Object3D[], elapsed: number): void {
     if (this.disposed) return;
@@ -153,30 +202,32 @@ export class UnitDamageFx {
       if (!isSmoking(d)) continue;
       const body = bodies[i]!;
       const heavy = isHeavilyDamaged(d);
-      if (smoke < MAX_UNIT_SMOKE) {
-        // Puffs loop upward above the hull; phase-hash desyncs neighbours.
-        const rise = (elapsed * 16 + (i * 53) % UNIT_SMOKE_RISE) % UNIT_SMOKE_RISE;
+      if (smoke < MAX_UNIT_SMOKE && isPuffVisible(i, elapsed, heavy)) {
+        // One puff life per window: rises from the hull, swells, dissipates.
+        const localT = puffPhase(i, elapsed) / puffDuty(heavy);
+        const rise = localT * UNIT_SMOKE_RISE;
+        const envelope = 0.55 + 0.45 * Math.sin(Math.PI * Math.min(1, localT));
         dummy.position.set(
-          body.position.x + Math.sin(elapsed * 1.1 + i * 2.3) * 5,
-          body.position.y + 16 + rise,
-          body.position.z + Math.cos(elapsed * 0.8 + i * 1.1) * 5,
+          body.position.x + Math.sin(elapsed * 1.1 + i * 2.3) * 3,
+          body.position.y + 12 + rise,
+          body.position.z + Math.cos(elapsed * 0.8 + i * 1.1) * 3,
         );
         dummy.rotation.set(0, 0, 0);
-        dummy.scale.setScalar((heavy ? 1.25 : 0.9) * (0.7 + rise / UNIT_SMOKE_RISE));
+        dummy.scale.setScalar((heavy ? 0.62 : 0.45) * (0.5 + 0.5 * localT) * envelope);
         dummy.updateMatrix();
         this.smokeMesh.setMatrixAt(smoke, dummy.matrix);
-        // Light grey for scorched paint, near-black for gutted hulls.
-        const tone = heavy ? 0.16 : 0.52;
+        // Soft greys for both tiers — heavy stays charcoal, never near-black.
+        const tone = heavy ? 0.38 : 0.58;
         this.smokeMesh.setColorAt(smoke, this.tint.setRGB(tone, tone * 0.96, tone * 0.92));
         smoke++;
       }
-      if (heavy && embers < MAX_UNIT_EMBERS) {
-        // Ember spark dancing over the hull: fast flicker, never still.
-        const flicker = 0.7 + 0.5 * Math.abs(Math.sin(elapsed * 11 + i * 2.9));
+      if (heavy && embers < MAX_UNIT_EMBERS && isEmberVisible(i, elapsed)) {
+        // Ember spark dancing low over the hull: soft flicker, blinks out.
+        const flicker = 0.35 + 0.25 * Math.abs(Math.sin(elapsed * 11 + i * 2.9));
         dummy.position.set(
-          body.position.x + Math.sin(elapsed * 3.1 + i * 1.7) * 7,
-          body.position.y + 12 + 4 * Math.abs(Math.sin(elapsed * 2.2 + i)),
-          body.position.z + Math.cos(elapsed * 2.6 + i * 0.9) * 7,
+          body.position.x + Math.sin(elapsed * 3.1 + i * 1.7) * 5,
+          body.position.y + 10 + 3 * Math.abs(Math.sin(elapsed * 2.2 + i)),
+          body.position.z + Math.cos(elapsed * 2.6 + i * 0.9) * 5,
         );
         dummy.rotation.set(0, 0, 0);
         dummy.scale.setScalar(flicker);
@@ -184,7 +235,7 @@ export class UnitDamageFx {
         this.emberMesh.setMatrixAt(embers, dummy.matrix);
         this.emberMesh.setColorAt(
           embers,
-          this.tint.setRGB(1, 0.5 + 0.25 * flicker, 0.15),
+          this.tint.setRGB(1, 0.42 + 0.2 * flicker, 0.12),
         );
         embers++;
       }
