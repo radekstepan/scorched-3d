@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import {
+  accumulateImpact,
   addScorchMark,
   aimStep,
   applyBlastToUnits,
@@ -15,6 +16,8 @@ import {
   GRAVITY,
   huskDecay,
   huskSink,
+  IMPACT_DURATION,
+  impactKick,
   inRange,
   isDestroyed,
   isHuskGone,
@@ -37,6 +40,8 @@ import {
   wrapAngle,
   yawToTarget,
   WEAPON_PROFILES,
+  zeroImpact,
+  type ImpactKick,
   type PlacedUnit,
   type ScorchMark,
   type UnitKind,
@@ -81,7 +86,7 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   damages nearby trees/rocks through the CombatEnv blast hook (blast
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
  *   accumulating damage (charring hull tint, damage smoke, heavy-hit
- *   embers — hulls are never moved by blasts; a hull that exhausts its
+ *   embers — hulls are rocked by every splash (decaying directional shove + tilt); a hull that exhausts its
  *   health dies once, epicly, and lingers as a smouldering husk that slowly sinks, gutters out, and vanishes).
  */
 
@@ -134,12 +139,41 @@ interface Explosion {
   glowRadius: number;
 }
 
-interface Recoil {
+/**
+ * Transient hull nudge: one entry per rocked hull, covering both the
+ * attacker's straight-back recoil kick and a victim's directional hit
+ * reaction (blast shove + hull-frame pitch/roll rock from core
+ * `impactKick`). Position is absolute from the seated `base` (shifted by
+ * patrol motion like recoil anchors, so the kick restore never snaps a
+ * driving unit backward); tilt is relative, applied on top of whatever
+ * grade pose movement just seated. The envelope decays linearly to zero
+ * over `dur` and re-hits refresh it — sustained fire keeps the hull
+ * rocking instead of restarting it. Wrecks never hold entries (cleared on
+ * the kill), and movers never move: this is renderer-side only, restored
+ * exactly on expiry/clear, so drive/pathing/separation never see it.
+ */
+interface Nudge {
+  /** Seated body position the offsets decay back to (shifted by movement). */
   base: THREE.Vector3;
-  dir: THREE.Vector3;
-  t: number;
+  /** Full-strength positional offset at envelope 1 (world X/Z). */
+  ox: number;
+  oz: number;
+  /** Full-strength hull rock at envelope 1 (radians, YXZ pitch/roll). */
+  pitch: number;
+  roll: number;
+  /** Seconds since the kick (re-hits refresh to 0). */
+  age: number;
+  /** Seconds for the envelope to reach 0. */
+  dur: number;
+  /** Tilt applied last tick (subtracted before recomputing — exact). */
+  appliedPitch: number;
+  appliedRoll: number;
 }
 
+/** Attacker recoil: straight-back kick, world units at full envelope. */
+const RECOIL_KICK = 5;
+/** Attacker recoil envelope, seconds (snappy kick, faster than hit rock). */
+const RECOIL_DURATION = 0.28;
 const LIGHT_COUNT = 2;
 const FLASH_MAX_AGE = 0.35;
 /** Layered explosions live a beat longer than the old single flash. */
@@ -225,7 +259,7 @@ export class CombatFx {
   private shots: Shot[] = [];
   private flashes: Flash[] = [];
   private explosions: Explosion[] = [];
-  private recoils = new Map<number, Recoil>();
+  private nudges = new Map<number, Nudge>();
   private lights: THREE.PointLight[] = [];
   private fired = 0;
   /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
@@ -425,12 +459,22 @@ export class CombatFx {
     this.externalHull = driven;
   }
 
-  /** Nudge a stored recoil anchor so patrol motion never fights the kick. */
+  /**
+   * Current full-strength hit-reaction kick of a unit (zeros when unrocked),
+   * for tests/HUD. Pure recoil kicks read as zeros (straight shove, no rock).
+   */
+  impactAt(index: number): ImpactKick {
+    const nudge = this.nudges.get(index);
+    if (!nudge) return zeroImpact();
+    return { shoveX: nudge.ox, shoveZ: nudge.oz, pitch: nudge.pitch, roll: nudge.roll };
+  }
+
+  /** Nudge the stored seated base so patrol motion never fights the kicks. */
   shiftRecoilBase(index: number, dx: number, dz: number): void {
-    const recoil = this.recoils.get(index);
-    if (recoil) {
-      recoil.base.x += dx;
-      recoil.base.z += dz;
+    const nudge = this.nudges.get(index);
+    if (nudge) {
+      nudge.base.x += dx;
+      nudge.base.z += dz;
     }
   }
 
@@ -469,7 +513,7 @@ export class CombatFx {
     this.advanceShots(dt);
     this.advanceFlashes(dt);
     this.advanceExplosions(dt);
-    this.advanceRecoil(dt);
+    this.advanceNudges(dt);
     // Husks decay after every other pose (movement re-seats bodies and recoil
     // restores them above, so the sink must win last); smoke/embers ride the
     // sunk hulls and gutter out through the same decay fractions.
@@ -491,11 +535,15 @@ export class CombatFx {
     this.flashes = [];
     for (const ex of this.explosions) this.removeExplosion(ex);
     this.explosions = [];
-    for (const [index, recoil] of this.recoils) {
+    for (const [index, nudge] of this.nudges) {
       const child = this.units.children[index] as THREE.Group | undefined;
-      if (child) child.position.copy(recoil.base);
+      if (child) {
+        child.position.copy(nudge.base);
+        child.rotation.x -= nudge.appliedPitch;
+        child.rotation.z -= nudge.appliedRoll;
+      }
     }
-    this.recoils.clear();
+    this.nudges.clear();
     this.pending.clear();
     for (const light of this.lights) light.intensity = 0;
   }
@@ -554,11 +602,15 @@ export class CombatFx {
 
   /**
    * Splash a blast onto nearby hulls: accumulate core damage with linear
-   * falloff and char the touched bodies in place. Visual only — hulls are
-   * never moved (only recoil touches them). On graded ground the wash
-   * stretches the splash downhill and shields uphill hulls behind the rise.
-   * A hull crossing the kill threshold dies exactly once: an epic explosion
-   * at the hull, full char, and the `onUnitKilled` hook (movement hold,
+   * falloff and char the touched bodies in place. Every splash also rocks
+   * the hull with a directional nudge — a short shove away from the blast
+   * plus a hull-frame pitch/roll rock that decays back to the grade seat
+   * (flank hits rock harder, see core `impactKick`). Renderer-side only:
+   * movers never move, so drive/pathing/separation never see it. On graded
+   * ground the wash stretches the splash downhill and shields uphill hulls
+   * behind the rise. A hull crossing the kill threshold dies exactly once:
+   * its nudge settles first (wrecks hold still), then an epic explosion at
+   * the hull, full char, and the `onUnitKilled` hook (movement hold,
    * deselect) — the instance itself lingers as a decaying husk (see
    * `poseHusks`).
    */
@@ -577,17 +629,72 @@ export class CombatFx {
     for (const i of touched) {
       const body = bodies[i];
       if (body) applyUnitDamageTint(body, this.damage[i]!);
+      const added = this.damage[i]! - before[i]!;
+      if (body && added > 0 && !this.destroyed[i]) {
+        this.kickImpact(i, body, at, added);
+      }
       if (!this.destroyed[i] && !isDestroyed(before[i]!) && isDestroyed(this.damage[i]!)) {
         this.destroyed[i] = true;
         this.killedAt[i] = this.elapsed;
         this.deathCount += 1;
         const wreck = bodies[i];
         if (wreck) {
+          this.settleNudge(i, wreck);
           this.explodeDeath(new THREE.Vector3(wreck.position.x, wreck.position.y, wreck.position.z));
         }
         this.onUnitKilled?.(i);
       }
     }
+  }
+
+  /**
+   * Rock a live hull from a splash dealing `damageAdd`: shape the
+   * directional kick from the blast position against the hull yaw and stack
+   * it onto any standing nudge (re-hits refresh the decay envelope).
+   * Wrecks never rock — kills settle their entry first (see `settleNudge`).
+   */
+  private kickImpact(index: number, body: THREE.Group, at: THREE.Vector3, damageAdd: number): void {
+    const kick = impactKick(at.x, at.z, body.position.x, body.position.z, body.rotation.y, damageAdd);
+    if (kick.shoveX === 0 && kick.shoveZ === 0 && kick.pitch === 0 && kick.roll === 0) return;
+    const live = this.nudges.get(index);
+    if (live) {
+      const stacked = accumulateImpact(
+        { shoveX: live.ox, shoveZ: live.oz, pitch: live.pitch, roll: live.roll },
+        kick,
+      );
+      live.ox = stacked.shoveX;
+      live.oz = stacked.shoveZ;
+      live.pitch = stacked.pitch;
+      live.roll = stacked.roll;
+      live.age = 0;
+      live.dur = IMPACT_DURATION;
+      return;
+    }
+    this.nudges.set(index, {
+      base: body.position.clone(),
+      ox: kick.shoveX,
+      oz: kick.shoveZ,
+      pitch: kick.pitch,
+      roll: kick.roll,
+      age: 0,
+      dur: IMPACT_DURATION,
+      appliedPitch: 0,
+      appliedRoll: 0,
+    });
+  }
+
+  /**
+   * Settle a hull's nudge back to its seated pose and drop the entry:
+   * expiry, `clearTransients`, and the kill transition all restore exactly,
+   * so a rocked hull never keeps a lean and a wreck starts from its seat.
+   */
+  private settleNudge(index: number, body: THREE.Group): void {
+    const nudge = this.nudges.get(index);
+    if (!nudge) return;
+    body.position.copy(nudge.base);
+    body.rotation.x -= nudge.appliedPitch;
+    body.rotation.z -= nudge.appliedRoll;
+    this.nudges.delete(index);
   }
   /**
    * Sink and retire husks: every wreck lowers by the core sink for its decay
@@ -786,13 +893,23 @@ export class CombatFx {
   }
 
   private kickRecoil(index: number, body: THREE.Group, barrelDir: THREE.Vector3): void {
-    if (this.recoils.has(index)) return;
+    if (this.nudges.has(index)) return;
     // Recoil opposes the barrel: horizontal projection, normalized. A
     // high-lobbed shell still kicks the hull straight back, not downward.
     const dir = new THREE.Vector3(barrelDir.x, 0, barrelDir.z);
     if (dir.lengthSq() < 1e-6) dir.set(Math.sin(body.rotation.y), 0, Math.cos(body.rotation.y));
     dir.normalize();
-    this.recoils.set(index, { base: body.position.clone(), dir, t: 1 });
+    this.nudges.set(index, {
+      base: body.position.clone(),
+      ox: -dir.x * RECOIL_KICK,
+      oz: -dir.z * RECOIL_KICK,
+      pitch: 0,
+      roll: 0,
+      age: 0,
+      dur: RECOIL_DURATION,
+      appliedPitch: 0,
+      appliedRoll: 0,
+    });
   }
 
   private spawnFlash(
@@ -1233,20 +1350,44 @@ export class CombatFx {
     }
   }
 
-  private advanceRecoil(dt: number): void {
-    for (const [index, recoil] of this.recoils) {
+  /**
+   * Advance every hull nudge one step: recoil kicks and hit-reaction rocks
+   * share one entry map, so a hull is only ever posed from a single seated
+   * base (no fighting between systems) and every entry restores exactly on
+   * expiry. Position rides the base absolutely; tilt applies relatively on
+   * top of the grade pose movement just seated (un-applying last tick first
+   * keeps headless restores exact and live wobble bounded).
+   */
+  private advanceNudges(dt: number): void {
+    for (const [index, nudge] of this.nudges) {
       const child = this.units.children[index] as THREE.Group | undefined;
       if (!child) {
-        this.recoils.delete(index);
+        this.nudges.delete(index);
         continue;
       }
-      recoil.t -= dt / 0.28;
-      if (recoil.t <= 0) {
-        child.position.copy(recoil.base);
-        this.recoils.delete(index);
+      child.rotation.x -= nudge.appliedPitch;
+      child.rotation.z -= nudge.appliedRoll;
+      nudge.appliedPitch = 0;
+      nudge.appliedRoll = 0;
+      // Wrecks hold still: settle instead of rocking (covers white-box kills
+      // that bypass `damageUnits`; organic kills settle in the splash).
+      if (this.destroyed[index]) {
+        child.position.copy(nudge.base);
+        this.nudges.delete(index);
         continue;
       }
-      child.position.copy(recoil.base).addScaledVector(recoil.dir, -5 * recoil.t);
+      nudge.age += dt;
+      const k = 1 - nudge.age / nudge.dur;
+      if (k <= 0) {
+        child.position.copy(nudge.base);
+        this.nudges.delete(index);
+        continue;
+      }
+      child.position.set(nudge.base.x + nudge.ox * k, nudge.base.y, nudge.base.z + nudge.oz * k);
+      child.rotation.x += nudge.pitch * k;
+      child.rotation.z += nudge.roll * k;
+      nudge.appliedPitch = nudge.pitch * k;
+      nudge.appliedRoll = nudge.roll * k;
     }
   }
 }

@@ -226,7 +226,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // in graduated stages —
     // blast cores flatten trees to toppled/stump/snag and bury rocks, while
     // the fringe ignites burning → smouldering → terminal states with spread;
-    // units themselves are never moved by blasts.
+    // splashed units rock with a decaying directional nudge (renderer-side
+    // only — movers never move, so drive/pathing never see it).
     // Bilinear surface sampling (continuous across cell edges, so hulls,
     // scorch, and probes never pop by whole height steps mid-cell) tracking
     // the live exaggeration slider, minus the accumulated crater bowls.

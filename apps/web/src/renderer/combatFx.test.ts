@@ -790,8 +790,9 @@ describe("CombatFx destruction", () => {
     expect(fx.scorchCount).toBeGreaterThan(0);
     expect(calls.length).toBeGreaterThan(0);
     for (const c of calls) expect(c.radius).toBeGreaterThan(0);
-    // Units themselves are never moved by blasts (only recoil touches them,
-    // and clearTransients restores that).
+    // Blasts never move movers — hulls only rock with a decaying
+    // renderer-side nudge (recoil + hit reaction), and clearTransients
+    // settles that.
     expect(units.children.length).toBe(3);
     fx.dispose();
   });
