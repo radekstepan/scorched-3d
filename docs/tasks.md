@@ -16,20 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-A destroyed unit should leave behind a husk that slowly decays
+Waypoints when turned on look static, should show the path each unit is trying to take
 
-Units can walk through forest but much slower if they are destroying trees. The trees should fall and decay too.
+Add unit tests for all the core logic.
 
-Make the forest fires a bit more subtle and make them burn/smoulder for longer.
+When a unit gets hit, it should react to the impact. Physics of getting hit from a side.
 
-Be able to turn on waypoints for units that they want to walk in the View menu.
+Even when stationary the units should shake a tiny bit (engine running making the unit a little unstable)
 
-Move the panels like View and probe and Units further down so they don't cover up the TNT, tileset, grid information.
+A projectile flying through the trees has a chance of getting "stuck" along the way. The tanks should try to shoot higher up to avoid them.
 
-Be able to toggle an overhead "health" of a unit in the View
+When a unit is hoghlighted, it itself does not need to run blue.
 
-When an explosion happens on a gradient, the explosion is still "flat". It should respect the physics of the terrain and explain outwardly like it would in "real life".
-
-Be able to control pan and zoom speed with a slider.
-
-Add more interesting maps open to terrain battles like perhaps a river with a crossing(s) through a forest, plains etc.
+If a unit is obstructed from view by terrain or trees, show that part that's obstructed in a shade of blue as an outline so we can tell where the unit is.
