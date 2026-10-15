@@ -16,16 +16,24 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Waypoints when turned on look static, should show the path each unit is trying to take
+obstructed unit shold show its outline, and sligh transparent fill of where it is behind trees and such, NOT a rectangle around it.
 
-Add unit tests for all the core logic.
+Waypoints is wrong, I want to see the path the unit wants to take, not just waypoints.
 
-When a unit gets hit, it should react to the impact. Physics of getting hit from a side.
+When a unit is hit it should be slightly "stunned" and maybe it jerks back a bit away from the direction of the hit.
 
-Even when stationary the units should shake a tiny bit (engine running making the unit a little unstable)
+The subtle shake of a vehicle is distracting. The idea was to show the vehicle is "running" make it more believable. Subtle.
 
-A projectile flying through the trees has a chance of getting "stuck" along the way. The tanks should try to shoot higher up to avoid them.
+When a unit "dies" it should obviously expolode, then the charred hush should sink into the grand. Husk, not the full model. Make it look "exploded". Smoulder a bit. With tanks the turret should explode away and the body explode too. Similar with the other units. THink about how they should explode when they die.
 
-When a unit is hoghlighted, it itself does not need to run blue.
+Vehicles should leave (disappearing) tricks behind themselves as they move around. Make it subtle.
 
-If a unit is obstructed from view by terrain or trees, show that part that's obstructed in a shade of blue as an outline so we can tell where the unit is.
+When I zoom in using a scrollwheel it should naturally zoom onto the area under the cursor. Right now it does something unintuitive.
+
+Check for "hot loops" in the app and try to optimize them.
+
+AS projectors fly through the air, they should illuminate objects they are near to (trees, ground etc.)
+
+The turret itself should recoil a bit when shooting
+
+If a vehicle gets hit from a direction, it's more likely to move that way to pursue and fight back. If the attacking vehicle moves far away though, it should resume its patrolling. Try to be logical about this and implement an AAA RTS AI logic here.
