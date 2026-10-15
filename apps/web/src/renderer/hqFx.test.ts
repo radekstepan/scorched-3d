@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { HQ_MAX_SPAWNS, HQ_SPAWN_CYCLE, HQ_SPAWN_INTERVAL } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
+import { HQ_BEACON_PERIOD } from "./hq";
 import { HealthBars } from "./healthBars";
 import { foundationDepthOf, HQ_DOOR_TRAVEL, HQ_FOUNDATION_MARGIN } from "./hq";
 
@@ -160,6 +161,41 @@ describe("HqFx", () => {
     expect(bars.isHqShown(0)).toBe(false);
     expect(bars.isHqShown(1)).toBe(true);
     bars.dispose();
+    hq.dispose();
+  });
+
+  it("blinks the warning beacons in sync while the works stand", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    const lights = [hq.groupAt(0)!, hq.groupAt(1)!].map(
+      (g) => g.getObjectByName("hq-beacon-light") as THREE.PointLight,
+    );
+    // Fresh forts start lit.
+    expect(lights[0]!.intensity).toBeGreaterThan(0);
+    expect(lights[1]!.intensity).toBeGreaterThan(0);
+    // Advance into the dark half of the period: both go dark together.
+    hq.update(HQ_BEACON_PERIOD * 0.75);
+    expect(lights[0]!.intensity).toBe(0);
+    expect(lights[1]!.intensity).toBe(0);
+    // And back into the lit half a quarter period later.
+    hq.update(HQ_BEACON_PERIOD * 0.5);
+    expect(lights[0]!.intensity).toBeGreaterThan(0);
+    expect(lights[1]!.intensity).toBeGreaterThan(0);
+    hq.dispose();
+  });
+
+  it("kills the beacon on the wreck and keeps it dark", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    for (let n = 0; n < 40; n++) hq.splash(-1000, 0, "hammer", null);
+    expect(hq.isDestroyedAt(0)).toBe(true);
+    const light = hq.groupAt(0)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
+    expect(light.intensity).toBe(0);
+    // Ticks never re-light the wreck; the survivor keeps flashing.
+    hq.update(HQ_BEACON_PERIOD * 2);
+    expect(light.intensity).toBe(0);
+    const survivor = hq.groupAt(1)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
+    expect(survivor.intensity).toBeGreaterThan(0);
     hq.dispose();
   });
 });

@@ -16,8 +16,10 @@ import {
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
+  hqWarningBlinkAt,
   poseHqWreck,
   setDoorLift,
+  setHqBeaconLevel,
   setHqFoundation,
   HQ_DOOR_TRAVEL,
   type HqFacing,
@@ -34,7 +36,8 @@ import {
  * the reinforcement is released at the hall mouth the moment the door seats
  * fully open (facing the map center, so it drives straight out of the hall
  * and into the hunt pipeline), the door holds briefly, then slides shut.
- * A destroyed HQ slams its door, poses its wreck, and never releases again.
+ * A destroyed HQ slams its door, poses its wreck, kills its warning
+ * beacon, and never releases again.
  */
 
 /** Door slides up over this long, seconds. */
@@ -96,6 +99,8 @@ export class HqFx {
   private anim: number[] = [-1, -1];
   /** True once the running release fired `onSpawn`. */
   private released: boolean[] = [false, false];
+  /** Beacon flash clock: every live HQ blinks on this shared phase. */
+  private clock = 0;
   private env: HqEnv;
   private disposed = false;
 
@@ -111,6 +116,8 @@ export class HqFx {
       // surface under the footprint so the downhill side shows concrete
       // instead of an air gap (flat ground just buries them invisibly).
       setHqFoundation(group, hqFoundationDropWorld({ x: a.x, y: a.y, z: a.z }, facing, env.groundY));
+      // Warning beacons start lit — the first tick's blink takes over.
+      setHqBeaconLevel(group, 1);
       this.scene.add(group);
       this.groups.push(group);
       this.facings.push(facing);
@@ -227,10 +234,15 @@ export class HqFx {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
+    // Shared beacon phase: one cheap level write per live HQ (2 lights
+    // total, no shadows), so both works flash in sync while they stand.
+    this.clock += dt;
+    const blink = hqWarningBlinkAt(this.clock);
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
+      setHqBeaconLevel(group, blink);
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release starts the door).
         const state = this.spawns[i]!;

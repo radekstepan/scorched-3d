@@ -4,16 +4,26 @@ import {
   buildHq,
   doorLiftOf,
   foundationDepthOf,
+  getHqBeacon,
+  getHqBeaconLight,
   getHqDoor,
   hqDoorBaseY,
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
+  hqWarningBlinkAt,
   poseHqWreck,
   setDoorLift,
+  setHqBeaconLevel,
   setHqFoundation,
   HQ_BASE_D,
   HQ_BASE_W,
+  HQ_BEACON_COLOR,
+  HQ_BEACON_DISTANCE,
+  HQ_BEACON_PEAK,
+  HQ_BEACON_PERIOD,
+  HQ_BEACON_X,
+  HQ_BEACON_Y,
   HQ_DOOR_H,
   HQ_DOOR_TRAVEL,
   HQ_DOOR_W,
@@ -120,6 +130,77 @@ describe("buildHq", () => {
     const again = door.position.y;
     poseHqWreck(group);
     expect(door.position.y).toBe(again);
+  });
+});
+
+describe("hq warning beacon", () => {
+  it("mounts a red beacon dome + light on the top front, over the door", () => {
+    for (const team of [0, 1] as const) {
+      const group = buildHq(team);
+      const dome = getHqBeacon(group);
+      expect(dome, "beacon dome must exist").not.toBeNull();
+      // Top front of the building, centered over the entrance (z = 0).
+      expect(dome!.position.x).toBeCloseTo(HQ_BEACON_X, 9);
+      expect(dome!.position.x).toBeGreaterThan(0);
+      expect(dome!.position.y).toBeCloseTo(HQ_BEACON_Y, 9);
+      expect(dome!.position.y).toBeGreaterThan(4 + HQ_WALL_H);
+      expect(dome!.position.z).toBe(0);
+      expect(dome!.material).toBeInstanceOf(THREE.MeshLambertMaterial);
+      const mat = dome!.material as THREE.MeshLambertMaterial;
+      expect(mat.emissive.getHex()).toBe(HQ_BEACON_COLOR);
+      const light = getHqBeaconLight(group);
+      expect(light, "beacon light must exist").not.toBeNull();
+      expect(light!.isPointLight).toBe(true);
+      expect(light!.color.getHex()).toBe(HQ_BEACON_COLOR);
+      expect(light!.distance).toBe(HQ_BEACON_DISTANCE);
+      expect(light!.position.equals(dome!.position)).toBe(true);
+      // Guarded like every other factory surface.
+      expect(dome!.userData.noHighlight).toBe(true);
+    }
+  });
+
+  it("blinks square on a fixed period (pure function of time)", () => {
+    expect(hqWarningBlinkAt(0)).toBe(1);
+    expect(hqWarningBlinkAt(HQ_BEACON_PERIOD * 0.25)).toBe(1);
+    expect(hqWarningBlinkAt(HQ_BEACON_PERIOD * 0.5)).toBe(0);
+    expect(hqWarningBlinkAt(HQ_BEACON_PERIOD * 0.75)).toBe(0);
+    // Wraps every period.
+    expect(hqWarningBlinkAt(HQ_BEACON_PERIOD)).toBe(1);
+    expect(hqWarningBlinkAt(HQ_BEACON_PERIOD * 2.5)).toBe(0);
+    // Degenerate input reads lit (start bright, never dark by accident).
+    expect(hqWarningBlinkAt(-1)).toBe(1);
+  });
+
+  it("drives the lens + wash light from the level, clamped", () => {
+    const group = buildHq(0);
+    setHqBeaconLevel(group, 1);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK, 9);
+    setHqBeaconLevel(group, 0);
+    expect(getHqBeaconLight(group)!.intensity).toBe(0);
+    const mat = getHqBeacon(group)!.material as THREE.MeshLambertMaterial;
+    const darkEmissive = mat.emissiveIntensity;
+    setHqBeaconLevel(group, 1);
+    expect((getHqBeacon(group)!.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeGreaterThan(
+      darkEmissive,
+    );
+    // Clamped, never negative or over peak.
+    setHqBeaconLevel(group, 99);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK, 9);
+    setHqBeaconLevel(group, -99);
+    expect(getHqBeaconLight(group)!.intensity).toBe(0);
+  });
+
+  it("kills the beacon with the wreck and never re-lights", () => {
+    const group = buildHq(0);
+    poseHqWreck(group);
+    expect(getHqBeaconLight(group)!.intensity).toBe(0);
+    const mat = getHqBeacon(group)!.material as THREE.MeshLambertMaterial;
+    expect(mat.emissive.getHex()).toBe(0x000000);
+    expect(mat.emissiveIntensity).toBe(0);
+    // Even a full-flash drive stays dark once wrecked.
+    setHqBeaconLevel(group, 1);
+    expect(getHqBeaconLight(group)!.intensity).toBe(0);
+    expect((getHqBeacon(group)!.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(0x000000);
   });
 });
 

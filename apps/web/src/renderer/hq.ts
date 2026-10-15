@@ -12,7 +12,9 @@ import { buildTeamRing } from "./units";
  * door with gate lamps under a canopy. Built from plain Lambert boxes and
  * cylinders (no new materials per frame — everything is created once in
  * `buildHq`), so the door animation is a single position write per tick
- * and the wreck pose is a one-time recolor.
+ * and the wreck pose is a one-time recolor. A red warning beacon on the
+ * canopy front edge (emissive dome + one cheap PointLight) blinks while
+ * the works stands as the "working building" signal and dies with it.
  *
  * Local frame: the door faces +X. The canvas mirrors team 1 (east) so its
  * door faces the map center (-X world).
@@ -40,6 +42,18 @@ export const HQ_EXIT_OFFSET = 48 + HQ_HALL_LEN;
 /** Concrete + dark trim palette (team color comes from TEAM_DEFS). */
 export const HQ_CONCRETE = 0x6b6f75;
 export const HQ_DARK = 0x3a3d42;
+/** Red warning-beacon lens color: the "working building" signal. */
+export const HQ_BEACON_COLOR = 0xff2a1a;
+/** Flash cycle of the warning beacon, seconds (square blink, 50% duty). */
+export const HQ_BEACON_PERIOD = 1.4;
+export const HQ_BEACON_DUTY = 0.5;
+/** Beacon PointLight peak intensity (physical falloff, combat-pool order). */
+export const HQ_BEACON_PEAK = 900;
+/** Beacon falloff range: washes the canopy + door apron, nothing more. */
+export const HQ_BEACON_DISTANCE = 170;
+/** Beacon dome seat, local frame (mast on the canopy front edge, over the door). */
+export const HQ_BEACON_X = 58;
+export const HQ_BEACON_Y = 41.8;
 /**
  * Default footing depth under the slab/hall (world units, straight down
  * from the slab underside at local y=0). `HqFx` re-sizes both footings per
@@ -178,6 +192,30 @@ export function buildHq(team: TeamId): THREE.Group {
   door.userData.baseY = door.position.y;
   tag(door);
 
+  // Warning beacon on the canopy front edge, centered over the door: a
+  // short mast + collar with a red emissive dome (`hq-beacon`) and one
+  // cheap no-shadow PointLight (`hq-beacon-light`) that washes the canopy
+  // and door apron. The flash reads as a "working building" signal; the
+  // HqFx tick blinks it via `setHqBeaconLevel`, wrecks kill it for good.
+  tag(hqBox(group, 2, 7, 2, HQ_BEACON_X, 36.5, 0, HQ_DARK));
+  tag(hqBox(group, 4, 1, 4, HQ_BEACON_X, 40.2, 0, HQ_DARK));
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(2, 12, 10),
+    new THREE.MeshLambertMaterial({
+      color: HQ_BEACON_COLOR,
+      emissive: HQ_BEACON_COLOR,
+      emissiveIntensity: 2.2,
+    }),
+  );
+  dome.name = "hq-beacon";
+  dome.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
+  tag(dome);
+  group.add(dome);
+  const beaconLight = new THREE.PointLight(HQ_BEACON_COLOR, HQ_BEACON_PEAK, HQ_BEACON_DISTANCE, 1.8);
+  beaconLight.name = "hq-beacon-light";
+  beaconLight.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
+  group.add(beaconLight);
+
   // Open hall toward the map center: floor strip + low guide curbs the
   // reinforcement drives between on its way out.
   const hallCx = 48 + HQ_HALL_LEN / 2;
@@ -204,6 +242,56 @@ export function buildHq(team: TeamId): THREE.Group {
 /** Sliding door of an HQ group, or null (plain test groups). */
 export function getHqDoor(group: THREE.Group): THREE.Mesh | null {
   return (group.getObjectByName("hq-door") as THREE.Mesh | undefined) ?? null;
+}
+
+/** Warning-beacon dome of an HQ group, or null (plain test groups). */
+export function getHqBeacon(group: THREE.Group): THREE.Mesh | null {
+  return (group.getObjectByName("hq-beacon") as THREE.Mesh | undefined) ?? null;
+}
+
+/** Warning-beacon light of an HQ group, or null (plain test groups). */
+export function getHqBeaconLight(group: THREE.Group): THREE.PointLight | null {
+  return (group.getObjectByName("hq-beacon-light") as THREE.PointLight | undefined) ?? null;
+}
+
+/**
+ * Beacon flash level `timeS` seconds into the loop: 1 for the first duty
+ * half of each period, 0 for the rest. Pure, so headless tests can pin the
+ * blink without a scene. Non-finite/negative time reads lit (start bright).
+ */
+export function hqWarningBlinkAt(timeS: number): number {
+  if (!isFinite(timeS) || timeS < 0) return 1;
+  const phase = (timeS % HQ_BEACON_PERIOD) / HQ_BEACON_PERIOD;
+  return phase < HQ_BEACON_DUTY ? 1 : 0;
+}
+
+/**
+ * Drive the beacon to `level` 0..1 (clamped): the dome lens burns hot at
+ * full flash and falls back to a faint lens when dark, while the PointLight
+ * scales to its peak so the canopy + door apron wash pulses with it. A
+ * wrecked HQ stays dark — wrecks never re-light.
+ */
+export function setHqBeaconLevel(group: THREE.Group, level: number): void {
+  if (group.userData.hqWrecked) {
+    const dome = getHqBeacon(group);
+    const mat = dome?.material as THREE.MeshLambertMaterial | undefined;
+    if (dome && mat && "emissive" in mat) {
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+    }
+    const light = getHqBeaconLight(group);
+    if (light) light.intensity = 0;
+    return;
+  }
+  const l = Math.min(Math.max(level, 0), 1);
+  const dome = getHqBeacon(group);
+  const mat = dome?.material as THREE.MeshLambertMaterial | undefined;
+  if (dome && mat && "emissive" in mat) {
+    mat.emissive.setHex(HQ_BEACON_COLOR);
+    mat.emissiveIntensity = 0.12 + 2.2 * l;
+  }
+  const light = getHqBeaconLight(group);
+  if (light) light.intensity = l * HQ_BEACON_PEAK;
 }
 
 /** Seated door height (slab top + half door), for tests. */
@@ -324,4 +412,9 @@ export function poseHqWreck(group: THREE.Group): void {
       child.rotation.z = 0.14;
     }
   }
+  // The warning beacon dies with the works: the char pass above already
+  // darkened the lens color, but its red emissive would keep glowing, so
+  // kill the lens and the wash light outright (and the wrecked flag keeps
+  // `setHqBeaconLevel` from ever re-lighting it).
+  setHqBeaconLevel(group, 0);
 }
