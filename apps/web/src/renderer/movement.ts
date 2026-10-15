@@ -117,6 +117,15 @@ export class UnitMovement {
     return mover ? hasOrder(mover) : false;
   }
 
+  /**
+   * Unit kind per index, for driven-path prediction (per-kind speed and
+   * turn rate shape the arcs). Falls back to flash for unknown indices so
+   * headless tests can drive without a roster.
+   */
+  kindAt(index: number): UnitKind {
+    return this.kinds[index] ?? "flash";
+  }
+
   /** True once the unit has died and holds as a wreck. */
   isDestroyed(index: number): boolean {
     return this.destroyed[index] ?? false;

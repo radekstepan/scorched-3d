@@ -49,6 +49,21 @@ function makeFx(routeSet: RoutePoint[][] = routes(), lift = () => 100) {
   return { scene, fx };
 }
 
+/** Shortest distance from a point to a polyline (for corner-cut asserts). */
+function distToPoly(p: RoutePoint, poly: readonly RoutePoint[]): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i]!;
+    const b = poly[i + 1]!;
+    const abx = b.x - a.x;
+    const abz = b.z - a.z;
+    const len2 = abx * abx + abz * abz;
+    const t = len2 > 0 ? Math.min(1, Math.max(0, ((p.x - a.x) * abx + (p.z - a.z) * abz) / len2)) : 0;
+    best = Math.min(best, Math.hypot(p.x - (a.x + abx * t), p.z - (a.z + abz * t)));
+  }
+  return best;
+}
+
 describe("waypoint route helpers", () => {
   it("flags coincident hold routes and healthy loops", () => {
     expect(isHoldingRoute([])).toBe(true);
@@ -159,7 +174,7 @@ describe("WaypointFx", () => {
     fx2.dispose();
   });
 
-  it("tracks the remaining order path and hides it on arrival", () => {
+  it("tracks the driven order path and hides it on arrival", () => {
     const { fx } = makeFx();
     const ordered = orderMover(moverAt(0, 0), [
       { x: 100, z: 0 },
@@ -167,9 +182,17 @@ describe("WaypointFx", () => {
     ]);
     fx.update(fakeMovement([ordered, moverAt(600, 600)]), 2);
     const pts = fx.orderPoints(0);
-    expect(pts).toHaveLength(3);
+    // The driven line samples the steering (many points), starting at the
+    // hull and ending inside the arrival radius of the destination.
+    expect(pts.length).toBeGreaterThan(3);
     expect(pts[0]!.x).toBeCloseTo(0, 9);
-    expect(pts[2]!.x).toBeCloseTo(200, 9);
+    expect(pts[0]!.z).toBeCloseTo(0, 9);
+    const last = pts[pts.length - 1]!;
+    expect(Math.hypot(last.x - 200, last.z - 0)).toBeLessThanOrEqual(14);
+    // The destination diamond still pins the true ordered point.
+    const marker = (fx as unknown as { orders: { marker: THREE.Mesh }[] }).orders[0]!.marker;
+    expect(marker.position.x).toBeCloseTo(200, 9);
+    expect(marker.position.z).toBeCloseTo(0, 9);
     expect(fx.orderPoints(1)).toEqual([]);
     // Arrival clears the order: the line hides.
     fx.update(fakeMovement([moverAt(200, 0), moverAt(600, 600)]), 2);
@@ -193,23 +216,59 @@ describe("WaypointFx", () => {
     fx.dispose();
   });
 
-  it("draws a live patrol trail from the hull through the upcoming loop", () => {
+  it("draws the driven patrol path from the hull, not the waypoint chords", () => {
     const { fx } = makeFx();
-    const mover = { ...moverAt(50, 60), leg: 2 };
+    // Crosswise hull: facing +X while the leg runs to (400, 400), so the
+    // grip steers a visible arc off the straight chord.
+    const mover = { ...moverAt(50, 60), hull: Math.PI / 2, leg: 2 };
     fx.update(fakeMovement([mover, moverAt(600, 600)]), 2, 1.5);
     expect(fx.trailMode(0)).toBe("patrol");
+    const trail = fx.trailPoints(0);
+    expect(trail.length).toBeGreaterThan(4);
+    expect(trail[0]).toEqual({ x: 50, z: 60 });
     const route = routes()[0]!;
-    expect(fx.trailPoints(0)).toEqual([
-      { x: 50, z: 60 },
-      route[2],
-      route[3],
-      route[0],
-      route[1],
-    ]);
+    // The driven loop still visits every upcoming waypoint's neighbourhood.
+    for (const wp of route) {
+      expect(trail.some((p) => Math.hypot(p.x - wp.x, p.z - wp.z) < 14 + 30)).toBe(true);
+    }
+    // ...but it cuts corners instead of tracing the waypoint chords.
+    const straight = remainingPatrolPoints(mover, route);
+    const cut = Math.max(...trail.map((p) => distToPoly(p, straight)));
+    expect(cut).toBeGreaterThan(5);
     // The tracer rides the trail and the next waypoint reads larger.
     expect(fx.flowPosition(0)).not.toBe(null);
     const dots = (fx as unknown as { patrol: { dots: THREE.Mesh[] }[] }).patrol[0]!.dots;
     expect(dots[2]!.scale.x).toBeGreaterThan(dots[0]!.scale.x);
+    fx.dispose();
+  });
+
+  it("shapes the driven arc by unit kind", () => {
+    const mover = { ...moverAt(0, 0), hull: Math.PI / 2, leg: 1 };
+    const drive = (kind: "flash" | "hammer") => {
+      const { fx } = makeFx();
+      fx.update({ ...fakeMovement([mover]), kindAt: () => kind }, 1, 0);
+      const pts = fx.trailPoints(0);
+      fx.dispose();
+      return pts;
+    };
+    const flash = drive("flash");
+    const hammer = drive("hammer");
+    expect(flash.length).toBeGreaterThan(4);
+    expect(hammer.length).toBeGreaterThan(4);
+    // Same live state, different speed/turn profiles: different arcs.
+    expect(flash).not.toEqual(hammer);
+  });
+
+  it("freezes live lines while hidden and repaints on toggle", () => {
+    const { fx } = makeFx();
+    fx.update(fakeMovement([moverAt(0, 0), moverAt(600, 600)]), 2, 1.5);
+    const before = fx.trailPoints(0);
+    expect(before.length).toBeGreaterThan(0);
+    fx.setVisible(false);
+    fx.update(fakeMovement([moverAt(300, 300), moverAt(600, 600)]), 2, 2.5);
+    expect(fx.trailPoints(0)).toEqual(before);
+    fx.setVisible(true);
+    expect(fx.trailPoints(0)[0]).toEqual({ x: 300, z: 300 });
     fx.dispose();
   });
 
@@ -223,7 +282,11 @@ describe("WaypointFx", () => {
     expect(fx.hasPatrol(0)).toBe(false);
     expect(fx.trailMode(0)).toBe("order");
     expect(fx.trailPoints(0)).toEqual([]);
-    expect(fx.orderPoints(0)).toHaveLength(3);
+    const driven = fx.orderPoints(0);
+    expect(driven.length).toBeGreaterThan(3);
+    expect(driven[0]!.x).toBeCloseTo(0, 9);
+    const end = driven[driven.length - 1]!;
+    expect(Math.hypot(end.x - 200, end.z - 0)).toBeLessThanOrEqual(14);
     expect(fx.flowPosition(0)).not.toBe(null);
     const flow = (fx as unknown as { flows: THREE.Mesh[] }).flows[0]!;
     expect((flow.material as THREE.MeshBasicMaterial).color.getHex()).toBe(0xfbbf24);

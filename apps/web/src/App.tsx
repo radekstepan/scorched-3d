@@ -244,9 +244,9 @@ export default function App() {
             Patrolling TA roster, re-routed on every regen. Dark-brown patches
             are blast scorch — old impact scars, not mud. Selected units carry
             a white/cyan ring + beacon; hulls keep their normal paint —
-            selection never tints the hull. The Waypoints overlay traces each
-            unit's live path — slate loop + travelling marker for patrols,
-            amber for ordered moves.
+            selection never tints the hull. The Waypoints overlay traces the
+            line each unit will actually drive — slate for patrols, amber for
+            ordered moves — plus a travelling marker.
             {selected.length > 0 ? (
               <span className="text-amber-200">
                 {" "}

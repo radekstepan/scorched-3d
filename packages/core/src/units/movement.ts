@@ -488,6 +488,99 @@ export function advanceMovers(
 }
 
 /**
+ * Simulation step for driven-path prediction, seconds. A quarter second
+ * keeps turn arcs visibly curved (a flash yaws 2 rad/s, so ~0.5 rad per
+ * step) without costing much: the overlay re-simulates every tick.
+ */
+export const PREDICT_STEP = 0.25;
+/**
+ * Simulation cap per prediction: 80 s of drive at the default step, enough
+ * for a full patrol loop on live maps. Longer loops truncate (the faint
+ * static loop still shows the full context); reached destinations stop
+ * early, so orders rarely run the whole budget.
+ */
+export const PREDICT_MAX_STEPS = 320;
+/**
+ * Stalled steps before a prediction gives up: a pinned ordered hull reads as
+ * "can't climb that" (the trail ends at the wall) instead of burning the
+ * whole budget. Patrol skips free themselves inside 2.5 s
+ * (`BLOCKED_SKIP_AFTER`, 10 steps), so a longer stall means every leg is
+ * pinned and the trail honestly ends where the hull sits.
+ */
+export const PREDICT_STALL_STEPS = 24;
+/** Motion below this (world units per step) reads as pinned, not driving. */
+export const PREDICT_PROGRESS = 0.5;
+
+/**
+ * Predict the polyline a hull will actually drive: simulate `advanceMover`
+ * forward from the live state — hull turn-rate caps, alignment grip, rough
+ * drag, and terrain gating included — so corners read as arcs and walls
+ * read as stops instead of straight waypoint chords. Orders run to
+ * arrival-hold; patrols run until the leg wraps once around the loop.
+ * Spacing/separation from other hulls is deliberately excluded (spacing 1):
+ * this is intent, not traffic. Wood crush is excluded too (it would mutate
+ * the caller's damage field), so forest lanes predict at full speed. Pure:
+ * the input mover and the terrain are never mutated.
+ */
+export function predictDrivenPath(
+  kind: UnitKind,
+  mover: Mover,
+  route: readonly RoutePoint[],
+  terrain?: SeatField | null,
+  step = PREDICT_STEP,
+  maxSteps = PREDICT_MAX_STEPS,
+): RoutePoint[] {
+  if (!(step > 0) || !(maxSteps > 0)) return [];
+  const ordered = hasOrder(mover);
+  if (!ordered) {
+    if (mover.hold || route.length < 2) return [];
+    const first = route[0]!;
+    let spread = false;
+    for (const p of route) {
+      const dx = p.x - first.x;
+      const dz = p.z - first.z;
+      if (dx * dx + dz * dz > ARRIVE_RADIUS * ARRIVE_RADIUS) {
+        spread = true;
+        break;
+      }
+    }
+    if (!spread) return [];
+  } else if (!mover.order || mover.order.points.length === 0) {
+    return [];
+  }
+  const n = route.length;
+  const startLeg = ordered || n === 0 ? -1 : ((mover.leg % n) + n) % n;
+  // The order points are shared read-only: `advanceMover` never mutates them.
+  let sim: Mover = {
+    ...mover,
+    order: mover.order ? { at: mover.order.at, points: mover.order.points } : undefined,
+  };
+  const pts: RoutePoint[] = [{ x: sim.x, z: sim.z }];
+  let looped = false;
+  let stall = 0;
+  const total = Math.floor(maxSteps);
+  // `advanceMover` takes a mutable route array but never writes it.
+  const legs = route as RoutePoint[];
+  for (let s = 0; s < total; s++) {
+    const px = sim.x;
+    const pz = sim.z;
+    sim = advanceMover(kind, sim, legs, step, 1, terrain ?? null);
+    if (Math.hypot(sim.x - px, sim.z - pz) > PREDICT_PROGRESS) {
+      pts.push({ x: sim.x, z: sim.z });
+      stall = 0;
+    } else if (++stall >= PREDICT_STALL_STEPS) {
+      break;
+    }
+    if (hasOrder(sim)) continue;
+    if (ordered) break; // Arrival-hold: the driven path ends at the destination.
+    const leg = ((sim.leg % n) + n) % n;
+    if (leg !== startLeg) looped = true;
+    else if (looped) break;
+  }
+  return pts;
+}
+
+/**
  * Lateral separation steering: push hulls inside `SEPARATION_RADIUS` apart
  * along their pair axes (plus a perpendicular sidestep so head-on crossings
  * open a passing lane instead of backing up into each other), so mutually

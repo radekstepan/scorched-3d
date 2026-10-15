@@ -1,6 +1,13 @@
 import * as THREE from "three";
-import { ARRIVE_RADIUS, hasOrder, type Mover, type RoutePoint } from "@scorched-3d/core";
-import type { UnitMovement } from "./movement";
+import {
+  ARRIVE_RADIUS,
+  hasOrder,
+  predictDrivenPath,
+  type Mover,
+  type RoutePoint,
+  type SeatField,
+  type UnitKind,
+} from "@scorched-3d/core";
 
 /**
  * Waypoint overlay for the View menu: each live unit's looping patrol route
@@ -9,15 +16,17 @@ import type { UnitMovement } from "./movement";
  *
  * Patrol loops are static per regen (re-seated on exaggeration change); the
  * live path each unit is actually trying to take redraws per tick — the
- * remaining order tail in amber for ordered units, otherwise the remaining
- * patrol loop (live position through the upcoming waypoints, wrapping around)
- * in bright slate — with an animated tracer diamond flowing along it so the
- * overlay reads direction at a glance. The next patrol waypoint's diamond
- * scales up to mark the current leg. Wrecks and holders show nothing (they
- * hold forever), degenerate hold-routes (all waypoints coincident) show no
- * patrol, and ordered units hide their patrol loop so the overlay never
- * promises two futures at once. Owns one `THREE.Group` in the scene;
- * `dispose()` removes it and frees GPU resources.
+ * driven line the hull will really follow (simulated forward through the
+ * same turn-rate caps, alignment grip, and terrain gating the movers drive,
+ * so corners read as arcs and walls read as stops instead of straight
+ * waypoint chords), amber for orders and bright slate for patrols — with an
+ * animated tracer diamond flowing along it so the overlay reads direction
+ * at a glance. The next patrol waypoint's diamond scales up to mark the
+ * current leg. Wrecks and holders show nothing (they hold forever),
+ * degenerate hold-routes (all waypoints coincident) show no patrol, and
+ * ordered units hide their patrol loop so the overlay never promises two
+ * futures at once. Owns one `THREE.Group` in the scene; `dispose()` removes
+ * it and frees GPU resources.
  */
 
 export const WAYPOINT_PATROL_COLOR = 0xe2e8f0;
@@ -38,6 +47,19 @@ export const WAYPOINT_NEXT_SCALE = 1.7;
 export interface WaypointEnv {
   /** Terrain surface height at world (x, z), tracking live exaggeration. */
   groundY: (x: number, z: number) => number;
+  /**
+   * Static heightfield for driven-path prediction (terrain gating), so the
+   * trail refuses the same slopes the hulls refuse. Absent, trails still
+   * curve through turn arcs — just without the wall stops.
+   */
+  field?: SeatField | null;
+}
+
+/** Movement state the overlay reads: kinds are optional (default flash). */
+export interface WaypointMovement {
+  moverState(index: number): Mover | null;
+  isDestroyed(index: number): boolean;
+  kindAt?(index: number): UnitKind;
 }
 
 /** True when every waypoint sits on the same spot (a holding unit). */
@@ -131,6 +153,7 @@ export class WaypointFx {
   private visible = true;
   private lastMovers: Mover[] = [];
   private lastDestroyed: boolean[] = [];
+  private lastKinds: UnitKind[] = [];
   private lastTime = 0;
   private disposed = false;
 
@@ -191,23 +214,32 @@ export class WaypointFx {
   }
 
   /** Per-tick refresh of live paths from movement state. */
-  update(movement: Pick<UnitMovement, "moverState" | "isDestroyed">, count: number, time = 0): void {
+  update(movement: WaypointMovement, count: number, time = 0): void {
     if (this.disposed) return;
     this.lastTime = time;
     this.lastMovers = [];
     this.lastDestroyed = [];
+    this.lastKinds = [];
     for (let i = 0; i < count; i++) {
       const mover = movement.moverState(i);
       if (!mover) continue;
       this.lastMovers[i] = mover;
       this.lastDestroyed[i] = movement.isDestroyed(i);
+      this.lastKinds[i] = movement.kindAt?.(i) ?? "flash";
     }
+    // Overlay off: stash state for the toggle but skip the per-tick
+    // re-simulation (predictions cost up to hundreds of drive steps each).
+    if (!this.visible) return;
     this.refreshLive();
     this.applyVisibility();
   }
 
   setVisible(visible: boolean): void {
+    const was = this.visible;
     this.visible = visible;
+    // Toggling on repaints immediately from the stashed movers instead of
+    // waiting a tick, so the overlay reads as instant.
+    if (visible && !was) this.refreshLive();
     this.applyVisibility();
   }
 
@@ -324,8 +356,9 @@ export class WaypointFx {
       marker.renderOrder = WAYPOINT_RENDER_ORDER + 1;
       this.group.add(marker);
       this.orders.push({ line: orderLine, marker });
-      // Live patrol trail: rebuilt per tick from the mover's live position
-      // through its upcoming loop. One line + one tracer per unit is trivial
+      // Live patrol trail: rebuilt per tick from the driven-path prediction
+      // (live position through the arcs the hull will really steer), not the
+      // straight waypoint chords. One line + one tracer per unit is trivial
       // next to the per-frame combat/scene work (roster is ~6 hulls).
       const trailGeo = new THREE.BufferGeometry();
       trailGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
@@ -378,75 +411,88 @@ export class WaypointFx {
     });
   }
 
+  /**
+   * The polyline a hull will actually drive: the core forward simulation
+   * (turn arcs, terrain gating) with a straight waypoint-tail fallback when
+   * the prediction stalls on its first step (e.g. a hull ordered into a
+   * wall pins immediately) — the overlay still promises exactly one future
+   * per active hull. The fallback cannot be degenerate here: callers only
+   * ask while the mode is live, and both tail helpers return ≥2 points then.
+   */
+  private livePath(index: number, mover: Mover, route: RoutePoint[], mode: "order" | "patrol"): RoutePoint[] {
+    const predicted = predictDrivenPath(
+      this.lastKinds[index] ?? "flash",
+      mover,
+      route,
+      this.env.field ?? null,
+    );
+    if (predicted.length >= 2) return predicted;
+    return mode === "order" ? remainingOrderPoints(mover) : remainingPatrolPoints(mover, route);
+  }
+
   /** Rebuild live order tails, patrol trails, and tracer positions. */
   private refreshLive(): void {
     this.refreshPatrolVisibility();
-    this.orders.forEach((order, i) => {
-      const mover = this.lastMovers[i];
-      const destroyed = this.lastDestroyed[i] ?? false;
-      const pts = mover && !destroyed ? remainingOrderPoints(mover) : [];
-      if (pts.length < 2) {
-        order.line.visible = false;
-        order.marker.visible = false;
-        return;
-      }
-      const positions = new Float32Array(pts.length * 3);
-      pts.forEach((p, j) => {
-        positions[j * 3] = p.x;
-        positions[j * 3 + 1] = this.env.groundY(p.x, p.z) + WAYPOINT_LIFT + 1;
-        positions[j * 3 + 2] = p.z;
-      });
-      order.line.geometry.dispose();
-      order.line.geometry = new THREE.BufferGeometry();
-      order.line.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      order.line.visible = true;
-      const dest = pts[pts.length - 1]!;
-      order.marker.position.set(dest.x, this.env.groundY(dest.x, dest.z) + WAYPOINT_LIFT + 1, dest.z);
-      order.marker.visible = true;
-    });
-    this.trails.forEach((trail, i) => {
-      const mover = this.lastMovers[i];
-      const destroyed = this.lastDestroyed[i] ?? false;
+    for (let i = 0; i < this.orders.length; i++) {
+      const entry = this.orders[i]!;
+      const trail = this.trails[i]!;
       const flow = this.flows[i];
+      const mover = this.lastMovers[i];
+      const destroyed = this.lastDestroyed[i] ?? false;
       const route = this.routes[i];
-      const pts =
-        mover && !destroyed && route && activeTrailMode(mover, route) === "patrol"
-          ? remainingPatrolPoints(mover, route)
-          : [];
+      const mode = mover && !destroyed && route ? activeTrailMode(mover, route) : null;
+      const pts = mode ? this.livePath(i, mover!, mode === "patrol" ? route! : [], mode) : [];
+      if (mode === "order" && pts.length >= 2) {
+        this.paintLine(entry.line, pts, WAYPOINT_LIFT + 1);
+        entry.line.visible = true;
+        // The marker pins the true destination: the driven line may stop
+        // short of it (arrival radius, or a wall it cannot climb).
+        const dest =
+          mover?.order && mover.order.points.length > 0
+            ? mover.order.points[mover.order.points.length - 1]!
+            : pts[pts.length - 1]!;
+        entry.marker.position.set(dest.x, this.env.groundY(dest.x, dest.z) + WAYPOINT_LIFT + 1, dest.z);
+        entry.marker.visible = true;
+      } else {
+        entry.line.visible = false;
+        entry.marker.visible = false;
+      }
       if (!flow) {
         trail.visible = false;
-        return;
+        continue;
       }
       const flowMat = flow.material as THREE.MeshBasicMaterial;
-      if (pts.length < 2) {
+      if (mode === "patrol" && pts.length >= 2) {
+        this.paintLine(trail, pts, WAYPOINT_LIFT + 1);
+        trail.visible = true;
+        flowMat.color.setHex(WAYPOINT_TRAIL_COLOR);
+        this.placeFlow(flow, pts, i);
+      } else {
         trail.visible = false;
-        // Ordered units still get a tracer — amber, riding the order tail —
-        // so every live path animates in its own color.
-        const ordered =
-          mover && !destroyed && route && activeTrailMode(mover, route) === "order"
-            ? remainingOrderPoints(mover)
-            : [];
-        if (ordered.length >= 2) {
+        // Ordered units still get a tracer — amber, riding the driven order
+        // line — so every live path animates in its own color.
+        if (mode === "order" && pts.length >= 2) {
           flowMat.color.setHex(WAYPOINT_ORDER_COLOR);
-          this.placeFlow(flow, ordered, i);
+          this.placeFlow(flow, pts, i);
         } else {
           flow.visible = false;
         }
-        return;
       }
-      const positions = new Float32Array(pts.length * 3);
-      pts.forEach((p, j) => {
-        positions[j * 3] = p.x;
-        positions[j * 3 + 1] = this.env.groundY(p.x, p.z) + WAYPOINT_LIFT + 1;
-        positions[j * 3 + 2] = p.z;
-      });
-      trail.geometry.dispose();
-      trail.geometry = new THREE.BufferGeometry();
-      trail.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      trail.visible = true;
-      flowMat.color.setHex(WAYPOINT_TRAIL_COLOR);
-      this.placeFlow(flow, pts, i);
+    }
+  }
+
+  /** Fill a live line's geometry from a path, re-seated on the terrain. */
+  private paintLine(line: THREE.Line, pts: RoutePoint[], lift: number): void {
+    const positions = new Float32Array(pts.length * 3);
+    pts.forEach((p, j) => {
+      positions[j * 3] = p.x;
+      positions[j * 3 + 1] = this.env.groundY(p.x, p.z) + lift;
+      positions[j * 3 + 2] = p.z;
     });
+    line.geometry.dispose();
+    line.geometry = new THREE.BufferGeometry();
+    line.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    line.visible = true;
   }
 
   /** Park a tracer `distance`-along its path (loops forever), re-seated. */

@@ -355,8 +355,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     });
     combat.setExternalHull(true);
     // Waypoint overlay (View menu): static patrol loops per regen plus the
-    // live remaining order path per unit, re-seated with the terrain.
-    const waypoints = new WaypointFx(scene, routes, { groundY });
+    // live driven path per unit (turn arcs + terrain gating included),
+    // re-seated with the terrain.
+    const waypoints = new WaypointFx(scene, routes, { groundY, field: map });
     waypoints.setVisible(optsRef.current.showWaypoints);
     // Overhead health bars (View menu): billboarded per-unit bars reading
     // live CombatFx damage, re-seated every tick from the body origins.

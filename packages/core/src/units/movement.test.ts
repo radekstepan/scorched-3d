@@ -13,6 +13,7 @@ import {
   MOVE_SPEED,
   orderMover,
   planRoutes,
+  predictDrivenPath,
   ROUTE_WAYPOINTS,
   sampleGround,
   separationVector,
@@ -711,5 +712,82 @@ describe("rough-terrain drag", () => {
         }
       }
     }
+  });
+});
+
+describe("predictDrivenPath", () => {
+  it("stays silent for holders, hold-routes, and empty orders", () => {
+    const route = flatRoute();
+    const held: Mover = { x: 0, z: 0, hull: 0, leg: 1, hold: true };
+    expect(predictDrivenPath("flash", held, route)).toEqual([]);
+    const holdRoute: RoutePoint[] = [
+      { x: 5, z: 5 },
+      { x: 5, z: 5 },
+    ];
+    expect(predictDrivenPath("flash", { x: 5, z: 5, hull: 0, leg: 1 }, holdRoute)).toEqual([]);
+    expect(predictDrivenPath("flash", { x: 0, z: 0, hull: 0, leg: 0 }, [])).toEqual([]);
+    const emptied = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, []);
+    expect(predictDrivenPath("flash", emptied, route)).toEqual([]);
+    expect(predictDrivenPath("flash", { x: 0, z: 0, hull: 0, leg: 1 }, route, null, 0)).toEqual([]);
+  });
+
+  it("runs an order from the live position to the destination", () => {
+    const mover = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [
+      { x: 0, z: 200 },
+      { x: 200, z: 200 },
+    ]);
+    const path = predictDrivenPath("flash", mover, []);
+    expect(path.length).toBeGreaterThan(3);
+    expect(path[0]).toEqual({ x: 0, z: 0 });
+    const last = path[path.length - 1]!;
+    expect(Math.hypot(last.x - 200, last.z - 200)).toBeLessThanOrEqual(ARRIVE_RADIUS);
+  });
+
+  it("walks a full patrol loop, passing near every waypoint", () => {
+    const route = flatRoute();
+    const mover: Mover = { x: 0, z: 50, hull: 0, leg: 1 };
+    const path = predictDrivenPath("stump", mover, route);
+    expect(path.length).toBeGreaterThan(10);
+    expect(path[0]).toEqual({ x: 0, z: 50 });
+    // The driven line cuts corners but still visits each waypoint's
+    // neighbourhood (arrival radius plus one sim stride of slack).
+    for (const wp of route) {
+      const near = path.some((p) => Math.hypot(p.x - wp.x, p.z - wp.z) < ARRIVE_RADIUS + 30);
+      expect(near).toBe(true);
+    }
+  });
+
+  it("curves off the waypoint chord when the hull starts crosswise", () => {
+    const route = flatRoute();
+    // Hull faces +X while the leg runs +Z: the grip drives it forward along
+    // the hull as it turns, so the driven line must bulge off the chord.
+    const mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 1 };
+    const path = predictDrivenPath("flash", mover, route);
+    expect(path.length).toBeGreaterThan(5);
+    const bulge = Math.max(...path.slice(0, 12).map((p) => Math.abs(p.x)));
+    expect(bulge).toBeGreaterThan(5);
+  });
+
+  it("refuses the wall and ends the trail there instead of crossing it", () => {
+    const field = walledField();
+    const z = 0;
+    const mover = orderMover({ x: worldX(field, 10), z, hull: Math.PI / 2, leg: 0 }, [
+      { x: worldX(field, 35), z },
+    ]);
+    const before = JSON.parse(JSON.stringify(mover)) as Mover;
+    const path = predictDrivenPath("flash", mover, [], field);
+    // Never entered the wall, never arrived — the stall rule ends the trail
+    // where the hull pins, well short of the destination.
+    for (const p of path) expect(p.x).toBeLessThan(worldX(field, 16));
+    const last = path[path.length - 1]!;
+    expect(Math.hypot(last.x - worldX(field, 35), last.z - z)).toBeGreaterThan(ARRIVE_RADIUS);
+    // Pure: neither the mover nor the field moved.
+    expect(mover).toEqual(before);
+  });
+
+  it("is deterministic for the same live state", () => {
+    const route = flatRoute();
+    const mover = orderMover({ x: 10, z: 20, hull: 1.2, leg: 0 }, [{ x: 300, z: 300 }]);
+    expect(predictDrivenPath("hammer", mover, route)).toEqual(predictDrivenPath("hammer", mover, route));
   });
 });
