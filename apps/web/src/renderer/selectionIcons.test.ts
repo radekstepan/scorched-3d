@@ -139,8 +139,8 @@ describe("groupSelection (tray boxes)", () => {
   });
 });
 
-describe("selectionGroupColor (tray border matches Units-box team chips)", () => {
-  it("uses the same TEAM_DEFS colors as the Units box", () => {
+describe("selectionGroupColor (tray border team colors)", () => {
+  it("uses the TEAM_DEFS colors", () => {
     for (const t of [0, 1] as const) {
       expect(selectionGroupColor(t)).toBe(
         `#${TEAM_DEFS[t].color.toString(16).padStart(6, "0")}`,

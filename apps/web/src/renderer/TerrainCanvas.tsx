@@ -99,7 +99,7 @@ interface Props {
   onSelection?: (indices: number[]) => void;
   /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay. */
   onPositions?: (positions: { x: number; z: number; alive: boolean }[]) => void;
-  /** Live HQ status broadcast (~4 Hz) for minimap markers + Units box. */
+  /** Live HQ status broadcast (~4 Hz) for minimap markers. */
   onHq?: (hqs: HqStatus[]) => void;
 }
 

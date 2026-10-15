@@ -55,35 +55,42 @@ describe("right-rail clearance over header diagnostics", () => {
   });
 });
 
-describe("Units panel roster without patrol status text", () => {
-  it("drops the Patrolling TA status line", () => {
-    expect(source).not.toContain("Patrolling");
-    expect(source).not.toContain("re-routed on every regen");
-  });
-
-  it("still lists per-kind unit entries with selection + minimap dots", () => {
+describe("Units panel live per-kind counts", () => {
+  it("lists only live per-kind counts in commander … hammer order", () => {
     expect(source).toContain("<Label>Units</Label>");
     expect(source).toContain("UNIT_KINDS.map");
-    expect(source).toContain("def.unitName");
+    expect(source).toContain("countLiveUnitsByKind(map.units, liveUnits)");
+    expect(source).toContain("liveCounts[k]");
+    expect(source).toContain("def.name");
+    expect(source).toContain("×{liveCounts[k]}");
+  });
+
+  it("drops the long explainer, team rows, HQ rows, and catalog columns", () => {
+    for (const snippet of [
+      "Blue holds the west",
+      "blast scorch",
+      "Waypoints overlay",
+      "right-click the terrain",
+      "shift-click to extend",
+      "TEAM_IDS.map",
+      "Team {def.name}",
+      "HQ {def.name}",
+      "def.unitName",
+      "alive}/{roster}",
+      "+{h.spawned} sent",
+    ]) {
+      expect(source, `Units panel must not contain ${JSON.stringify(snippet)}`).not.toContain(snippet);
+    }
+  });
+
+  it("keeps live minimap dots and HQ fort markers", () => {
     expect(source).toContain("liveUnits.map");
     expect(source).toContain("selected.includes");
     expect(source).toContain("MINIMAP_SELECTED_OUTLINE");
-  });
-
-  it("shows both team sides with colors in the Units box and minimap", () => {
-    expect(source).toContain("TEAM_IDS.map");
-    expect(source).toContain("Team {def.name}");
-    expect(source).toContain("alive");
-    expect(source).toContain("TEAM_DEFS[team].color");
-  });
-
-  it("shows HQ forts on the minimap and in the Units box", () => {
     expect(source).toContain("onHq={setHqs}");
     expect(source).toContain("hqs.map");
     expect(source).toContain("hq-${h.team}");
-    expect(source).toContain("HQ {def.name}");
-    expect(source).toContain("standing");
-    expect(source).toContain("destroyed");
+    expect(source).toContain("TEAM_DEFS[h.team]");
   });
 
   it("shows a bottom selection tray with pre-rendered icons, counts, and team top borders", () => {

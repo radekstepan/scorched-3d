@@ -4,7 +4,6 @@ import {
   CELL_PIXELS,
   PRESET_META,
   TEAM_DEFS,
-  TEAM_IDS,
   TILE_PIXELS,
   UNIT_DEFS,
   UNIT_KINDS,
@@ -27,6 +26,7 @@ import {
   selectionGroupColor,
 } from "./renderer/selectionIcons";
 import { cn } from "./utils/cn";
+import { countLiveUnitsByKind } from "./utils/liveCounts";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
@@ -77,8 +77,12 @@ export default function App() {
   // Bottom selection tray: one box per (kind, team) group with a
   // pre-rendered icon (memoized data URL, rendered once per kind and reused
   // for every box) and a count badge. The top border carries the team color
-  // from the same TEAM_DEFS source as the Units-box chips.
+  // from TEAM_DEFS.
   const selectedGroups = useMemo(() => groupSelection(map.units, selected), [map.units, selected]);
+  // Units box: live per-kind hull counts (commander … hammer). Roster slots
+  // read alive before the first broadcast; wrecks drop out and HQ
+  // reinforcements count once both arrays cover them.
+  const liveCounts = useMemo(() => countLiveUnitsByKind(map.units, liveUnits), [map.units, liveUnits]);
   const meta = PRESET_META[preset];
   const tileW = map.width / 2;
   const tileH = map.height / 2;
@@ -160,7 +164,7 @@ export default function App() {
               // Wrecks dim to grey and can never carry a selection glow.
               const wrecked = p.alive === false;
               // Team identity rings the kind-colored dot: Blue west, Orange
-              // east (same colors as the 3D ground rings + Units box chips).
+              // east (same colors as the 3D ground rings).
               const team = map.units[i]?.team;
               const teamColor = team === undefined ? undefined : `#${TEAM_DEFS[team].color.toString(16).padStart(6, "0")}`;
               return (
@@ -270,51 +274,8 @@ export default function App() {
         <div className="hud-panel mt-3 p-3">
           <Label>Units</Label>
           <div className="mt-2 space-y-1.5">
-            {TEAM_IDS.map((t) => {
-              const def = TEAM_DEFS[t];
-              let roster = 0;
-              let alive = 0;
-              map.units.forEach((u, i) => {
-                if ((u.team ?? 0) !== t) return;
-                roster += 1;
-                // Before the first live broadcast every hull reads alive.
-                if (liveUnits[i]?.alive !== false) alive += 1;
-              });
-              return (
-                <div key={t} className="flex items-center gap-2 text-[11px]">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full border border-black/60"
-                    style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
-                  />
-                  <span className="text-slate-200">Team {def.name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-slate-400">
-                    {alive}/{roster} alive
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-2 space-y-1.5">
-            {hqs.map((h) => {
-              const def = TEAM_DEFS[h.team];
-              return (
-                <div key={`hq-${h.team}`} className="flex items-center gap-2 text-[11px]">
-                  <span
-                    className="inline-block h-2.5 w-2.5 border border-black/60"
-                    style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
-                  />
-                  <span className="text-slate-200">HQ {def.name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-slate-400">
-                    {h.alive ? "standing" : "destroyed"} · +{h.spawned} sent
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-2 space-y-1.5">
             {UNIT_KINDS.map((k) => {
               const def = UNIT_DEFS[k];
-              const count = map.units.filter((u) => u.kind === k).length;
               return (
                 <div key={k} className="flex items-center gap-2 text-[11px]">
                   <span
@@ -322,34 +283,11 @@ export default function App() {
                     style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
                   />
                   <span className="text-slate-200">{def.name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-slate-400">
-                    {def.unitName} ×{count}
-                  </span>
+                  <span className="ml-auto font-mono text-[10px] text-slate-400">×{liveCounts[k]}</span>
                 </div>
               );
             })}
           </div>
-          <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-            Blue holds the west, Orange the east — team rings circle every
-            hull in 3D and ring its minimap dot. Each side fields a map-end
-            HQ fort (square on the minimap) that slides its door up to send
-            out reinforcements while it stands — and goes silent as a charred
-            wreck under enough enemy fire. Guns only reach about half the map
-            now, so forts take aimed fire only from deep push-ins. Dark-brown patches
-            are blast scorch — old impact scars, not mud. Selected units carry
-            a static white/cyan ring + beacon; hulls keep their normal paint —
-            selection never tints the hull. The Waypoints overlay traces the
-            line each unit will actually drive — slate for patrols, amber for
-            ordered moves, rose for hunts and retaliation pursuits — plus a travelling marker.
-            {selected.length > 0 ? (
-              <span className="text-amber-200">
-                {" "}
-                {selected.length} selected — right-click the terrain to order a move, Esc to clear.
-              </span>
-            ) : (
-              " Click a unit to select, shift-click to extend, shift-drag to box."
-            )}
-          </p>
         </div>
       </aside>
 

@@ -386,7 +386,7 @@ export function groupSelection(
   });
 }
 
-/** Team color CSS for a tray box top border (same source as the Units box chips). */
+/** Team color CSS for a tray box top border (from TEAM_DEFS). */
 export function selectionGroupColor(team: TeamId): string {
   return hexCss(TEAM_DEFS[team]?.color ?? 0xffffff);
 }
