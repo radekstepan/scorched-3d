@@ -19,6 +19,12 @@ Task index:
 - 14 — Cannon ballistics (`docs/tasks/14-cannon-ballistics.md`)
 - 15 — Collateral damage (`docs/tasks/15-collateral-damage.md`)
 - 16 — Selection contrast (`docs/tasks/16-selection-contrast.md`)
+- 17 — Sideways tanks (`docs/tasks/17-sideways-tanks.md`)
+- 18 — Rough terrain drag (`docs/tasks/18-rough-terrain-drag.md`)
+- 19 — Unit battle damage (`docs/tasks/19-unit-battle-damage.md`)
+- 20 — Layered tree fire (`docs/tasks/20-layered-tree-fire.md`)
+- 21 — Believable blast scorch (`docs/tasks/21-believable-blast-scorch.md`)
+- 22 — Believable climb limits (`docs/tasks/22-believable-climb-limits.md`)
 
 ## 1. Monorepo layout (from 01)
 
