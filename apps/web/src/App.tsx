@@ -19,7 +19,7 @@ import {
 } from "./renderer/selectionFx";
 import { cn } from "./utils/cn";
 
-const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera"];
+const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
 export default function App() {
   const [preset, setPreset] = useState<MapPreset>("greenreach");

@@ -9,7 +9,7 @@ export const FEATURE_EMPTY = 0xffff;
 export const FEATURE_VOID = 0xfffc;
 export const FEATURE_FRINGE = 0xfffe;
 
-export type MapPreset = "greenreach" | "archipelago" | "highpass" | "caldera";
+export type MapPreset = "greenreach" | "archipelago" | "highpass" | "caldera" | "rivercross" | "dustplains";
 
 export const PRESET_META: Record<
   MapPreset,
@@ -34,6 +34,16 @@ export const PRESET_META: Record<
     name: "Glass Caldera",
     world: "Crystal Cracked",
     blurb: "Collapsed crater lake ringed by steep walls and a broken rim.",
+  },
+  rivercross: {
+    name: "River Crossing",
+    world: "Divided Forest",
+    blurb: "Meandering river through forest and open plains, held by two ford crossings.",
+  },
+  dustplains: {
+    name: "Dust Plains",
+    world: "Open Steppe",
+    blurb: "Wide flat steppe with gentle swells and scattered copses — built for armor battles.",
   },
 };
 

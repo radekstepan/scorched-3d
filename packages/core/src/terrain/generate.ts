@@ -137,6 +137,50 @@ function sampleHeight(
     const hills = fbm(x * 0.04, z * 0.04, seed + 3, 5);
     v = 88 + plateauL * 62 + plateauR * 70 - pass * 55 + (hills - 0.5) * 22;
     v += ridged(x * 0.06, z * 0.03, seed + 9) * 18 * (1 - pass);
+  } else if (preset === "rivercross") {
+    // Battle map: flat plains split by a meandering north–south river with
+    // two seeded ford causeways. Base sits just above the waterline so both
+    // banks stay open maneuver ground; the channel carves below sea level
+    // except at the fords, where the bed lifts back to dry land.
+    const phase = hash2(seed, 5, 17) * Math.PI * 2;
+    const meander =
+      Math.sin(nz * 2.4 + phase) * 0.1 + (fbm(x * 0.02, z * 0.02, seed + 31, 3) - 0.5) * 0.14;
+    const adx = Math.abs(nx - meander);
+    const base =
+      sea +
+      15 +
+      (fbm(x * 0.03, z * 0.03, seed + 33, 4) - 0.5) * 14 +
+      (fbm(x * 0.11, z * 0.11, seed + 34, 2) - 0.5) * 5;
+    const river = smoothstep(0.085, 0.02, adx);
+    const fz1 = -0.42 + hash2(seed, 11, 101) * 0.3;
+    const fz2 = 0.12 + hash2(seed, 23, 102) * 0.3;
+    const ford1 = Math.exp(-((nz - fz1) * (nz - fz1)) / 0.004);
+    const ford2 = Math.exp(-((nz - fz2) * (nz - fz2)) / 0.004);
+    const ford = Math.max(ford1, ford2);
+    const carved = base - river * 36;
+    // Causeway sill: deliberately WIDER than the channel carve (the lerp
+    // target sits just above the waterline, so a sill as narrow as the
+    // carve would leave a water moat on each side and the ford would read
+    // as an island). Full lift across the channel, feathered into the banks.
+    const sill = ford * smoothstep(0.15, 0.03, adx);
+    const causeway = lerp(
+      carved,
+      sea + 6 + (fbm(x * 0.09, z * 0.09, seed + 35, 2) - 0.5) * 2,
+      clamp(sill * 1.3, 0, 1),
+    );
+    const levee = Math.exp(-((adx - 0.11) * (adx - 0.11)) / 0.0012) * 4;
+    v = causeway + levee;
+  } else if (preset === "dustplains") {
+    // Battle map: vast flat steppe. A broad island mask keeps the interior
+    // dry, low swells give gentle cover, rim hills enclose the field, and a
+    // single pond breaks the west side without splitting the map.
+    const d = Math.hypot(nx * 0.95, nz * 1.05);
+    const island = smoothstep(1.1, 0.55, d);
+    const swells = (fbm(x * 0.025, z * 0.025, seed + 41, 4) - 0.5) * 16;
+    const detail = (fbm(x * 0.1, z * 0.1, seed + 42, 2) - 0.5) * 6;
+    const rim = smoothstep(0.62, 0.95, d) * (18 + ridged(x * 0.05, z * 0.05, seed + 43) * 22);
+    const pond = 1 - smoothstep(0.02, 0.12, Math.hypot(nx + 0.3, nz - 0.25));
+    v = sea + 13 + island * (6 + swells) + rim * island - pond * 30 + detail;
   } else {
     const d = Math.hypot(nx * 0.95, nz * 1.05);
     const rim = Math.exp(-((d - 0.55) * (d - 0.55)) / 0.018);
@@ -204,9 +248,21 @@ function stampFeatures(
       const i = z * w + x;
       const hgt = heights[i] ?? 0;
       if (hgt <= sea + 4) continue;
+      if (preset === "rivercross" && hgt < sea + 8) continue;
       const slope = cellSlope(heights, w, h, x, z);
       const forest = fbm(x * 0.055, z * 0.055, seed + 70, 4);
-      const dens = preset === "archipelago" ? 0.6 : preset === "highpass" ? 0.52 : 0.56;
+      const dens =
+        preset === "archipelago"
+          ? 0.6
+          : preset === "highpass"
+            ? 0.52
+            : preset === "rivercross"
+              ? 0.5
+              : preset === "dustplains"
+                ? 0.63
+                : 0.56;
+      // Rivercross keeps banks and ford causeways (low ground) treeless so
+      // crossings stay open maneuver ground; forest clusters on higher soil.
       if (slope < 9 && forest > dens && hash2(x, z, seed + 71) > 0.55) {
         const which = Math.floor(hash2(x, z, seed + 72) * 3);
         features[i] = which;

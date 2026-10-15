@@ -32,7 +32,7 @@ import type { SeatField } from "./terrain.js";
 import { CRUSH_DRAG, TREE_DRAG, trunkBlockedAt } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
 
-const PRESETS = ["greenreach", "archipelago", "highpass", "caldera"] as const;
+const PRESETS = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const;
 const SEEDS = [1, 7, 0xa11ce, 123456];
 
 function flatRoute(len = 400): RoutePoint[] {

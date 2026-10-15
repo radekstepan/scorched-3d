@@ -473,7 +473,7 @@ describe("steep slopes", () => {
     // Real-map case: string-pulling must not cut back through steep cells
     // the search paid to go around — so sample every smoothed leg densely,
     // not just its waypoints.
-    for (const preset of ["greenreach", "archipelago", "highpass", "caldera"] as const) {
+    for (const preset of ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const) {
       const map = generateMap(preset, 11);
       const walkables: { x: number; z: number }[] = [];
       for (let z = 8; z < map.height - 8 && walkables.length < 2; z += 3) {

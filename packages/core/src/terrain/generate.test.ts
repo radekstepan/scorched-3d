@@ -10,7 +10,7 @@ import { FEATURE_EMPTY, TNT_VERSION } from "./types.js";
 /** Guards the terrain pipeline after the move into @scorched-3d/core. */
 describe("generateMap", () => {
   it("builds the 160x128 attribute grid for every preset", () => {
-    for (const preset of ["greenreach", "archipelago", "highpass", "caldera"] as const) {
+    for (const preset of ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const) {
       const map = generateMap(preset, 0xa11ce);
       expect(map.width).toBe(160);
       expect(map.height).toBe(128);

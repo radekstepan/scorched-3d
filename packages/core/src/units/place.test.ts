@@ -4,7 +4,7 @@ import { FEATURE_EMPTY } from "../terrain/types.js";
 import { placeUnits, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
 import { UNIT_DEFS, UNIT_KINDS } from "./types.js";
 
-const PRESETS = ["greenreach", "archipelago", "highpass", "caldera"] as const;
+const PRESETS = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const;
 const SEEDS = [1, 7, 0xa11ce, 123456];
 
 function fieldOf(preset: (typeof PRESETS)[number], seed: number): UnitField {
