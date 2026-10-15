@@ -177,3 +177,50 @@ describe("jumpCameraTo seats the target onto the terrain", () => {
     expect(Math.abs(seated.y)).toBeLessThan(1e-6);
   });
 });
+
+describe("jumpCameraTo centers the click at any angle and zoom (task 102)", () => {
+  const dest = { x: 800, z: -600 };
+  const ground = 25;
+  const polar = Math.PI / 3; // 60° from +Y: a typical oblique RTS view.
+  const offsetFor = (azimuthDeg: number, dist: number): { x: number; y: number; z: number } => {
+    const az = (azimuthDeg * Math.PI) / 180;
+    return {
+      x: dist * Math.sin(polar) * Math.sin(az),
+      y: dist * Math.cos(polar),
+      z: dist * Math.sin(polar) * Math.cos(az),
+    };
+  };
+  const sphericalOf = (dx: number, dy: number, dz: number): { az: number; polar: number; dist: number } => {
+    const dist = Math.hypot(dx, dy, dz);
+    return { az: Math.atan2(dx, dz), polar: Math.acos(dy / dist), dist };
+  };
+
+  for (const azimuth of [0, 45, 90, 180, 270]) {
+    for (const dist of [300, 4000]) {
+      it(`azimuth ${azimuth}°, distance ${dist}: target becomes the clicked surface point, angle + zoom preserved, NDC centered`, () => {
+        const off = offsetFor(azimuth, dist);
+        const position = { x: off.x, y: 50 + off.y, z: off.z };
+        const target = { x: 0, y: 50, z: 0 };
+        const before = sphericalOf(position.x - target.x, position.y - target.y, position.z - target.z);
+        jumpCameraTo(position, target, dest, W, D, () => ground);
+        // The clicked world point becomes the new orbit target / camera focus.
+        expect(target.x).toBeCloseTo(dest.x, 9);
+        expect(target.y).toBeCloseTo(ground, 9);
+        expect(target.z).toBeCloseTo(dest.z, 9);
+        // Angle (azimuthal/polar) and zoom distance preserved.
+        const after = sphericalOf(position.x - target.x, position.y - target.y, position.z - target.z);
+        expect(after.dist).toBeCloseTo(before.dist, 6);
+        expect(after.az).toBeCloseTo(before.az, 9);
+        expect(after.polar).toBeCloseTo(before.polar, 9);
+        // …and the clicked surface point projects to the screen center.
+        const camera = new THREE.PerspectiveCamera(48, 16 / 9, 2, 20000);
+        camera.position.set(position.x, position.y, position.z);
+        camera.lookAt(target.x, target.y, target.z);
+        camera.updateMatrixWorld();
+        const ndc = new THREE.Vector3(dest.x, ground, dest.z).project(camera);
+        expect(Math.abs(ndc.x)).toBeLessThan(1e-6);
+        expect(Math.abs(ndc.y)).toBeLessThan(1e-6);
+      });
+    }
+  }
+});
