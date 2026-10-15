@@ -13,7 +13,7 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { UnitMovement } from "./movement";
-import { buildUnits, getLegs, getWheels } from "./units";
+import { buildUnits, getLegs, getWheels, IDLE_POS, IDLE_TILT } from "./units";
 
 function makeGroup(): THREE.Group {
   const group = new THREE.Group();
@@ -141,10 +141,19 @@ describe("UnitMovement", () => {
     expect(movement.hasOrder(0)).toBe(false);
     const body = units.children[0] as THREE.Group;
     expect(body.position.x).toBeGreaterThan(300);
-    // Arrival holds: further ticks keep the unit parked.
-    const parked = body.position.clone();
+    // Arrival holds: the mover never moves again (simulation exact)…
+    const parkedMover = movement.moverState(0)!;
     for (let n = 0; n < 60; n++) movement.update(1 / 60);
-    expect(body.position.distanceTo(parked)).toBeCloseTo(0, 6);
+    const heldMover = movement.moverState(0)!;
+    expect(heldMover.x).toBe(parkedMover.x);
+    expect(heldMover.z).toBe(parkedMover.z);
+    // …while the body trembles faintly on its seat (engine idle, visual
+    // only: bounded shiver around the frozen mover).
+    expect(Math.abs(body.position.x - heldMover.x)).toBeLessThanOrEqual(IDLE_POS + 1e-9);
+    expect(Math.abs(body.position.z - heldMover.z)).toBeLessThanOrEqual(IDLE_POS + 1e-9);
+    // Flat ground seats zero tilt, so the hull judder reads directly.
+    expect(Math.abs(body.rotation.x)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);
+    expect(Math.abs(body.rotation.z)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);
     // The unordered unit kept patrolling meanwhile.
     expect(movement.hasOrder(1)).toBe(false);
     movement.dispose();
@@ -413,10 +422,11 @@ describe("terrain seating", () => {
     movement.orderUnit(0, { x: 280, z: -8 });
     for (let n = 0; n < 7200; n++) movement.update(1 / 60);
     expect(movement.hasOrder(0)).toBe(false);
-    const parked = (units.children[0] as THREE.Group).position.clone();
+    // Re-seats sit the body exactly on the mover (no tremble on re-seat).
+    const parked = movement.moverState(0)!;
     movement.resnap();
-    expect((units.children[0] as THREE.Group).position.x).toBeCloseTo(parked.x, 9);
-    expect((units.children[0] as THREE.Group).position.z).toBeCloseTo(parked.z, 9);
+    expect((units.children[0] as THREE.Group).position.x).toBe(parked.x);
+    expect((units.children[0] as THREE.Group).position.z).toBe(parked.z);
     movement.dispose();
   });
 });
