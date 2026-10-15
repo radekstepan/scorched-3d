@@ -40,7 +40,7 @@ import {
   waterFragment,
   waterVertex,
 } from "./shaders";
-import { buildUnits, buildSpawnedUnit } from "./units";
+import { buildUnits, buildSpawnedUnit, setTeamRingSelected } from "./units";
 import { CombatFx } from "./combatFx";
 import { HqFx, type HqStatus } from "./hqFx";
 import { applyCraters } from "./craters";
@@ -529,6 +529,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       units.children.forEach((child, i) => {
         const marker = child.getObjectByName("select-marker");
         if (marker) updateSelectionMarker(marker as THREE.Group, 0, vis[i] ?? false);
+        // The team ring brightens on the selected hull only; the rest of
+        // the field keeps the subtle marker.
+        setTeamRingSelected(child as THREE.Group, vis[i] ?? false);
       });
       selectionRef.current?.([...selection]);
     };

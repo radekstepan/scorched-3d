@@ -17,10 +17,16 @@ import {
   placeUnitsGroup,
   restBarrelElevation,
   setBarrelElevation,
+  setTeamRingSelected,
   setUnitAim,
   TEAM_RING_INNER,
+  TEAM_RING_OPACITY,
+  TEAM_RING_OPACITY_SELECTED,
   TEAM_RING_OUTER,
+  TEAM_RING_SCALE_SELECTED,
   teamRingColor,
+  teamRingOpacity,
+  teamRingScale,
 } from "./units";
 import { TEAM_DEFS } from "@scorched-3d/core";
 
@@ -424,6 +430,45 @@ describe("team ground rings", () => {
     expect(getWheels(body).length).toBeGreaterThan(0);
     expect(getTeamRing(body)).not.toBeNull();
     expect(body.getObjectByName("select-marker")).toBeFalsy();
+  });
+});
+
+describe("team ring selection emphasis", () => {
+  it("builds subtle by default and pins the selected/unselected split", () => {
+    const ring = buildTeamRing(0);
+    // Quiet marker out of the box: thin band, low opacity.
+    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.35);
+    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY);
+    expect(TEAM_RING_OUTER - TEAM_RING_INNER).toBeLessThanOrEqual(2.5);
+    // Pure helpers pin the split: selected is opaque, unselected is subtle.
+    expect(teamRingOpacity(false)).toBe(TEAM_RING_OPACITY);
+    expect(teamRingOpacity(true)).toBe(TEAM_RING_OPACITY_SELECTED);
+    expect(teamRingOpacity(true)).toBeGreaterThan(teamRingOpacity(false) + 0.4);
+    expect(teamRingScale(false)).toBe(1);
+    expect(teamRingScale(true)).toBe(TEAM_RING_SCALE_SELECTED);
+    expect(teamRingScale(true)).toBeGreaterThan(1);
+    ring.geometry.dispose();
+    (ring.material as THREE.Material).dispose();
+  });
+
+  it("boosts the selected body's ring and restores on deselect, keeping team color", () => {
+    const body = buildSpawnedUnit("stump", 1, 0, 0, 0, () => 100);
+    const ring = getTeamRing(body)!;
+    const before = (ring.material as THREE.MeshBasicMaterial).color.getHex();
+    setTeamRingSelected(body, true);
+    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY_SELECTED);
+    expect(ring.scale.x).toBeCloseTo(TEAM_RING_SCALE_SELECTED);
+    // Team color untouched by the emphasis.
+    expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(before);
+    setTeamRingSelected(body, false);
+    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY);
+    expect(ring.scale.x).toBeCloseTo(1);
+    expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(before);
+  });
+
+  it("no-ops on plain groups without a ring", () => {
+    expect(() => setTeamRingSelected(new THREE.Group(), true)).not.toThrow();
+    expect(() => setTeamRingSelected(new THREE.Group(), false)).not.toThrow();
   });
 });
 
