@@ -79,7 +79,7 @@ export default function App() {
   // for every box) and a count badge. The top border carries the team color
   // from TEAM_DEFS.
   const selectedGroups = useMemo(() => groupSelection(map.units, selected), [map.units, selected]);
-  // Units box: live per-kind hull counts (commander … hammer). Roster slots
+  // Units box: live per-kind hull counts (commander … peewee). Roster slots
   // read alive before the first broadcast; wrecks drop out and HQ
   // reinforcements count once both arrays cover them.
   const liveCounts = useMemo(() => countLiveUnitsByKind(map.units, liveUnits), [map.units, liveUnits]);

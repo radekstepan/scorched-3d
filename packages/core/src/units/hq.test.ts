@@ -252,12 +252,16 @@ describe("tickHqSpawn", () => {
   it("cycles the spawn roster deterministically", () => {
     expect(HQ_SPAWN_CYCLE).toContain("flash");
     expect(HQ_SPAWN_CYCLE).not.toContain("commander");
-    expect([0, 1, 2, 3, 4].map(spawnKindFor)).toEqual([
+    const n = HQ_SPAWN_CYCLE.length;
+    expect(n).toBeGreaterThanOrEqual(3);
+    expect([0, 1, 2, n, n + 1].map(spawnKindFor)).toEqual([
       HQ_SPAWN_CYCLE[0],
       HQ_SPAWN_CYCLE[1],
-      HQ_SPAWN_CYCLE[2],
+      HQ_SPAWN_CYCLE[2 % n],
       HQ_SPAWN_CYCLE[0],
-      HQ_SPAWN_CYCLE[1],
+      HQ_SPAWN_CYCLE[1 % n],
     ]);
+    // Negative indices wrap too (no undefined holes in the cycle).
+    expect(spawnKindFor(-1)).toBe(HQ_SPAWN_CYCLE[(n - 1) % n]);
   });
 });

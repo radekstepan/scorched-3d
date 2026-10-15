@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { HULL_FOOTPRINT, type Mover, type UnitKind } from "@scorched-3d/core";
+import { HULL_FOOTPRINT, WHEEL_RADIUS, type Mover, type UnitKind } from "@scorched-3d/core";
 
 /**
  * Fading track trails: vehicles leave a compressed-dust trace behind
  * themselves while driving. Tracked hulls (flash/stump/hammer) stamp two
  * parallel treads — one per side, offset to the hull's flank footprint —
- * while the commander (biped) stamps small alternating footsteps with gaps
+ * while walkers (commander, peewee) stamp small alternating footsteps with gaps
  * between them. Every mark fades to nothing over seconds and is then
  * recycled, so a patrol lane reads as a tread/footprint ribbon, never as
  * scorch. Renderer-side only: movers and simulation never see the marks.
@@ -56,6 +56,8 @@ export const TRACK_WIDTH: Record<UnitKind, number> = {
   stump: 5,
   hammer: 4.5,
   commander: 3.5,
+  // Infantry scuff: narrower than any tank tread.
+  peewee: 2.5,
 };
 
 /** Single-tread width for a kind (falls back to flash for unknown kinds). */
@@ -64,14 +66,23 @@ export function trackWidthFor(kind: UnitKind): number {
 }
 
 /**
+ * True for walker kinds (no road wheels): they stamp alternating footsteps
+ * instead of tread pairs. Keyed off `WHEEL_RADIUS` (not a kind list) so new
+ * legged kinds read correctly without touching this file.
+ */
+function isWalker(kind: UnitKind): boolean {
+  return (WHEEL_RADIUS[kind] ?? 0) <= 0;
+}
+
+/**
  * Lateral center distance of one tread from the hull centerline. Tanks: the
  * outer tread edge lands flush with the flank footprint
- * (`offset + tread/2 = halfWid`). The walker stamps on the centerline here
- * (its alternation lives in `trackOffsetsFor`, not in a fixed gauge).
+ * (`offset + tread/2 = halfWid`). Walkers stamp on the centerline here
+ * (their alternation lives in `trackOffsetsFor`, not in a fixed gauge).
  * Pure for tests.
  */
 export function trackOffsetFor(kind: UnitKind): number {
-  if (kind === "commander") return 0;
+  if (isWalker(kind)) return 0;
   const fp = HULL_FOOTPRINT[kind] ?? HULL_FOOTPRINT.flash;
   return fp.halfWid - trackWidthFor(kind) / 2;
 }
@@ -84,7 +95,7 @@ export function trackOffsetFor(kind: UnitKind): number {
  * the lane reads as alternating prints with gaps. Pure for tests.
  */
 export function trackOffsetsFor(kind: UnitKind, step: number): number[] {
-  if (kind === "commander") {
+  if (isWalker(kind)) {
     return [step % 2 === 0 ? -FOOTSTEP_OFFSET : FOOTSTEP_OFFSET];
   }
   const off = trackOffsetFor(kind);
@@ -93,7 +104,7 @@ export function trackOffsetsFor(kind: UnitKind, step: number): number[] {
 
 /** Mark length along travel for a kind (treads link, footsteps gap). */
 export function trackLengthFor(kind: UnitKind): number {
-  return kind === "commander" ? FOOTSTEP_LENGTH : TRACK_LENGTH;
+  return isWalker(kind) ? FOOTSTEP_LENGTH : TRACK_LENGTH;
 }
 
 /**
@@ -177,7 +188,7 @@ export class TrackTrails {
   /**
    * Poll every unit once per tick: driving hulls that travelled past the
    * spacing drop their footprint marks (a tread pair for tanks, one
-   * alternating footstep for the commander); stunned/held/wreck hulls never
+   * alternating footstep for walkers); stunned/held/wreck hulls never
    * emit (even when a separation shove jostles a stunned hull — the gate is
    * the mover state, not the displacement). Ages every live mark toward
    * expiry. Roster-sized work per tick (one small mover snapshot per hull);
@@ -258,7 +269,7 @@ export class TrackTrails {
 
   /**
    * Stamp one stride at (x, z) facing `yaw`: a tread pair for tanks, one
-   * alternating footstep for the commander. Lateral offsets run across the
+   * alternating footstep for walkers. Lateral offsets run across the
    * hull (local +X under yaw: `(cos yaw, -sin yaw)` in (x, z)), matching the
    * flank taps the grade seating uses.
    */

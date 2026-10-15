@@ -6,7 +6,7 @@ export interface LiveUnitState {
 }
 
 /**
- * Live per-kind hull counts in `UNIT_KINDS` order (commander … hammer).
+ * Live per-kind hull counts in `UNIT_KINDS` order (commander … peewee).
  *
  * A roster entry reads alive when its broadcast slot is missing (pre-first
  * broadcast) or reports `alive !== false`; wrecks (`alive === false`) are
@@ -24,6 +24,7 @@ export function countLiveUnitsByKind(
     stump: 0,
     flash: 0,
     hammer: 0,
+    peewee: 0,
   };
   placed.forEach((u, i) => {
     if (live?.[i]?.alive === false) return;
@@ -32,7 +33,7 @@ export function countLiveUnitsByKind(
   return counts;
 }
 
-/** Live counts as an ordered [kind, count] list (commander first, hammer last). */
+/** Live counts as an ordered [kind, count] list (commander first, peewee last). */
 export function liveCountsOrdered(
   placed: Pick<PlacedUnit, "kind">[],
   live: readonly LiveUnitState[] | undefined,

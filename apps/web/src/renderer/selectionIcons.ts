@@ -60,6 +60,8 @@ export function unitIconFraming(kind: UnitKind): UnitIconFraming {
       return { distance: 116, targetY: 10, fov: 22 };
     case "flash":
       return { distance: 104, targetY: 8, fov: 22 };
+    case "peewee":
+      return { distance: 92, targetY: 8, fov: 22 };
   }
 }
 
@@ -200,6 +202,25 @@ function canvasRender(kind: UnitKind): string | null {
       ctx.moveTo(26, 5);
       ctx.lineTo(29, 1);
       ctx.stroke();
+    } else if (kind === "peewee") {
+      // Infantry scout flank: two short legs, small torso, sensor head, and
+      // a stubby hand-cannon to the right (+Z reads as screen-right).
+      ctx.fillStyle = body;
+      ctx.fillRect(18, 27, 3, 7);
+      ctx.fillRect(23, 27, 3, 7);
+      ctx.fillRect(15, 19, 14, 8);
+      ctx.fillStyle = accent;
+      ctx.fillRect(15, 25, 14, 2);
+      ctx.fillStyle = body;
+      ctx.fillRect(18, 13, 8, 6);
+      ctx.fillStyle = accent;
+      ctx.fillRect(23, 15, 2, 2);
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(22, 21);
+      ctx.lineTo(37, 21);
+      ctx.stroke();
     } else {
       // Tracked flank: hull side, road wheels, turret, barrel to the right
       // (+Z reads as screen-right in the side view).
@@ -258,6 +279,11 @@ function svgFallback(kind: UnitKind): string {
         `<rect x="13" y="12" width="18" height="12" fill="${body}"/><rect x="13" y="21" width="18" height="3" fill="${accent}"/>` +
         `<rect x="18" y="5" width="8" height="7" fill="${body}"/><rect x="24" y="7" width="2" height="2" fill="${accent}"/>` +
         `<line x1="26" y1="5" x2="29" y2="1" stroke="${accent}" stroke-width="1.2"/>`
+      : kind === "peewee"
+        ? `<rect x="18" y="27" width="3" height="7" fill="${body}"/><rect x="23" y="27" width="3" height="7" fill="${body}"/>` +
+          `<rect x="15" y="19" width="14" height="8" fill="${body}"/><rect x="15" y="25" width="14" height="2" fill="${accent}"/>` +
+          `<rect x="18" y="13" width="8" height="6" fill="${body}"/><rect x="23" y="15" width="2" height="2" fill="${accent}"/>` +
+          `<line x1="22" y1="21" x2="37" y2="21" stroke="${accent}" stroke-width="1.6"/>`
       : `<rect x="8" y="14" width="28" height="9" fill="${body}"/>` +
         (kind === "flash"
           ? ""

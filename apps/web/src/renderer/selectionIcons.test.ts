@@ -42,8 +42,11 @@ describe("selection tray icons (pre-rendered once, reused)", () => {
     for (const kind of UNIT_KINDS) {
       const raw = decodeURIComponent(getUnitIconDataUrl(kind));
       if (kind === "commander") {
-        // Walker flank: leg rects + torso, no wheel circles.
         expect(raw).toContain('y="24" width="4" height="10"');
+        expect(raw).not.toContain("<circle");
+      } else if (kind === "peewee") {
+        // Infantry scout flank: short leg rects + small torso, no wheels.
+        expect(raw).toContain('y="27" width="3" height="7"');
         expect(raw).not.toContain("<circle");
       } else {
         // Tracked flank: hull side rect + three road-wheel circles +

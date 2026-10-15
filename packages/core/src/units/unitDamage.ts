@@ -26,6 +26,8 @@ export const UNIT_HIT_DAMAGE: Record<UnitKind, number> = {
   hammer: 0.16,
   // Commander heavy bolt.
   commander: 0.11,
+  // Infantry peashooter: chips the paint, takes a squad to finish.
+  peewee: 0.045,
 };
 
 /** Damage fraction where a hull starts trailing smoke. */

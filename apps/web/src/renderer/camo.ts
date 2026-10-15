@@ -37,6 +37,7 @@ const CAMO_SEEDS: Record<UnitKind, number> = {
   stump: 2345671,
   hammer: 3456712,
   commander: 4567123,
+  peewee: 5671234,
 };
 
 /** Disruptive-blotch count per kind (silhouette variety, same budget). */
@@ -45,6 +46,7 @@ const CAMO_BLOTCHES: Record<UnitKind, number> = {
   stump: 9,
   hammer: 8,
   commander: 6,
+  peewee: 6,
 };
 
 /** Deterministic PRNG (mulberry32): same seed, same stream, no Math.random. */

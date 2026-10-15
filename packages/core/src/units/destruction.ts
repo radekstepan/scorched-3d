@@ -51,6 +51,8 @@ export const BLAST_RADIUS: Record<UnitKind, number> = {
   stump: 44,
   hammer: 64,
   commander: 48,
+  // Infantry popgun: the smallest splash on the field.
+  peewee: 28,
 };
 
 /** Scorch decal size/darkness per firing kind: shells scar big and black. */
@@ -64,6 +66,8 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
       return { radius: 22, intensity: 0.5 };
     case "flash":
       return { radius: 18, intensity: 0.45 };
+    case "peewee":
+      return { radius: 14, intensity: 0.4 };
   }
 }
 

@@ -521,7 +521,7 @@ describe("unit icon bodies (thumbnail source)", () => {
       // Same turret subgroup + drive gear the field renders …
       expect(getTurret(body)).not.toBeNull();
       expect(getMuzzleTip(body)).not.toBeNull();
-      if (kind === "commander") expect(getLegs(body).length).toBe(2);
+      if (kind === "commander" || kind === "peewee") expect(getLegs(body).length).toBe(2);
       else expect(getWheels(body).length).toBe(6);
       // … but no team ring or selection marker (tray chrome owns those).
       expect(getTeamRing(body)).toBeNull();

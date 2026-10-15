@@ -31,7 +31,7 @@ export const HQ_SPAWN_INTERVAL = 40;
 /** Reinforcements one HQ may ever release (per-team pop cap). */
 export const HQ_MAX_SPAWNS = 4;
 /** Roster the HQ cycles through, one kind per release (no commanders). */
-export const HQ_SPAWN_CYCLE: UnitKind[] = ["flash", "stump", "hammer"];
+export const HQ_SPAWN_CYCLE: UnitKind[] = ["peewee", "flash", "stump", "hammer"];
 /** Kind released as the `n`th reinforcement (0-based, deterministic). */
 export function spawnKindFor(n: number): UnitKind {
   return HQ_SPAWN_CYCLE[((n % HQ_SPAWN_CYCLE.length) + HQ_SPAWN_CYCLE.length) % HQ_SPAWN_CYCLE.length]!;
@@ -327,6 +327,8 @@ export const HQ_HIT_DAMAGE: Record<UnitKind, number> = {
   // Artillery remains the wall-breaker, but one shell no longer decides it.
   hammer: 0.08,
   commander: 0.05,
+  // Infantry popgun: the lightest chip on the field.
+  peewee: 0.025,
 };
 
 /** Fresh all-pristine HQ damage state (one entry per team, TEAM_IDS order). */

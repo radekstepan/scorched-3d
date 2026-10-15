@@ -19,6 +19,8 @@ export const WHEEL_RADIUS: Record<UnitKind, number> = {
   stump: 4,
   hammer: 4,
   commander: 0,
+  // Infantry walks (no wheels).
+  peewee: 0,
 };
 
 /**
@@ -31,6 +33,8 @@ export const LEG_STRIDE: Record<UnitKind, number> = {
   stump: 0,
   hammer: 0,
   commander: 16,
+  // Infantry: short quick steps (a full gait cycle per 10 units).
+  peewee: 10,
 };
 
 /** Hip swing amplitude of a walking leg, radians each way from vertical. */

@@ -8,7 +8,7 @@
  * traceable back to nanolathe's `UnitDef` records.
  */
 
-export type UnitKind = "commander" | "stump" | "flash" | "hammer";
+export type UnitKind = "commander" | "stump" | "flash" | "hammer" | "peewee";
 
 export interface UnitDef {
   kind: UnitKind;
@@ -56,9 +56,17 @@ export const UNIT_DEFS: Record<UnitKind, UnitDef> = {
     color: 0x4a4d55,
     accent: 0xd97b29,
   },
+  peewee: {
+    kind: "peewee",
+    unitName: "ARMPW",
+    name: "Peewee",
+    blurb: "Arm light infantry kbot. Small biped scout, fast and fragile.",
+    color: 0xa89c72,
+    accent: 0x3a3f4a,
+  },
 };
 
-export const UNIT_KINDS: UnitKind[] = ["commander", "stump", "flash", "hammer"];
+export const UNIT_KINDS: UnitKind[] = ["commander", "stump", "flash", "hammer", "peewee"];
 
 /** Which side of the demo battle a unit fights for (see `place.ts`). */
 export type TeamId = 0 | 1;

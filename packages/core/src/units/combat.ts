@@ -49,6 +49,8 @@ export const WEAPON_PROFILES: Record<UnitKind, WeaponProfile> = {
   hammer: { shot: "shell", speed: 520, color: 0xff6a2a, flashTime: 0.18 },
   // Commander: heavy blue-white bolt (D-gun read as a tracer, not a beam).
   commander: { shot: "bolt", speed: 900, color: 0x7fd4ff, flashTime: 0.16 },
+  // Infantry scout: light peashooter bolt, fast tracer, small flash.
+  peewee: { shot: "bolt", speed: 1150, color: 0x9fe8ff, flashTime: 0.1 },
 };
 
 /**
@@ -101,6 +103,8 @@ export const WEAPON_MAX_RANGE: Record<UnitKind, number> = {
   stump: 850,
   hammer: 1000,
   commander: 800,
+  // Infantry peashooter: short reach — scouts must close to brawl.
+  peewee: 550,
 };
 
 export function maxRangeFor(kind: UnitKind): number {
@@ -131,6 +135,7 @@ export const AIM_SCATTER_RATE: Record<UnitKind, number> = {
   stump: 0.025,
   hammer: 0.06,
   commander: 0.02,
+  peewee: 0.02,
 };
 /** Hard cap on scatter radius, per kind (bounded stray, never a wild miss). */
 export const AIM_SCATTER_MAX: Record<UnitKind, number> = {
@@ -138,6 +143,7 @@ export const AIM_SCATTER_MAX: Record<UnitKind, number> = {
   stump: 28,
   hammer: 60,
   commander: 24,
+  peewee: 20,
 };
 
 /** Scatter radius for a shot of `distance` world units, per kind. */
@@ -362,6 +368,8 @@ export function muzzleHeight(kind: UnitKind): number {
       return 22;
     case "commander":
       return 30;
+    case "peewee":
+      return 9;
   }
 }
 
@@ -376,6 +384,8 @@ export function muzzleForward(kind: UnitKind): number {
       return 18;
     case "commander":
       return 6;
+    case "peewee":
+      return 8;
   }
 }
 
@@ -763,7 +773,7 @@ export const BARREL_TUBE_RADIUS = 2;
  * Gun-tube mount per tank kind: pivot height above the hull ground anchor
  * and fore/aft offset in the turret frame, plus tube length. Matches the
  * web `units.ts` build poses (flash pivot (0, 9.5, 3) + 14 tube, stump
- * (0, 12.5, 4) + 22, hammer (0, 13, 0) + 32). Null for the commander.
+ * (0, 12.5, 4) + 22, hammer (0, 13, 0) + 32, peewee (0, 8, 2) + 10). Null for the commander.
  */
 export const BARREL_MOUNT: Record<
   UnitKind,
@@ -773,6 +783,8 @@ export const BARREL_MOUNT: Record<
   stump: { pivotY: 12.5, pivotZ: 4, length: 22 },
   hammer: { pivotY: 13, pivotZ: 0, length: 32 },
   commander: null,
+  // Infantry hand-cannon: short tube on the little torso mount.
+  peewee: { pivotY: 8, pivotZ: 2, length: 10 },
 };
 
 /** World-space gun-tube segment ends (pivot `a`, tip `b`). */

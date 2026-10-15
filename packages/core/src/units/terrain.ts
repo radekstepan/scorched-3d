@@ -66,6 +66,8 @@ export const HULL_FOOTPRINT: Record<UnitKind, { halfLen: number; halfWid: number
   hammer: { halfLen: 13, halfWid: 9 },
   // Biped: legs spread ±4, torso above — a modest pad reads as planted.
   commander: { halfLen: 8, halfWid: 7 },
+  // Infantry scout: the smallest footprint — legs at ±2.5, short torso.
+  peewee: { halfLen: 6, halfWid: 5 },
 };
 
 /** Base clearance of the hull origin above the highest footprint tap. */

@@ -288,6 +288,7 @@ const WRECK_BREACH_Y: Record<UnitKind, number> = {
   stump: 9,
   hammer: 9,
   commander: 0,
+  peewee: 5,
 };
 /** Breached turret-ring collar radius per kind (tank turret widths). */
 const WRECK_BREACH_R: Record<UnitKind, number> = {
@@ -295,6 +296,7 @@ const WRECK_BREACH_R: Record<UnitKind, number> = {
   stump: 6.5,
   hammer: 5.5,
   commander: 0,
+  peewee: 3.5,
 };
 /** Breach collar fore/aft seat per kind (turret box centers). */
 const WRECK_BREACH_Z: Record<UnitKind, number> = {
@@ -302,6 +304,7 @@ const WRECK_BREACH_Z: Record<UnitKind, number> = {
   stump: -2,
   hammer: -2,
   commander: 0,
+  peewee: 0,
 };
 
 /** Fractional hash 0..1 of a roster index (golden-ratio phasing, no rng). */
@@ -1223,7 +1226,8 @@ export class CombatFx {
    * `poseHusks`) both keep working over it, and wrecks still never rock,
    * stun, tremble, or drive:
    *
-   * - Tanks (`flash`/`stump`/`hammer`): the turret subgroup detaches into a
+   * - Tanks (`flash`/`stump`/`hammer`) and the infantry scout (`peewee`):
+   *   the turret subgroup detaches into a
    *   ballistic `TurretDebris` chunk (charred, barrel and all), a breached
    *   turret-ring collar stays on the hull, and the hull boxes settle with a
    *   small deterministic slump. The husk reads as a headless breached hull.
@@ -1263,7 +1267,7 @@ export class CombatFx {
       });
       return;
     }
-    // Tanks: pop the turret, breach the ring, settle the hull boxes.
+    // Tanks + scout: pop the turret, breach the ring, settle the hull boxes.
     const turret = getTurret(body);
     if (turret) {
       body.updateMatrixWorld(true);

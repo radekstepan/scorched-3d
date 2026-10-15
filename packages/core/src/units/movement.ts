@@ -88,6 +88,8 @@ export const MOVE_SPEED: Record<UnitKind, number> = {
   stump: 40,
   commander: 32,
   hammer: 26,
+  // Infantry scout: the fastest feet on the field, outruns every tank.
+  peewee: 64,
 };
 
 /** Waypoints per looping route, including the spawn cell as waypoint 0. */

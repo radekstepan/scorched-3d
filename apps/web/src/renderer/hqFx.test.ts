@@ -70,7 +70,7 @@ describe("HqFx", () => {
       hq.update(HQ_SPAWN_INTERVAL + HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
     }
     expect(kinds).toHaveLength(HQ_MAX_SPAWNS);
-    expect(kinds).toEqual(["flash", "stump", "hammer", "flash"]);
+    expect(kinds).toEqual(["peewee", "flash", "stump", "hammer"]);
     expect(hq.spawnedAt(0)).toBe(HQ_MAX_SPAWNS);
     hq.dispose();
   });

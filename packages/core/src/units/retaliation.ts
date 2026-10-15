@@ -128,6 +128,8 @@ export const PURSUE_STANDOFF: Record<UnitKind, number> = {
   stump: 280,
   commander: 300,
   hammer: 480,
+  // Infantry closes to knife-fight range (its gun reaches 550).
+  peewee: 180,
 };
 
 /** True while the mover carries a live (unexpired) threat memory. */

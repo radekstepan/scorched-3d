@@ -63,6 +63,8 @@ export const GHOST_HEIGHT: Record<UnitKind, number> = {
   stump: 20,
   hammer: 24,
   commander: 48,
+  // Infantry scout: the shortest ghost on the field.
+  peewee: 14,
 };
 
 export interface Vec3Like {

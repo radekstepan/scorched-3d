@@ -120,6 +120,8 @@ export function restBarrelElevation(kind: UnitKind): number {
       return Math.PI / 4.5;
     case "commander":
       return 0;
+    case "peewee":
+      return 0.04;
   }
 }
 
@@ -151,6 +153,25 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     addWheels(parent, 4, 2, [-7, 0, 7], 8.4, 4);
     box(turret, 10, 6, 10, 0, 11, -2, def.accent);
     barrel(turret, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
+  } else if (kind === "peewee") {
+    // peewee: light infantry scout bot — a small two-leg walker with a
+    // hand-cannon on a light torso mount, the smallest silhouette on the
+    // field. Legs pivot at the hip (geometry translated to the joint) so
+    // the commander's alternating walk gait strides it via `getLegs`.
+    for (const x of [-2.5, 2.5]) {
+      const geo = new THREE.BoxGeometry(3, 5, 4);
+      geo.translate(0, -2.5, 0);
+      const leg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: def.accent }));
+      leg.name = "leg";
+      leg.position.set(x, 5, 0);
+      leg.userData.baseY = 5;
+      parent.add(leg);
+    }
+    box(turret, 7, 4.5, 8, 0, 7.25, 0, def.color);
+    box(turret, 7.5, 1.5, 8.5, 0, 5.5, 0, def.accent);
+    box(turret, 3.5, 3, 3.5, 0, 11, 0, def.color);
+    box(turret, 1.5, 2, 1.5, 0, 11, 2.25, def.accent);
+    barrel(turret, 0.9, 10, 0, 8, 2, 0.04, def.accent);
   } else {
     // commander: biped construction kbot, the tallest silhouette on the field.
     // Legs pivot at the hip (geometry translated so the mesh origin sits at

@@ -28,6 +28,8 @@ export const TURRET_LIMIT: Record<UnitKind, number> = {
   hammer: (5 * Math.PI) / 18,
   // Kbot: no turret mesh, so the whole torso/chest yaws ±90°.
   commander: Math.PI / 2,
+  // Infantry scout: light torso twists wide to track close targets.
+  peewee: Math.PI / 2,
 };
 
 /** Hull turn rate per kind, radians per second. */
@@ -36,6 +38,8 @@ export const HULL_TURN_RATE: Record<UnitKind, number> = {
   stump: 1.5,
   hammer: 1.1,
   commander: 1.6,
+  // Infantry: nimble on its feet, spins to face fast.
+  peewee: 2.6,
 };
 
 /** Turret slew rate per kind, radians per second. */
@@ -47,6 +51,7 @@ export const TURRET_SLEW_RATE: Record<UnitKind, number> = {
   stump: 1.9,
   hammer: 1.4,
   commander: 1.9,
+  peewee: 2.8,
 };
 
 /** Aim error under which a shot may leave the muzzle, radians (~3.4°). */
