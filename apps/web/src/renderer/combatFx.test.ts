@@ -462,19 +462,21 @@ describe("CombatFx destruction", () => {
     const fx = new CombatFx(scene, units, mulberry32(21), ctl.env);
     for (let n = 0; n < 200; n++) fx.update(0.05);
     expect(fx.scorchCount).toBeGreaterThan(0);
-    // One shallow dent per scar, capped at one height unit (visual only —
-    // pathing and unit seating never see it).
+    // One shallow dimple per scar, capped well under a height unit (visual
+    // only — pathing and unit seating never see it).
     expect(ctl.dents.length).toBe(fx.scorchCount);
     for (const d of ctl.dents) {
       expect(d.radius).toBeGreaterThan(0);
+      expect(d.radius).toBeLessThanOrEqual(34);
       expect(d.depth).toBeGreaterThan(0);
-      expect(d.depth).toBeLessThanOrEqual(1);
+      expect(d.depth).toBeLessThanOrEqual(0.6);
     }
-    // Instance tints are near-white multipliers over the baked char-center
-    // texture (the gradient carries the darkness now, not the tint).
+    // The shared scorch layer stays translucent so blotches never read as
+    // opaque mud: material opacity well under full.
     const mesh = scene.children.find(
       (c) => (c as THREE.InstancedMesh).isInstancedMesh,
     ) as THREE.InstancedMesh;
+    expect((mesh.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.7);
     const color = new THREE.Color();
     for (let i = 0; i < fx.scorchCount; i++) {
       mesh.getColorAt(i, color);

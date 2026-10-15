@@ -6,7 +6,7 @@ import { scorchDisplayRGB } from "@scorched-3d/core";
  *
  * The old single amber ring (0xfbbf24) drowned on burnt ground: the "brown
  * mud" under a selected unit is a persistent blast-scorch decal (see
- * `CombatFx`: char-black core warmed toward ember brown, red > green > blue),
+ * `CombatFx`: cool-grey char core fading to a desaturated grey rim),
  * ringed by amber bolts/flashes/sparks/explosion lights and warm HUD chrome.
  * Pure luminance contrast of amber-on-scorch is fine (~9:1) — the failure is
  * hue camouflage (amber ring among amber fire on ember-brown ground) plus a

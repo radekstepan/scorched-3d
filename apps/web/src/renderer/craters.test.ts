@@ -35,10 +35,9 @@ describe("scorchTexel (charred center, scorched rim)", () => {
   it("fades from an opaque char heart to a transparent fringe", () => {
     const [r0, g0, b0, a0] = scorchTexel(0);
     expect(a0).toBe(1);
-    // Near-black warm center, not mud brown.
+    // Dark cool-grey center, never saturated brown.
     expect(r0).toBeLessThan(0.12);
-    expect(r0).toBeGreaterThan(g0);
-    expect(g0).toBeGreaterThan(b0);
+    expect(Math.max(r0, g0, b0) - Math.min(r0, g0, b0)).toBeLessThan(0.02);
     const [, , , aMid] = scorchTexel(0.7);
     expect(aMid).toBeGreaterThan(0);
     expect(aMid).toBeLessThan(1);
@@ -46,14 +45,15 @@ describe("scorchTexel (charred center, scorched rim)", () => {
     expect(aOut).toBe(0);
   });
 
-  it("lightens toward a burnt-brown rim before dissolving", () => {
+  it("lightens toward a desaturated grey rim before dissolving", () => {
     const [r0] = scorchTexel(0);
-    const [rRim, gRim, bRim] = scorchTexel(0.8);
+    const [rRim, gRim, bRim, aRim] = scorchTexel(0.8);
     expect(rRim).toBeGreaterThan(r0);
-    expect(rRim).toBeGreaterThan(gRim);
-    expect(gRim).toBeGreaterThan(bRim);
-    // Rim stays dark scorched brown, never mud-bright.
-    expect(rRim).toBeLessThan(0.35);
+    expect(Math.max(rRim, gRim, bRim) - Math.min(rRim, gRim, bRim)).toBeLessThan(0.04);
+    // Rim stays dim grey, never mud-bright.
+    expect(rRim).toBeLessThan(0.24);
+    // Rim reads translucent, not painted: mostly faded by t = 0.8.
+    expect(aRim).toBeLessThan(0.35);
   });
 
   it("smoothstep clamps and eases", () => {
@@ -71,6 +71,10 @@ describe("bakeScorchBytes (shared texture)", () => {
     const center = (Math.floor(size / 2) * size + Math.floor(size / 2)) * 4;
     expect(bytes[center + 3]).toBe(255);
     expect(bytes[center]).toBeLessThan(40);
+    // Center texel is desaturated grey, never brown: channels track closely.
+    const spread = Math.max(bytes[center]!, bytes[center + 1]!, bytes[center + 2]!) -
+      Math.min(bytes[center]!, bytes[center + 1]!, bytes[center + 2]!);
+    expect(spread).toBeLessThan(12);
     // Far corner sits outside even the wobbled rim: fully transparent.
     expect(bytes[bytes.length - 1]).toBe(0);
   });

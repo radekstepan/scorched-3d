@@ -39,23 +39,23 @@ export const MAX_FELLED_PER_BLAST = 12;
 
 /** Blast radius in world units: artillery scars widest, bolts local. */
 export const BLAST_RADIUS: Record<UnitKind, number> = {
-  flash: 44,
-  stump: 52,
-  hammer: 80,
-  commander: 60,
+  flash: 36,
+  stump: 44,
+  hammer: 64,
+  commander: 48,
 };
 
 /** Scorch decal size/darkness per firing kind: shells scar big and black. */
 export function scorchForKind(kind: UnitKind): { radius: number; intensity: number } {
   switch (kind) {
     case "hammer":
-      return { radius: 46, intensity: 0.8 };
+      return { radius: 34, intensity: 0.62 };
     case "commander":
-      return { radius: 34, intensity: 0.7 };
+      return { radius: 26, intensity: 0.55 };
     case "stump":
-      return { radius: 28, intensity: 0.6 };
+      return { radius: 22, intensity: 0.5 };
     case "flash":
-      return { radius: 24, intensity: 0.55 };
+      return { radius: 18, intensity: 0.45 };
   }
 }
 
@@ -95,13 +95,13 @@ export const MAX_FIRES = 24;
 /** Perf cap: concurrent smoke puffs (burning + smouldering, view only). */
 export const MAX_SMOKE = 48;
 /** Fringe fires spread only to intact neighbours within this world distance. */
-export const FIRE_SPREAD_RADIUS = 70;
+export const FIRE_SPREAD_RADIUS = 45;
 /** Per-second ignition probability per eligible burning→intact pair. */
-export const SPREAD_RATE = 0.15;
+export const SPREAD_RATE = 0.08;
 /** Blast fraction inside which trees flatten instantly instead of igniting. */
-export const TOPPLE_FRACTION = 0.45;
+export const TOPPLE_FRACTION = 0.32;
 /** A burning tree must age this long before it can spread fire. */
-export const SPREAD_MIN_AGE = 2;
+export const SPREAD_MIN_AGE = 3;
 
 /** Caller-owned graduated damage state, indexed by feature id. */
 export interface DamageField {
@@ -317,10 +317,10 @@ export function addScorchMark(marks: ScorchMark[], mark: ScorchMark): ScorchMark
  * craters stay purely visual and can never trap a unit.
  */
 
-/** Charred center of the baked scorch gradient (sRGB 0..1, near-black warm). */
-export const SCORCH_CORE_RGB: [number, number, number] = [0.09, 0.066, 0.047];
-/** Scorched rim of the baked scorch gradient (sRGB 0..1, dark burnt brown). */
-export const SCORCH_RIM_RGB: [number, number, number] = [0.29, 0.18, 0.11];
+/** Charred center of the baked scorch gradient (sRGB 0..1, cool charcoal). */
+export const SCORCH_CORE_RGB: [number, number, number] = [0.08, 0.078, 0.086];
+/** Scorched rim of the baked scorch gradient (sRGB 0..1, desaturated grey). */
+export const SCORCH_RIM_RGB: [number, number, number] = [0.2, 0.185, 0.175];
 
 /**
  * Per-mark brightness multiplier from blast intensity: heavier shells scar
@@ -329,13 +329,13 @@ export const SCORCH_RIM_RGB: [number, number, number] = [0.29, 0.18, 0.11];
  */
 export function scorchShade(intensity: number): number {
   const clamped = Math.min(Math.max(intensity, 0), 1);
-  return 1 - clamped * 0.3;
+  return 1 - clamped * 0.22;
 }
 
 /**
  * Effective displayed center color of a scorch mark (baked char core times
- * the per-mark shade), for contrast policy + tests. Red > green > blue:
- * burnt ground, not mud.
+ * the per-mark shade), for contrast policy + tests. Cool desaturated grey:
+ * channels track within ~0.02, never saturated brown.
  */
 export function scorchDisplayRGB(intensity: number): [number, number, number] {
   const s = scorchShade(intensity);
@@ -373,18 +373,17 @@ export function scorchAnisotropy(seed: number): [number, number] {
 }
 
 /** Deepest a single blast dents the visual heightfield (pre-exaggeration height units). */
-export const MAX_CRATER_DEPTH = 1.0;
+export const MAX_CRATER_DEPTH = 0.6;
 /** Cap on accumulated dent at one spot (overlapping bowls never dig a pit). */
-export const MAX_CRATER_TOTAL = 2.0;
+export const MAX_CRATER_TOTAL = 1.2;
 
 /**
- * Dent depth for a blast intensity: hammer shells dig the full 1.0 height
- * unit (~2 world units at the default exaggeration — a shallow bowl, not a
- * pit), lighter bolts barely dimple the ground.
+ * Dent depth for a blast intensity: hammer shells dig the full 0.6 height
+ * units (a shallow dimple, not a pit), lighter bolts barely dimple the ground.
  */
 export function craterDepthForIntensity(intensity: number): number {
   const clamped = Math.min(Math.max(intensity, 0), 1);
-  return 0.25 + clamped * 0.75;
+  return 0.15 + clamped * 0.45;
 }
 
 /** Smooth bowl profile: 1 at ground zero, 0 past the rim (t = dist/radius). */

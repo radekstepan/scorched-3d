@@ -11,6 +11,7 @@ import {
   craterDepthForIntensity,
   craterFalloff,
   createDamageField,
+  FIRE_SPREAD_RADIUS,
   igniteTree,
   indicesInBlast,
   isTerminalTree,
@@ -29,7 +30,10 @@ import {
   scorchSeed,
   scorchShade,
   SMOULDER_DURATION,
+  SPREAD_MIN_AGE,
+  SPREAD_RATE,
   tickDamage,
+  TOPPLE_FRACTION,
   type ScorchMark,
 } from "./destruction";
 
@@ -51,6 +55,16 @@ describe("scorchForKind", () => {
       expect(s.intensity).toBeLessThanOrEqual(1);
     }
   });
+
+  it("keeps blotches small and soft (gentler scorch)", () => {
+    for (const kind of ["flash", "stump", "hammer", "commander"] as const) {
+      const s = scorchForKind(kind);
+      expect(s.radius).toBeLessThanOrEqual(34);
+      expect(s.intensity).toBeLessThanOrEqual(0.65);
+    }
+    expect(scorchForKind("hammer").radius).toBeLessThanOrEqual(34);
+    expect(scorchForKind("flash").radius).toBeLessThanOrEqual(20);
+  });
 });
 
 describe("BLAST_RADIUS", () => {
@@ -58,6 +72,12 @@ describe("BLAST_RADIUS", () => {
     expect(BLAST_RADIUS.hammer).toBeGreaterThan(BLAST_RADIUS.stump);
     expect(BLAST_RADIUS.hammer).toBeGreaterThan(BLAST_RADIUS.flash);
     expect(BLAST_RADIUS.hammer).toBeGreaterThan(BLAST_RADIUS.commander);
+  });
+
+  it("keeps fell radii contained (gentler environment damage)", () => {
+    expect(BLAST_RADIUS.hammer).toBeLessThanOrEqual(64);
+    expect(BLAST_RADIUS.flash).toBeLessThanOrEqual(40);
+    for (const r of Object.values(BLAST_RADIUS)) expect(r).toBeLessThan(70);
   });
 });
 
@@ -120,30 +140,33 @@ describe("believable scorch (charred center, irregular edge)", () => {
     expect(scorchAnisotropy(0.5)).toEqual([1, 1]);
   });
 
-  it("shades heavier blasts darker while staying burnt (red > green > blue)", () => {
-    expect(scorchShade(0.8)).toBeLessThan(scorchShade(0.55));
-    for (const i of [0, 0.55, 0.8, 1]) {
+  it("shades heavier blasts darker while staying cool grey, never poop-brown", () => {
+    expect(scorchShade(0.62)).toBeLessThan(scorchShade(0.45));
+    for (const i of [0, 0.45, 0.62, 1]) {
       const [r, g, b] = scorchDisplayRGB(i);
-      expect(r).toBeGreaterThan(g);
-      expect(g).toBeGreaterThan(b);
+      // Desaturated: channels track within a whisper, no brown cast.
+      expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThan(0.02);
       expect(r).toBeLessThanOrEqual(SCORCH_CORE_RGB[0]);
     }
-    // Hammer centers read near-black, flash centers merely dark.
-    expect(scorchDisplayRGB(0.8)[0]).toBeLessThan(0.075);
-    expect(scorchDisplayRGB(0.55)[0]).toBeGreaterThan(scorchDisplayRGB(0.8)[0]);
-    // The rim stays a dark burnt brown, never mud-bright.
-    expect(SCORCH_RIM_RGB[0]).toBeLessThan(0.35);
+    // Hammer centers read dark grey, flash centers merely dim.
+    expect(scorchDisplayRGB(0.62)[0]).toBeLessThan(0.075);
+    expect(scorchDisplayRGB(0.45)[0]).toBeGreaterThan(scorchDisplayRGB(0.62)[0]);
+    // Core is cool charcoal (blue at/above red), rim a desaturated grey.
+    expect(SCORCH_CORE_RGB[2]).toBeGreaterThanOrEqual(SCORCH_CORE_RGB[0]! - 0.005);
+    expect(SCORCH_RIM_RGB[0]! - SCORCH_RIM_RGB[2]!).toBeLessThan(0.04);
+    // The rim stays dim grey, never mud-bright.
+    expect(SCORCH_RIM_RGB[0]).toBeLessThan(0.24);
   });
 });
 
 describe("crater dents (tiny, visual-only)", () => {
-  it("digs at most one height unit, deeper for heavier blasts", () => {
-    expect(craterDepthForIntensity(0.8)).toBeGreaterThan(craterDepthForIntensity(0.55));
-    for (const i of [0, 0.55, 0.8, 1]) {
+  it("digs at most a shallow dimple, deeper for heavier blasts", () => {
+    expect(craterDepthForIntensity(0.62)).toBeGreaterThan(craterDepthForIntensity(0.45));
+    for (const i of [0, 0.45, 0.62, 1]) {
       expect(craterDepthForIntensity(i)).toBeGreaterThan(0);
       expect(craterDepthForIntensity(i)).toBeLessThanOrEqual(MAX_CRATER_DEPTH);
     }
-    expect(MAX_CRATER_DEPTH).toBe(1);
+    expect(MAX_CRATER_DEPTH).toBe(0.6);
   });
 
   it("profiles a smooth bowl: full depth at ground zero, none past the rim", () => {
@@ -169,9 +192,28 @@ describe("crater dents (tiny, visual-only)", () => {
     // Degenerate bowls contribute nothing.
     expect(craterDepthAt([{ x: 0, z: 0, radius: 0, depth: 5 }], 0, 0)).toBe(0);
     // Ten stacked heavies still cap instead of digging a pit.
-    const stacked = Array.from({ length: 10 }, () => ({ x: 0, z: 0, radius: 46, depth: 1 }));
+    const stacked = Array.from({ length: 10 }, () => ({ x: 0, z: 0, radius: 34, depth: 0.6 }));
     expect(craterDepthAt(stacked, 0, 0)).toBe(MAX_CRATER_TOTAL);
-    expect(MAX_CRATER_TOTAL).toBe(2);
+    expect(MAX_CRATER_TOTAL).toBe(1.2);
+  });
+});
+
+describe("gentler collateral (smaller cores, slower spread)", () => {
+  it("caps the instant-flatten core, spread reach, rate, and ignition age", () => {
+    expect(TOPPLE_FRACTION).toBeLessThanOrEqual(0.35);
+    expect(FIRE_SPREAD_RADIUS).toBeLessThanOrEqual(50);
+    expect(SPREAD_RATE).toBeLessThanOrEqual(0.1);
+    expect(SPREAD_MIN_AGE).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps accumulation + caps: scorch persists with oldest-eviction", () => {
+    // Regression pin: gentler tuning must not reintroduce fading scorch.
+    let marks: ScorchMark[] = [];
+    for (let i = 0; i < MAX_SCORCH_MARKS + 2; i++) {
+      marks = addScorchMark(marks, { x: i, z: 0, radius: 18, intensity: 0.45 });
+    }
+    expect(marks).toHaveLength(MAX_SCORCH_MARKS);
+    expect(marks[0]!.x).toBe(2);
   });
 });
 

@@ -12,14 +12,14 @@ import {
  *
  * The old scorch was a flat brown circle (one solid tone, hard silhouette) —
  * it read as mud. The shared texture baked here gives every mark a charred
- * near-black center fading to a dark burnt-brown rim with an irregular,
+ * cool-grey center fading to a desaturated grey rim with an irregular,
  * wobbling feathered edge; per-mark instance colors only scale brightness by
  * blast intensity, and each mark is squashed elliptically + rotated so no two
  * blotches share a silhouette. One 128² byte-bake shared by every mark, one
  * instanced draw — the scene budget is untouched.
  *
- * Craters dent the visual terrain mesh only (a shallow bowl ≤1 height unit
- * per blast, ~2 world units at the default exaggeration). Pathing and unit
+ * Craters dent the visual terrain mesh only (a shallow dimple ≤0.6 height units
+ * per blast). Pathing and unit
  * seating read the static core heightfield, so dents can never trap a unit;
  * only the mesh, scorch seating, and the hover probe dip into the bowl.
  */
@@ -51,17 +51,18 @@ export function smoothstep(edge0: number, edge1: number, x: number): number {
 
 /**
  * Baked scorch color at normalized radius `t` (0 = ground zero, 1 = rim):
- * charred core → burnt rim → transparent feather. Returns sRGB 0..1 + alpha.
+ * charred core → scorched rim → transparent feather. Returns sRGB 0..1 + alpha.
  */
 export function scorchTexel(t: number): [number, number, number, number] {
   const core = SCORCH_CORE_RGB;
   const rim = SCORCH_RIM_RGB;
-  const mix = smoothstep(0.15, 0.8, t);
+  const mix = smoothstep(0.25, 0.85, t);
   const r = core[0]! + (rim[0]! - core[0]!) * mix;
   const g = core[1]! + (rim[1]! - core[1]!) * mix;
   const b = core[2]! + (rim[2]! - core[2]!) * mix;
   // Opaque char heart, feathered scorched fringe dissolving past the rim.
-  const alpha = 1 - smoothstep(0.55, 1.0, t);
+  // The fringe starts fading early so the rim reads translucent, not painted.
+  const alpha = 1 - smoothstep(0.42, 0.9, t);
   return [r, g, b, alpha];
 }
 
@@ -117,7 +118,7 @@ export function disposeScorchTexture(): void {
  * Recompute terrain vertex heights from the static map minus the visual
  * crater bowls: `y = h * exaggeration - dent * exaggeration`. Deterministic
  * (pure function of map + craters + exaggeration), so exaggeration re-snaps
- * just re-run it. Normals are left alone per blast — the bowl is ≤1 height
+ * just re-run it. Normals are left alone per blast — the bowl is ≤0.6 height
  * unit deep and the dark char decal on top carries the shading; the canvas
  * recomputes normals on re-snap anyway.
  */

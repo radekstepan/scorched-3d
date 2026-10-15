@@ -260,7 +260,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
       for (const i of rockChanged) poseRock(i);
     };
-    // Shallow visual crater per impact (≤1 height unit each, oldest evicted
+    // Shallow visual crater per impact (≤0.6 height units each, oldest evicted
     // with the scorch cap so the bowl count never grows unbounded). The dent
     // lives only in the terrain mesh + groundY seating: core pathing and unit
     // seating read the static heightfield, so bowls never trap units.

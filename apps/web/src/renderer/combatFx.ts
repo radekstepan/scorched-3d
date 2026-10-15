@@ -154,7 +154,7 @@ export interface CombatEnv {
   blastFeatures: (x: number, z: number, radius: number) => void;
   /**
    * Optional shallow visual dent of the terrain mesh at world (x, z):
-   * `depth` is pre-exaggeration height units (≤1 per blast). Implemented by
+   * `depth` is pre-exaggeration height units (≤0.6 per blast). Implemented by
    * the canvas, which owns the terrain geometry; purely visual — pathing and
    * unit seating read the static core heightfield.
    */
@@ -186,7 +186,7 @@ export class CombatFx {
     color: 0xffffff,
     map: getScorchTexture(),
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.62,
     depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: -2,
