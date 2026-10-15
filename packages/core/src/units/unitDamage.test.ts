@@ -3,8 +3,17 @@ import {
   applyBlastToUnits,
   charMix,
   createUnitDamage,
+  HUSK_DECAY_DURATION,
+  HUSK_EMBER_END,
+  HUSK_SINK_DEPTH,
+  HUSK_SMOKE_END,
+  huskDecay,
+  huskEmbers,
+  huskSink,
+  huskSmokes,
   isDestroyed,
   isHeavilyDamaged,
+  isHuskGone,
   isSmoking,
   UNIT_HIT_DAMAGE,
   UNIT_HEAVY_DAMAGE,
@@ -62,6 +71,58 @@ describe("unit death", () => {
     }
     expect(kills).toBe(1);
     expect(damage[0]).toBe(1);
+  });
+});
+
+describe("husk decay", () => {
+  it("decays slowly: fresh at the kill, gone only after the full duration", () => {
+    // A wreck must smoulder on the field for a good while, not pop away.
+    expect(HUSK_DECAY_DURATION).toBeGreaterThanOrEqual(30);
+    expect(huskDecay(0)).toBe(0);
+    expect(huskDecay(-5)).toBe(0);
+    expect(huskDecay(Number.NaN)).toBe(0);
+    expect(huskDecay(HUSK_DECAY_DURATION / 2)).toBeCloseTo(0.5, 12);
+    expect(huskDecay(HUSK_DECAY_DURATION)).toBe(1);
+    expect(huskDecay(HUSK_DECAY_DURATION * 3)).toBe(1);
+    expect(isHuskGone(0)).toBe(false);
+    expect(isHuskGone(HUSK_DECAY_DURATION - 1e-6)).toBe(false);
+    expect(isHuskGone(HUSK_DECAY_DURATION)).toBe(true);
+    expect(isHuskGone(HUSK_DECAY_DURATION + 100)).toBe(true);
+  });
+
+  it("sinks linearly to the full depth, clamped at both ends", () => {
+    expect(HUSK_SINK_DEPTH).toBeGreaterThan(0);
+    expect(huskSink(0)).toBe(0);
+    expect(huskSink(0.5)).toBeCloseTo(HUSK_SINK_DEPTH / 2, 12);
+    expect(huskSink(1)).toBe(HUSK_SINK_DEPTH);
+    expect(huskSink(-1)).toBe(0);
+    expect(huskSink(2)).toBe(HUSK_SINK_DEPTH);
+    // Monotonic: the husk never resurfaces mid-decay.
+    let prev = -Infinity;
+    for (const d of [0, 0.1, 0.35, 0.7, 0.99, 1]) {
+      const s = huskSink(d);
+      expect(s).toBeGreaterThanOrEqual(prev);
+      prev = s;
+    }
+  });
+
+  it("gutters embers first, then smoke, then the husk itself", () => {
+    // Fire dies while smoke lingers; both end long before the husk is gone.
+    expect(HUSK_EMBER_END).toBeGreaterThan(0);
+    expect(HUSK_EMBER_END).toBeLessThan(HUSK_SMOKE_END);
+    expect(HUSK_SMOKE_END).toBeLessThan(1);
+    expect(huskEmbers(0)).toBe(true);
+    expect(huskSmokes(0)).toBe(true);
+    const mid = (HUSK_EMBER_END + HUSK_SMOKE_END) / 2;
+    expect(huskEmbers(mid)).toBe(false);
+    expect(huskSmokes(mid)).toBe(true);
+    const late = (HUSK_SMOKE_END + 1) / 2;
+    expect(huskEmbers(late)).toBe(false);
+    expect(huskSmokes(late)).toBe(false);
+    // Fresh kills always read as smouldering wrecks through the damage view.
+    expect(huskDecay(0)).toBe(0);
+    expect(huskSmokes(huskDecay(1))).toBe(true);
+    expect(huskSmokes(huskDecay(HUSK_DECAY_DURATION))).toBe(false);
   });
 });
 

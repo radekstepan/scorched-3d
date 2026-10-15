@@ -12,8 +12,11 @@ import {
   craterDepthForIntensity,
   createUnitDamage,
   GRAVITY,
+  huskDecay,
+  huskSink,
   inRange,
   isDestroyed,
+  isHuskGone,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
   MAX_SHOTS,
@@ -78,7 +81,7 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
  *   accumulating damage (charring hull tint, damage smoke, heavy-hit
  *   embers — hulls are never moved by blasts; a hull that exhausts its
- *   health dies once, epicly, and stays as a smouldering wreck).
+ *   health dies once, epicly, and lingers as a smouldering husk that slowly sinks, gutters out, and vanishes).
  */
 
 interface Shot {
@@ -250,6 +253,13 @@ export class CombatFx {
    * before/after pair of one splash, so each flag flips exactly once.
    */
   private destroyed: boolean[] = [];
+  /**
+   * Deterministic kill clock per unit (`elapsed` seconds at the kill, null
+   * while alive), sized with `damage` and persistent like the flags. Husk
+   * decay is a pure function of `elapsed - killedAt`, so re-snaps and
+   * `clearTransients` (which never touch `elapsed`) cannot disturb it.
+   */
+  private killedAt: (number | null)[] = [];
   /** Units killed so far (wrecks persist in the roster buffers). */
   private deathCount = 0;
   /**
@@ -348,6 +358,37 @@ export class CombatFx {
     return this.deathCount;
   }
 
+  /**
+   * Seconds since the unit died (0 while alive). Drives the core husk-decay
+   * pacing; never resets except on dispose/regen.
+   */
+  huskAgeAt(index: number): number {
+    const at = this.killedAt[index];
+    if (at === null || at === undefined) return 0;
+    return Math.max(this.elapsed - at, 0);
+  }
+
+  /** Husk decay fraction 0 (fresh wreck) .. 1 (fully gone), 0 while alive. */
+  huskDecayAt(index: number): number {
+    if (!this.destroyed[index]) return 0;
+    return huskDecay(this.huskAgeAt(index));
+  }
+
+  /** True once the husk has finished decaying (body hidden, scar remains). */
+  isHuskGoneAt(index: number): boolean {
+    if (!this.destroyed[index]) return false;
+    return isHuskGone(this.huskAgeAt(index));
+  }
+
+  /** Husks fully decayed so far (hidden bodies; roster slots retained). */
+  get goneCount(): number {
+    let gone = 0;
+    for (let i = 0; i < this.destroyed.length; i++) {
+      if (this.isHuskGoneAt(i)) gone++;
+    }
+    return gone;
+  }
+
   /** Live (targetable, drivable) unit count: roster minus wrecks. */
   get aliveCount(): number {
     let alive = 0;
@@ -417,7 +458,11 @@ export class CombatFx {
     this.advanceFlashes(dt);
     this.advanceExplosions(dt);
     this.advanceRecoil(dt);
-    this.damageFx.update(this.damage, this.units.children, this.elapsed);
+    // Husks decay after every other pose (movement re-seats bodies and recoil
+    // restores them above, so the sink must win last); smoke/embers ride the
+    // sunk hulls and gutter out through the same decay fractions.
+    const husk = this.poseHusks();
+    this.damageFx.update(this.damage, this.units.children, this.elapsed, husk);
   }
 
   /** Drop in-flight shots, flashes, and explosions (e.g. on exaggeration re-snap). */
@@ -491,6 +536,8 @@ export class CombatFx {
     }
     while (this.destroyed.length < count) this.destroyed.push(false);
     if (this.destroyed.length > count) this.destroyed.length = count;
+    while (this.killedAt.length < count) this.killedAt.push(null);
+    if (this.killedAt.length > count) this.killedAt.length = count;
   }
 
   /**
@@ -499,7 +546,7 @@ export class CombatFx {
    * never moved (only recoil touches them). A hull crossing the kill
    * threshold dies exactly once: an epic explosion at the hull, full char,
    * and the `onUnitKilled` hook (movement hold, deselect) — the instance
-   * itself stays put as a smouldering wreck.
+   * itself lingers as a decaying husk (see `poseHusks`).
    */
   private damageUnits(at: THREE.Vector3, kind: UnitKind): void {
     if (this.damage.length === 0) return;
@@ -517,6 +564,7 @@ export class CombatFx {
       if (body) applyUnitDamageTint(body, this.damage[i]!);
       if (!this.destroyed[i] && !isDestroyed(before[i]!) && isDestroyed(this.damage[i]!)) {
         this.destroyed[i] = true;
+        this.killedAt[i] = this.elapsed;
         this.deathCount += 1;
         const wreck = bodies[i];
         if (wreck) {
@@ -526,6 +574,35 @@ export class CombatFx {
       }
     }
   }
+  /**
+   * Sink and retire husks: every wreck lowers by the core sink for its decay
+   * fraction (absolute offset — movement re-seats the body from the frozen
+   * mover each tick, so re-subtracting never accumulates), and a fully
+   * decayed husk hides its body while keeping its roster slot (targeting,
+   * movement, and selection already exclude it; the scorch scar stays as the
+   * battlefield history). Returns the per-unit decay fractions for the
+   * damage-smoke view. Re-applied every tick, so exaggeration re-snaps and
+   * `clearTransients` (which never touch the kill clock) cannot resurrect a
+   * sunk husk.
+   */
+  private poseHusks(): number[] {
+    const bodies = this.units.children;
+    const decay: number[] = new Array<number>(bodies.length).fill(0);
+    for (let i = 0; i < bodies.length; i++) {
+      if (!this.destroyed[i]) continue;
+      const d = huskDecay(this.huskAgeAt(i));
+      decay[i] = d;
+      const body = bodies[i] as THREE.Group | undefined;
+      if (!body) continue;
+      if (d >= 1) {
+        body.visible = false;
+      } else {
+        body.position.y -= huskSink(d);
+      }
+    }
+    return decay;
+  }
+
   /** Size the aim pose array to the unit roster, seeding from live yaws. */
   private ensureAim(): void {
     const bodies = this.units.children as THREE.Group[];

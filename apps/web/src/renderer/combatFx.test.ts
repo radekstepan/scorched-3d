@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  HUSK_DECAY_DURATION,
+  HUSK_SMOKE_END,
   MAX_SCORCH_MARKS,
   mulberry32,
   TURRET_LIMIT,
@@ -564,6 +566,117 @@ describe("CombatFx unit death", () => {
     for (let n = 0; n < maxSteps && fx.killCount === 0; n++) fx.update(1 / 60);
     expect(fx.killCount).toBeGreaterThan(0);
   }
+
+  it("ages husks from the kill: fresh wreck, sinking husk, hidden gone", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    const body = units.children[0] as THREE.Group;
+    // Fresh wreck: no decay, fully seated, still rendered.
+    expect(fx.huskAgeAt(0)).toBeCloseTo(0, 9);
+    expect(fx.huskDecayAt(0)).toBe(0);
+    expect(fx.isHuskGoneAt(0)).toBe(false);
+    expect(body.visible).toBe(true);
+    const seatY = body.position.y;
+    // Live hulls read zero age/decay and never count as gone.
+    expect(fx.huskAgeAt(1)).toBe(0);
+    expect(fx.huskDecayAt(1)).toBe(0);
+    expect(fx.isHuskGoneAt(1)).toBe(false);
+    // Mid decay: the husk sinks below its death seat but still renders.
+    for (let n = 0; n < 30 * 60; n++) fx.update(1 / 60);
+    expect(fx.huskAgeAt(0)).toBeCloseTo(30, 6);
+    expect(fx.huskDecayAt(0)).toBeCloseTo(0.5, 6);
+    expect(fx.huskDecayAt(0)).toBeCloseTo(
+      fx.huskAgeAt(0) / HUSK_DECAY_DURATION,
+      9,
+    );
+    expect(fx.isHuskGoneAt(0)).toBe(false);
+    expect(body.position.y).toBeLessThan(seatY);
+    expect(body.visible).toBe(true);
+    // Fully decayed: the body hides but the roster slot (and scar) remain.
+    for (let n = 0; n < 35 * 60; n++) fx.update(1 / 60);
+    expect(fx.huskAgeAt(0)).toBeGreaterThanOrEqual(HUSK_DECAY_DURATION);
+    expect(fx.huskDecayAt(0)).toBe(1);
+    expect(fx.isHuskGoneAt(0)).toBe(true);
+    expect(body.visible).toBe(false);
+    expect(fx.goneCount).toBeGreaterThanOrEqual(1);
+    // Decay never resurrects: still dead, still out of the fight.
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.unitDamageAt(0)).toBe(1);
+    expect(fx.aliveCount).toBeLessThanOrEqual(2);
+    expect(units.children.length).toBe(3);
+    expect(fx.scorchCount).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("keeps the kill clock through clearTransients (decay never rewinds)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 0, 0.99);
+    stepUntilKill(fx);
+    for (let n = 0; n < 300; n++) fx.update(1 / 60); // 5 s of decay
+    const age = fx.huskAgeAt(0);
+    expect(age).toBeCloseTo(5, 6);
+    const y = (units.children[0] as THREE.Group).position.y;
+    fx.clearTransients();
+    // The clock persists: age and decay read the same after the clear.
+    expect(fx.huskAgeAt(0)).toBeCloseTo(age, 9);
+    expect(fx.huskDecayAt(0)).toBeCloseTo(age / HUSK_DECAY_DURATION, 9);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    // (The rest of the roster keeps fighting through the window — a second
+    // kill here is fine; only unit 0's clock is under test.)
+    expect(fx.killCount).toBeGreaterThanOrEqual(1);
+    // And decay resumes on the next tick — no snap back to the death seat.
+    fx.update(1 / 60);
+    expect((units.children[0] as THREE.Group).position.y).toBeLessThan(y);
+    fx.dispose();
+  });
+
+  it("gutters wreck smoke once every husk has aged out", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    // White-box extinction: ambient fire goes quiet with one hull left, so
+    // a full roster can never die organically (the organic kill path is
+    // covered above — here only the decay-driven FX gating is under test).
+    const internals = fx as unknown as {
+      damage: number[];
+      destroyed: boolean[];
+      killedAt: (number | null)[];
+      deathCount: number;
+      elapsed: number;
+    };
+    for (let i = 0; i < 3; i++) {
+      internals.damage[i] = 1;
+      internals.destroyed[i] = true;
+      internals.killedAt[i] = internals.elapsed;
+      internals.deathCount += 1;
+    }
+    // Fresh husks still smoulder: scan past the intermittent emission gaps.
+    let smouldered = false;
+    for (let n = 0; n < 600 && !smouldered; n++) {
+      fx.update(1 / 60);
+      smouldered = fx.unitSmokeCount > 0;
+    }
+    expect(smouldered).toBe(true);
+    // Age every husk past the smoke end: silence — embers too. Rewind the
+    // kill timestamps (the test backdoor above owns them) instead of
+    // stepping thousands of ticks.
+    const youngest = Math.min(fx.huskAgeAt(0), fx.huskAgeAt(1), fx.huskAgeAt(2));
+    const wait = HUSK_SMOKE_END * HUSK_DECAY_DURATION - youngest + 2;
+    for (let i = 0; i < 3; i++) internals.killedAt[i]! -= wait;
+    fx.update(1 / 60);
+    expect(fx.unitSmokeCount).toBe(0);
+    expect(fx.unitEmberCount).toBe(0);
+    // The roster slots (and dim minimap dots) remain.
+    expect(units.children.length).toBe(3);
+    expect(fx.aliveCount).toBe(0);
+    fx.dispose();
+  });
 
   it("kills once at exhaustion: hook fires once, wreck persists, epic burst spawns", () => {
     const scene = new THREE.Scene();

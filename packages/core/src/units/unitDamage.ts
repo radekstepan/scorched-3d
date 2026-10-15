@@ -47,6 +47,65 @@ export function createUnitDamage(count: number): number[] {
   return new Array<number>(Math.max(count, 0)).fill(0);
 }
 
+/**
+ * Husks: a destroyed hull lingers as a wreck, then slowly decays into the
+ * ground (TA parallel: retail units leave corpse features that persist as
+ * reclaimable wrecks; here the demo has no economy, so the husk instead
+ * sinks, gutters out, and finally vanishes — leaving only its scorch scar).
+ *
+ * Framework-free like the rest of this module: the renderer owns the
+ * sinking/hiding while every threshold lives here so vitest can cover the
+ * pacing without WebGL. All husk state derives from one clock — seconds
+ * since the kill — so replays and exaggeration re-snaps cannot disturb it.
+ */
+
+/**
+ * Seconds from the kill until the husk is fully gone. Slow on purpose: a
+ * wreck should smoulder on the field for a full minute of skirmish before
+ * it finishes sinking.
+ */
+export const HUSK_DECAY_DURATION = 60;
+/** World units the husk sinks below its death seat when fully decayed. */
+export const HUSK_SINK_DEPTH = 9;
+/**
+ * Decay fraction past which the ember spark gutters out (fire dies first,
+ * smoke lingers).
+ */
+export const HUSK_EMBER_END = 0.2;
+/** Decay fraction past which even the smoke wisps stop. */
+export const HUSK_SMOKE_END = 0.6;
+
+/**
+ * Husk decay fraction 0 (fresh wreck) .. 1 (fully gone) for `ageSeconds`
+ * since the kill. Clamped, so negative clocks read fresh and over-long
+ * clocks read gone.
+ */
+export function huskDecay(ageSeconds: number): number {
+  if (!(ageSeconds > 0)) return 0;
+  return Math.min(ageSeconds / HUSK_DECAY_DURATION, 1);
+}
+
+/** World units to lower a husk body at `decay` 0..1 (linear sink). */
+export function huskSink(decay: number): number {
+  const clamped = Math.min(Math.max(decay, 0), 1);
+  return clamped * HUSK_SINK_DEPTH;
+}
+
+/** True once the husk has finished decaying and may be hidden. */
+export function isHuskGone(ageSeconds: number): boolean {
+  return ageSeconds >= HUSK_DECAY_DURATION;
+}
+
+/** True while a husk at `decay` 0..1 still trails smoke wisps. */
+export function huskSmokes(decay: number): boolean {
+  return decay < HUSK_SMOKE_END;
+}
+
+/** True while a husk at `decay` 0..1 still flickers its ember spark. */
+export function huskEmbers(decay: number): boolean {
+  return decay < HUSK_EMBER_END;
+}
+
 /** Char mix 0..1 for a damage fraction (linear to saturation, then pinned). */
 export function charMix(damage: number): number {
   if (!(damage > 0)) return 0;

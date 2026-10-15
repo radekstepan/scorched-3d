@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { UNIT_DEFS, type TNTMap } from "@scorched-3d/core";
+import {
+  HUSK_EMBER_END,
+  HUSK_SMOKE_END,
+  UNIT_DEFS,
+  type TNTMap,
+} from "@scorched-3d/core";
 import {
   applyUnitDamageTint,
   baseColorOf,
@@ -289,6 +294,43 @@ describe("UnitDamageFx", () => {
     fx.update([0, 0], units.children, t + 1.0);
     expect(fx.smokeCount).toBe(0);
     expect(fx.emberCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("gutters husk smoke and embers through decay, live hulls puff on", () => {
+    const scene = new THREE.Scene();
+    const fx = new UnitDamageFx(scene);
+    const units = buildUnits(fakeMap(), 1);
+    // A tick where the gutted hull shows both its puff and its ember.
+    let t = visibleAt(1, true);
+    if (!isEmberVisible(1, t)) {
+      for (let s = 0; s < UNIT_EMBER_PERIOD * 2; s += 0.05) {
+        if (isPuffVisible(1, s, true) && isEmberVisible(1, s)) {
+          t = s;
+          break;
+        }
+      }
+    }
+    expect(isPuffVisible(1, t, true)).toBe(true);
+    expect(isEmberVisible(1, t)).toBe(true);
+    const mid = (HUSK_EMBER_END + HUSK_SMOKE_END) / 2; // embers out, smoke stays
+    const late = (HUSK_SMOKE_END + 1) / 2; // both out
+    // Fresh husk reads exactly like a live gutted hull.
+    fx.update([0, 1], units.children, t, [0, 0]);
+    expect(fx.smokeCount).toBe(1);
+    expect(fx.emberCount).toBe(1);
+    // Mid decay: the spark gutters out while wisps linger.
+    fx.update([0, 1], units.children, t, [0, mid]);
+    expect(fx.smokeCount).toBe(1);
+    expect(fx.emberCount).toBe(0);
+    // Late decay: even the smoke stops (the sunk husk burns out quietly).
+    fx.update([0, 1], units.children, t, [0, late]);
+    expect(fx.smokeCount).toBe(0);
+    expect(fx.emberCount).toBe(0);
+    // Omitted decay keeps the legacy read: battered hulls smoulder forever.
+    fx.update([0, 1], units.children, t);
+    expect(fx.smokeCount).toBe(1);
+    expect(fx.emberCount).toBe(1);
     fx.dispose();
   });
 });

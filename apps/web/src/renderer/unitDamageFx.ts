@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import {
   charMix,
+  huskEmbers,
+  huskSmokes,
   isHeavilyDamaged,
   isSmoking,
   UNIT_HEAVY_DAMAGE,
@@ -190,8 +192,16 @@ export class UnitDamageFx {
    * phase-hashed puff cadence — each smoking hull emits one small puff per
    * window with gaps between, so damage reads as intermittent wisps rather
    * than a constant column. No rng, so replays match frame for frame.
+   * `huskDecay` (optional, decay 0..1 per unit, 0 for live hulls) gutters
+   * decaying husks: embers die first, then smoke, then — once the husk is
+   * fully sunk — the FX naturally clears because the body is hidden too.
    */
-  update(damage: readonly number[], bodies: readonly THREE.Object3D[], elapsed: number): void {
+  update(
+    damage: readonly number[],
+    bodies: readonly THREE.Object3D[],
+    elapsed: number,
+    huskDecay?: readonly number[],
+  ): void {
     if (this.disposed) return;
     const dummy = this.dummy;
     let smoke = 0;
@@ -200,8 +210,11 @@ export class UnitDamageFx {
     for (let i = 0; i < n; i++) {
       const d = damage[i]!;
       if (!isSmoking(d)) continue;
+      const husk = huskDecay?.[i] ?? 0;
+      if (!huskSmokes(husk)) continue;
       const body = bodies[i]!;
       const heavy = isHeavilyDamaged(d);
+      const guttered = !huskEmbers(husk);
       if (smoke < MAX_UNIT_SMOKE && isPuffVisible(i, elapsed, heavy)) {
         // One puff life per window: rises from the hull, swells, dissipates.
         const localT = puffPhase(i, elapsed) / puffDuty(heavy);
@@ -221,7 +234,7 @@ export class UnitDamageFx {
         this.smokeMesh.setColorAt(smoke, this.tint.setRGB(tone, tone * 0.96, tone * 0.92));
         smoke++;
       }
-      if (heavy && embers < MAX_UNIT_EMBERS && isEmberVisible(i, elapsed)) {
+      if (heavy && !guttered && embers < MAX_UNIT_EMBERS && isEmberVisible(i, elapsed)) {
         // Ember spark dancing low over the hull: soft flicker, blinks out.
         const flicker = 0.35 + 0.25 * Math.abs(Math.sin(elapsed * 11 + i * 2.9));
         dummy.position.set(

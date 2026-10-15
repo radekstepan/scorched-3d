@@ -310,8 +310,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       });
       selectionRef.current?.([...selection]);
     };
-    // Unit death: freeze the mover as a wreck and drop it from the
-    // selection (the charred instance stays in the scene, smouldering).
+    // Unit death: freeze the mover as a husk and drop it from the
+    // selection (combat sinks, gutters, and finally hides the charred
+    // instance over its slow decay; the scorch scar stays).
     combat.onUnitKilled = (index) => {
       movement.markDestroyed(index);
       if (selection.includes(index)) {
