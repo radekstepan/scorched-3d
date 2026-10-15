@@ -78,6 +78,7 @@ import {
   markerVisibility,
   updateSelectionMarker,
 } from "./selectionFx";
+import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { createFpsSampler, formatFps } from "./fps";
 
@@ -302,6 +303,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (craters.length > 48) craters.shift();
       applyCraters(geometry, map, craters, optsRef.current.exaggeration);
     };
+    const liveStands = (): TreeStand[] =>
+      allTrees.map((p, fid) => {
+        const state = damage.trees[fid] ?? "intact";
+        return {
+          x: p.x,
+          z: p.z,
+          groundY: groundY(p.x, p.z),
+          standing: state === "intact" || state === "burning" || state === "smouldering",
+        };
+      });
     const combat = new CombatFx(scene, units, Math.random, {
       groundY,
       slopeAt: (x, z) => blastSlopeAt(map, x, z),
@@ -310,17 +321,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // Projectile tree interception: live crowns/trunks catch rounds
       // (stuck bolt embers, shell early bursts) and block flat lines of
       // fire so guns lob over the canopy. Felled/stump/snag/gone wood has
-      // no crown left to catch — only standing trees intercept.
-      treeStands: (): TreeStand[] =>
-        allTrees.map((p, fid) => {
-          const state = damage.trees[fid] ?? "intact";
-          return {
-            x: p.x,
-            z: p.z,
-            groundY: groundY(p.x, p.z),
-            standing: state === "intact" || state === "burning" || state === "smouldering",
-          };
-        }),
+      // no crown left to catch — only standing trees intercept. The same
+      // stands feed the occlusion x-ray below, so view-blocking wood and
+      // round-blocking wood can never disagree.
+      treeStands: liveStands,
       strikeTree: (fid: number) => {
         if (igniteTree(damage, fid)) {
           poseTree(fid);
@@ -358,6 +362,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live CombatFx damage, re-seated every tick from the body origins.
     const health = new HealthBars(scene, units.children.length);
     health.setVisible(optsRef.current.showHealth);
+    // Occlusion x-ray: a blue box outline (selection cyan) for any unit
+    // hidden behind the heightfield or a live canopy from this camera, so
+    // occluded hulls stay locatable. Own scene group, depth-ignored, above
+    // the health-bar layer; never a body child, so hull paint (incl. damage
+    // charring), selection rings/beacons, waypoints, and picking ignore it.
+    // Sampled taps vs live groundY + the shared stands — no raycaster.
+    const occlusion = new OcclusionFx(
+      scene,
+      map.units.map((u) => u.kind),
+    );
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
     // spinning/bobbing chevron beacon above the hull (see selectionFx for
@@ -718,6 +732,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       waypoints.update(movement, units.children.length, t);
       health.setVisible(opt.showHealth);
       health.update(combat, units.children, camera);
+      occlusion.update(camera.position, units.children, { groundY, stands: liveStands() }, combat);
       combat.update(dt);
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
@@ -794,6 +809,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       movement.dispose();
       waypoints.dispose();
       health.dispose();
+      occlusion.dispose();
+      disposeOcclusionAssets();
       combat.dispose();
       fire.dispose();
       selectionRef.current?.([]);
