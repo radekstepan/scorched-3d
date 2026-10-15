@@ -16,7 +16,7 @@ import { HULL_FOOTPRINT, WHEEL_RADIUS, type Mover, type UnitKind } from "@scorch
  */
 
 /** Seconds one mark stays visible before it is recycled. */
-export const TRACK_LIFETIME = 12;
+export const TRACK_LIFETIME = 14;
 /** Travel distance (world units) between dropped marks. */
 export const TRACK_SPACING = 16;
 /**
@@ -26,19 +26,19 @@ export const TRACK_SPACING = 16;
  */
 export const MAX_TRACKS = 320;
 /** Peak opacity of a fresh mark (visible, still well under the scorch layer). */
-export const TRACK_PEAK_OPACITY = 0.42;
+export const TRACK_PEAK_OPACITY = 0.5;
 /** Mark color: cool dark grey (compressed dust, never scorch-brown). */
-export const TRACK_COLOR = 0x33302b;
+export const TRACK_COLOR = 0x2b2823;
 /** Surface lift above the seated terrain (below scorch, above z-fight). */
 export const TRACK_LIFT = 0.8;
 /** Tread length along travel (overlaps `TRACK_SPACING` so lanes link up). */
-export const TRACK_LENGTH = 22;
+export const TRACK_LENGTH = 24;
 /**
  * Footstep length along travel for the walker. Shorter than
  * `TRACK_SPACING`, so footsteps read as dashes with gaps between them
  * instead of a linked ribbon.
  */
-export const FOOTSTEP_LENGTH = 10;
+export const FOOTSTEP_LENGTH = 12;
 /**
  * Lateral footstep offset for the walker: matches the leg spread (±4 in
  * the body build), so left/right steps land under the striding feet.
@@ -52,12 +52,12 @@ export const FOOTSTEP_OFFSET = 4;
  * (see `trackOffsetFor`).
  */
 export const TRACK_WIDTH: Record<UnitKind, number> = {
-  flash: 4,
-  stump: 5,
-  hammer: 4.5,
-  commander: 3.5,
+  flash: 5,
+  stump: 6,
+  hammer: 5.5,
+  commander: 4,
   // Infantry scuff: narrower than any tank tread.
-  peewee: 2.5,
+  peewee: 3,
 };
 
 /** Single-tread width for a kind (falls back to flash for unknown kinds). */
