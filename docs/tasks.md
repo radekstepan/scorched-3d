@@ -16,28 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-a unit wants to close in, but a forest that slows it down plus makes it harder for projectiles to get through. It should have a logic in pathfinding to try to go around if overall that were a better path.
+the hq should have a red flashing light on the top front of the building by the entrance, it should be a little detail to tell it's a "working" building. Make it illuminate the area a little bit.
 
-2x default zoom speed and be able to zoom in closer still
+improve the water. Right now it looks "static" with rectangles just flowing in one direction, make it a ibt more random.
 
-Pan speed is tooo slow, 3x the current speed and increase the default
+check for hot loops. If my cursor is not over an area I am getting 120fps, but around 70 when I hover the cursor over the UI.
 
-A peewee should have a faster firing (commander like) gun that does less damage but faster rate of fire. And close up it can lob "grenades"
+Clicking on a minimap the view should jump to place the item in the center of the view that I just clicked at, given the angle and zoom level.
 
-At some point the units remain stationery even after engaging with enemy. Maybe the smallest unit, the peewee should work as a scout and look for enemy which then engages the rest.
+Increase zoom speed by 2x by default. And all the current defaults are 1x on the slider (remap them)
 
-Speed up the overall movement of uniots especially through rough terrain/woods
+the units that come out of the HQ should be random, but "stronger" units should take more time to make.
 
-If we have a group of units selected, they try to move as a group rather than faster units cutting ahead.
-
-Make the default height scale 1.5x
-
-A dead unit still shows a "circle" around itself. Remove it immediately after exploding/dying.
-
-If a group/unit is attacking the HQ, but it's attacked by enemy consistently, deal with the enemy first.
-
-Show health over HQ (if toggled)
-
-Make clicking on minimap more natural. Given the angle I am looking at, if I click at say HQ on minimap, the HQ should be in the center of my view after the click.
-
-Do not show dead units on the minimap.
+If a tank is being shelled it shouldn't just stay there, it should inbestigate where the firing is coming from.
