@@ -38,6 +38,7 @@ import {
   scorchShade,
   solveShotClearing,
   stepAngle,
+  THREAT_ENGAGE_RADIUS,
   treesOnSegment,
   TURRET_SLEW_RATE,
   wrapAngle,
@@ -105,6 +106,13 @@ interface Shot {
   age: number;
   dur: number;
   kind: UnitKind;
+  /**
+   * Roster index that fired the round (and its intended target), threaded
+   * through to the impact splash so victims know *who* to pursue. The
+   * skirmish is free-for-all, so every other hull is a valid threat.
+   */
+  attacker: number;
+  target: number;
 }
 
 interface Flash {
@@ -537,6 +545,19 @@ export class CombatFx {
    * fire it (the wreck holds instead) and wrecks never re-fire it.
    */
   onUnitStunned: ((index: number, damageAdd: number) => void) | null = null;
+  /**
+   * Fired once per surviving hull per hostile splash with the shooter's
+   * roster index, its live position, and the dealt fractional damage, so the
+   * canvas can steer that hull's retaliation pursuit (see
+   * `UnitMovement.threatenUnit`). Killing blows never fire it (the wreck
+   * holds instead), wrecks never re-fire it, self-splashes never fire it (a
+   * hull shelled by its own blast must not pursue itself), and non-hostile
+   * bursts (a wreck going up) never fire it. Assigned by the canvas; null in
+   * headless tests.
+   */
+  onUnitThreatened:
+    | ((victim: number, attacker: number, ax: number, az: number, damageAdd: number) => void)
+    | null = null;
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Reused husk-decay fractions for `poseHusks` (no per-tick array). */
@@ -954,7 +975,13 @@ export class CombatFx {
    * deselect) — the instance itself lingers as a decaying husk (see
    * `poseHusks`).
    */
-  private damageUnits(at: THREE.Vector3, kind: UnitKind, slope?: BlastSlope | null): void {
+  private damageUnits(
+    at: THREE.Vector3,
+    kind: UnitKind,
+    slope?: BlastSlope | null,
+    shooter?: number | null,
+    hostile = true,
+  ): void {
     if (this.damage.length === 0) return;
     const bodies = this.units.children as THREE.Group[];
     const before = this.damage.slice();
@@ -992,11 +1019,65 @@ export class CombatFx {
       // wreck holds instead) and wrecks never re-fire it.
       if (added > 0 && !this.destroyed[i]) {
         this.onUnitStunned?.(i, added);
+        // Survivors retaliate: point the victim at whoever shot it so idle
+        // hulls turn and pursue while the memory is fresh (see
+        // `onUnitThreatened`). Non-hostile bursts (a wreck going up) blame
+        // nobody, and a hull shelled by its own blast never pursues itself.
+        const threat = this.resolveThreat(i, shooter ?? null, hostile);
+        if (threat) this.onUnitThreatened?.(i, threat.attacker, threat.x, threat.z, added);
       }
       // Post-death barrages re-tint the wreck through the capped live char —
       // keep the deepened husk char on top (idempotent).
       if (this.destroyed[i] && body) applyWreckChar(body);
     }
+  }
+
+  /**
+   * Who a splashed survivor should blame: the live shooter when the round
+   * threaded one through (dead shooters and self-splashes blame nobody —
+   * corpses are not pursued), otherwise the nearest live hull to the victim
+   * inside the engage gate (the white-box fallback for blasts with no
+   * shooter on record; organic fire always knows its shooter). Non-hostile
+   * bursts blame nobody. Null when retaliation should stay quiet.
+   */
+  private resolveThreat(
+    victim: number,
+    shooter: number | null,
+    hostile: boolean,
+  ): { attacker: number; x: number; z: number } | null {
+    if (!hostile) return null;
+    const bodies = this.units.children as THREE.Group[];
+    const victimBody = bodies[victim];
+    if (!victimBody) return null;
+    if (shooter !== null) {
+      if (!Number.isInteger(shooter) || shooter < 0 || shooter >= bodies.length) return null;
+      if (shooter === victim || this.destroyed[shooter]) return null;
+      const gun = bodies[shooter];
+      if (!gun) return null;
+      return { attacker: shooter, x: gun.position.x, z: gun.position.z };
+    }
+    // Unknown shooter: blame the nearest live hull to the victim — the most
+    // plausible direction the shot came from — inside the engage gate so a
+    // far-off barrage never drags a patrol across the map on a guess.
+    let best = -1;
+    let bestDist = THREAT_ENGAGE_RADIUS;
+    for (let i = 0; i < bodies.length; i++) {
+      if (i === victim || this.destroyed[i]) continue;
+      const other = bodies[i];
+      if (!other) continue;
+      const d = Math.hypot(
+        other.position.x - victimBody.position.x,
+        other.position.z - victimBody.position.z,
+      );
+      if (d <= bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    if (best < 0) return null;
+    const gun = bodies[best];
+    if (!gun) return null;
+    return { attacker: best, x: gun.position.x, z: gun.position.z };
   }
 
   /**
@@ -1405,6 +1486,8 @@ export class CombatFx {
       age: 0,
       dur: sol.duration,
       kind,
+      attacker: pair.attacker,
+      target: pair.target,
     });
     this.fired += 1;
 
@@ -1509,7 +1592,10 @@ export class CombatFx {
    * biggest footprint on the field regardless of what killed it).
    */
   private explodeDeath(at: THREE.Vector3): void {
-    this.explode(at, 0xff8a3c, "hammer", true);
+    // A wreck going up is not enemy fire: its burst damages bystanders but
+    // blames nobody (non-hostile), so survivors do not pursue each other
+    // over a cook-off.
+    this.explode(at, 0xff8a3c, "hammer", true, null, false);
   }
 
   /**
@@ -1524,7 +1610,14 @@ export class CombatFx {
    * geometries stay shared. Smoke stays cool grey per the gentler-scorch
    * palette (never brown) and unit-damage smoke stays subtle (untouched).
    */
-  private explode(at: THREE.Vector3, color: number, kind: UnitKind, epic = false): void {
+  private explode(
+    at: THREE.Vector3,
+    color: number,
+    kind: UnitKind,
+    epic = false,
+    shooter: number | null = null,
+    hostile = true,
+  ): void {
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
       if (oldest) this.removeExplosion(oldest);
@@ -1676,7 +1769,7 @@ export class CombatFx {
     });
     this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
     this.scarGround(at, kind, slope);
-    this.damageUnits(at, kind, slope);
+    this.damageUnits(at, kind, slope, shooter, hostile);
   }
 
   /**
@@ -1822,7 +1915,7 @@ export class CombatFx {
           this.stuck += 1;
           this.env?.strikeTree?.(stuckFid);
           if (shot.kind === "hammer") {
-            this.explode(at, color, shot.kind);
+            this.explode(at, color, shot.kind, false, shot.attacker);
             this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
           } else {
             this.spawnFlash(at, 0xffd34d, FLASH_MAX_AGE * 0.6);
@@ -1854,7 +1947,7 @@ export class CombatFx {
       this.scene.remove(shot.mesh);
       (shot.mesh.material as THREE.Material).dispose();
       this.shots.splice(this.shots.indexOf(shot), 1);
-      this.explode(at, color, shot.kind);
+      this.explode(at, color, shot.kind, false, shot.attacker);
       this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
     }
   }

@@ -3,6 +3,14 @@ import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
 import { accumulateStun, tickStun } from "./impact.js";
 import {
+  THREAT_DISENGAGE_RADIUS,
+  THREAT_LEASH_RADIUS,
+  clearThreat,
+  pursueStandOff,
+  tickThreat,
+  type ThreatMemory,
+} from "./retaliation.js";
+import {
   CRUSH_DRAG,
   stepBlocked,
   terrainSpeedScale,
@@ -61,6 +69,13 @@ import type { UnitField } from "./place.js";
  *   the ambient scheduler owns aim/fire per attacker/target pair, and a
  *   per-victim fire pause would fight traverse without reading any clearer
  *   than the drive beat plus the rock.
+ * - Retaliation pursuit (core `retaliation.ts`, threat memory owned here as
+ *   the mover `threat` field): a splashed idle/patrolling hull steers toward
+ *   its attacker's last-known position through the same drive — freezing its
+ *   patrol leg, holding at weapons-range stand-off, giving up past the
+ *   disengage bound, the patrol-anchor leash, or memory expiry. Orders and
+ *   holds clear and refuse threats (player orders win); stun only pauses the
+ *   drive, the threat clock keeps ticking underneath.
  */
 
 /** Patrol speed per kind, world units per second (fast scouts → slow guns). */
@@ -176,6 +191,15 @@ export interface Mover {
    * auto-resumes so orders stay where they were put.
    */
   hold?: boolean;
+  /**
+   * Retaliation threat memory (core `retaliation.ts`): who last hit this
+   * hull, from where, and for how much longer. Present only while an
+   * idle/patrolling hull is pursuing (or memory is fresh); absent — never
+   * zero-ttl — otherwise, matching the `stuck`/`stun` convention. Ordered,
+   * holding, and wrecked hulls never carry it (orders/holds clear it, kills
+   * drop it), and the patrol leg freezes while it steers.
+   */
+  threat?: ThreatMemory;
 }
 
 /**
@@ -297,15 +321,19 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * Issue (or repath) a move order: the mover leaves patrol and drives the
  * given world-space waypoints in order, clearing any hold. An empty path
  * holds the unit in place instead of stranding it on a degenerate order.
+ * Player orders win over retaliation: any live threat memory is cleared, so
+ * an ordered hull never peels off to pursue.
  */
 export function orderMover(mover: Mover, points: RoutePoint[]): Mover {
-  if (points.length === 0) return { ...mover, order: undefined, hold: true };
-  return { ...mover, order: { points: points.map((p) => ({ ...p })), at: 0 }, hold: false };
+  const calm = clearThreat(mover);
+  if (points.length === 0) return { ...calm, order: undefined, hold: true };
+  return { ...calm, order: { points: points.map((p) => ({ ...p })), at: 0 }, hold: false };
 }
 
 /** Hold in place: drop any order and stop patrolling until ordered again. */
 export function holdMover(mover: Mover): Mover {
-  return { ...mover, order: undefined, hold: true };
+  const calm = clearThreat(mover);
+  return { ...calm, order: undefined, hold: true };
 }
 
 /** True while the mover is driving a player-issued move order. */
@@ -366,8 +394,12 @@ export function spacingScale(
  * Advance one mover by `dt` seconds. A live move order takes precedence:
  * arrive (advance the order cursor, skipping waypoints already reached),
  * and on the final waypoint arrive → hold (order cleared, patrol does not
- * resume). Without an order a holding mover stays put; otherwise the patrol
- * leg advances as before. Either way the hull turns toward its target at
+ * resume). Without an order a holding mover stays put; otherwise a hull
+ * with a live retaliation threat pursues it (see `retaliation.ts`: steer to
+ * the attacker's last-known position through the same drive, freezing the
+ * patrol leg, holding at weapons-range stand-off, giving up past the
+ * disengage bound / leash / memory expiry) — and only then does the patrol
+ * leg advance as before. Either way the hull turns toward its target at
  * the kind's turn rate, then drives forward along the hull — never
  * sideways — at per-kind speed scaled by alignment grip (slow in turns,
  * like retail's capped blocked-mover speed) and the spacing factor. When
@@ -376,8 +408,11 @@ export function spacingScale(
  * behavior) instead of clipping into the hillside; a patrolling hull that
  * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint. Wood
  * never pins: with a `crush` context a step touching standing trees fells
- * them at a `CRUSH_DRAG` crawl instead of holding. Pure:
- * returns a new mover. Terrain-less stepping is byte-identical to before.
+ * them at a `CRUSH_DRAG` crawl instead of holding. `foes` carries the live
+ * roster positions so pursuit tracks a moving attacker (omitted, the static
+ * last-known memory steers — which is also how driven-path prediction
+ * previews a chase). Pure: returns a new mover. Terrain-less stepping is
+ * byte-identical to before for threat-free hulls.
  */
 export function advanceMover(
   kind: UnitKind,
@@ -387,6 +422,7 @@ export function advanceMover(
   spacing = 1,
   terrain?: SeatField | null,
   crush?: CrushContext | null,
+  foes?: readonly { x: number; z: number }[] | null,
 ): Mover {
   if (!(dt > 0)) return mover;
   // Hit-stunned: hold the drive while the renderer-side rock plays (the hull
@@ -409,17 +445,35 @@ export function advanceMover(
     }
     return driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }, crush).mover;
   }
-  if (mover.hold) return mover;
-  if (route.length < 2) return mover;
-  let leg = ((mover.leg % route.length) + route.length) % route.length;
-  let target = route[leg]!;
-  const dx = target.x - mover.x;
-  const dz = target.z - mover.z;
-  if (dx * dx + dz * dz <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
-    leg = (leg + 1) % route.length;
-    target = route[leg]!;
+  if (mover.hold) return tickThreat(mover, dt);
+  if (route.length < 2) return tickThreat(mover, dt);
+  const leg = ((mover.leg % route.length) + route.length) % route.length;
+  // Retaliation first: a live threat memory steers the hull instead of the
+  // patrol leg (orders/holds never carry one — they clear and refuse it).
+  // A stale key (ttl run out without a re-hit) or a give-up (disengage /
+  // leash, see `pursueStep`) drops the memory and falls through to patrol.
+  let calm = mover;
+  const threat = mover.threat;
+  if (threat && threat.ttl > 0) {
+    const chased = pursueStep(kind, mover, threat, route, dt, spacing, terrain, crush, foes);
+    if (chased) return { ...chased, leg };
+    calm = clearThreat(mover);
+  } else if (threat) {
+    calm = clearThreat(mover);
   }
-  const driven = driveToward(kind, mover, target, dt, spacing, terrain, undefined, crush);
+  let target = route[leg]!;
+  const dx = target.x - calm.x;
+  const dz = target.z - calm.z;
+  if (dx * dx + dz * dz <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
+    const nextLeg = (leg + 1) % route.length;
+    target = route[nextLeg]!;
+    const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
+    if (driven.skipped) {
+      return { ...driven.mover, leg: (nextLeg + 1) % route.length, stuck: 0 };
+    }
+    return { ...driven.mover, leg: nextLeg };
+  }
+  const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
   if (driven.skipped) {
     return { ...driven.mover, leg: (leg + 1) % route.length, stuck: 0 };
   }
@@ -434,22 +488,74 @@ export function advanceMover(
  * never-stunned ones. Pure: returns a new mover.
  */
 function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: number): Mover {
-  const order = mover.order;
+  // The threat clock keeps ticking under stun (a hesitating hull does not
+  // get extra memory) — pursuit itself waits until the drive resumes.
+  const awake = tickThreat(mover, dt);
+  const order = awake.order;
   let target: RoutePoint | null = null;
   if (order && order.at < order.points.length) {
     target = order.points[order.at] ?? null;
-  } else if (!mover.hold && route.length >= 2) {
-    const leg = ((mover.leg % route.length) + route.length) % route.length;
+  } else if (!awake.hold && route.length >= 2) {
+    const leg = ((awake.leg % route.length) + route.length) % route.length;
     target = route[leg] ?? null;
   }
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
-  const hull = target ? stepAngle(mover.hull, yawToTarget(mover, target), rate * dt) : mover.hull;
-  const remain = tickStun(mover.stun ?? 0, dt);
+  const hull = target ? stepAngle(awake.hull, yawToTarget(awake, target), rate * dt) : awake.hull;
+  const remain = tickStun(awake.stun ?? 0, dt);
   if (!(remain > 0)) {
-    const { stun: _dropped, ...rest } = mover;
+    const { stun: _dropped, ...rest } = awake;
     return { ...rest, hull };
   }
-  return { ...mover, hull, stun: remain };
+  return { ...awake, hull, stun: remain };
+}
+
+/**
+ * One retaliation step for a hull with a live threat memory: steer to the
+ * attacker's position (live roster position when `foes` resolves the
+ * attacker index, else the last-known memory) through the same
+ * `driveToward` patrol uses — turn caps, grip, drag, slope gating — with
+ * the patrol leg frozen. Returns null on give-up (memory expired,
+ * attacker past the disengage bound, or threat past the leash from the
+ * patrol anchor) so the caller drops the memory and resumes patrol.
+ * Inside weapons-range stand-off the hull holds and faces the threat while
+ * the memory stays fresh; pinned against a slope it holds like an ordered
+ * hull instead of skipping its frozen leg away. Pure.
+ */
+function pursueStep(
+  kind: UnitKind,
+  mover: Mover,
+  threat: ThreatMemory,
+  route: RoutePoint[],
+  dt: number,
+  spacing: number,
+  terrain: SeatField | null | undefined,
+  crush: CrushContext | null | undefined,
+  foes: readonly { x: number; z: number }[] | null | undefined,
+): Mover | null {
+  const ttl = threat.ttl - dt;
+  if (!(ttl > 0)) return null;
+  const foe = foes?.[threat.attacker];
+  const tx = foe?.x ?? threat.x;
+  const tz = foe?.z ?? threat.z;
+  if (!(Number.isFinite(tx) && Number.isFinite(tz))) return null;
+  // Disengage (hysteresis side): an engaged hull tolerates more distance
+  // than a fresh one, but past this the attacker got away — let go.
+  if (Math.hypot(tx - mover.x, tz - mover.z) > THREAT_DISENGAGE_RADIUS) return null;
+  // Leash to the post: the threat must sit near the patrol anchor (route
+  // waypoint 0, the spawn) or the chase would drag the hull across the map.
+  const anchor = route.length > 0 ? (route[0] as RoutePoint) : { x: mover.x, z: mover.z };
+  if (Math.hypot(tx - anchor.x, tz - anchor.z) > THREAT_LEASH_RADIUS) return null;
+  const memory: ThreatMemory = { attacker: threat.attacker, x: tx, z: tz, ttl };
+  const rate = HULL_TURN_RATE[kind] ?? 1.5;
+  const want = yawToTarget(mover, { x: tx, z: tz });
+  if (Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind)) {
+    return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
+  }
+  const driven = driveToward(kind, mover, { x: tx, z: tz }, dt, spacing, terrain, undefined, crush);
+  if (driven.skipped) {
+    return { ...mover, hull: driven.mover.hull, stuck: 0, threat: memory };
+  }
+  return { ...driven.mover, threat: memory };
 }
 
 /** Turn the hull toward `target` and drive forward along it. */
@@ -551,8 +657,10 @@ export function advanceMovers(
     // Ordered hulls never fully stop for spacing: see ORDER_SPACING_FLOOR.
     return hasOrder(m) ? Math.max(scale, ORDER_SPACING_FLOOR) : scale;
   });
+  // Pursuit tracks moving attackers: the pre-tick roster positions double as
+  // the foe lookup (same snapshot discipline as spacing/separation).
   const driven = movers.map((m, i) =>
-    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush),
+    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush, movers),
   );
   return resolveSeparation(driven, kinds, dt, terrain);
 }

@@ -446,6 +446,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     combat.onUnitStunned = (index, damageAdd) => {
       movement.stunUnit(index, damageAdd);
     };
+    // Retaliation: a surviving splash points the victim at its live shooter
+    // so idle/patrolling hulls turn and pursue while the memory is fresh
+    // (ordered/holding hulls refuse — player orders win — and wrecks and
+    // self-splashes stay silent). The threat feeds the same core drive the
+    // patrol uses, so pursuit never teleports.
+    combat.onUnitThreatened = (victim, attacker, ax, az) => {
+      movement.threatenUnit(victim, attacker, ax, az);
+    };
 
     // Move-order pings: short-lived expanding rings where an order landed.
     const pingGeo = new THREE.RingGeometry(10, 13, 40);

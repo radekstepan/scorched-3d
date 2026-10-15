@@ -4,8 +4,10 @@ import {
   findWorldPath,
   formationTargets,
   hasOrder,
+  hasThreat,
   HULL_TILT_SLEW,
   initMover,
+  notifyThreat,
   orderMover,
   slewTilt,
   snappedFormationTargets,
@@ -104,7 +106,12 @@ export class UnitMovement {
   /** Live patrol state of a unit (position + hull + target leg), for tests. */
   moverState(index: number): Mover | null {
     const mover = this.movers[index];
-    return mover ? { ...mover, order: mover.order ? { ...mover.order } : undefined } : null;
+    if (!mover) return null;
+    return {
+      ...mover,
+      order: mover.order ? { at: mover.order.at, points: mover.order.points } : undefined,
+      threat: mover.threat ? { ...mover.threat } : undefined,
+    };
   }
 
   /** Live world-space X/Z of every unit, for selection projection + minimap. */
@@ -146,7 +153,7 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    const { stun: _dropped, ...rest } = mover;
+    const { stun: _dropped, threat: _calmed, ...rest } = mover;
     this.movers[index] = { ...rest, order: undefined, hold: true };
   }
 
@@ -163,6 +170,28 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover || this.destroyed[index]) return;
     this.movers[index] = stunMover(mover, damageAdd);
+  }
+
+  /**
+   * Point a live hull at its attacker from (`ax`, `az`) (core
+   * `notifyThreat` against the patrol anchor, so only idle/patrolling hulls
+   * with a near, reachable threat pursue — ordered/holding hulls refuse).
+   * Wrecks refuse the memory (they hold forever), and a hull never blames
+   * itself (own-blast self-splashes are ignored). Idempotent per tick:
+   * re-hits refresh the memory, they never stack.
+   */
+  threatenUnit(victim: number, attacker: number, ax: number, az: number): void {
+    const mover = this.movers[victim];
+    if (!mover || this.destroyed[victim]) return;
+    if (victim === attacker) return;
+    const anchor = this.routes[victim]?.[0] ?? null;
+    this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor);
+  }
+
+  /** True while the unit carries a live retaliation threat memory. */
+  hasThreat(index: number): boolean {
+    const mover = this.movers[index];
+    return mover ? hasThreat(mover) : false;
   }
 
   /**

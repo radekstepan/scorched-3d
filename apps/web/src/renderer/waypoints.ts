@@ -2,6 +2,7 @@ import * as THREE from "three";
 import {
   ARRIVE_RADIUS,
   hasOrder,
+  hasThreat,
   predictDrivenPath,
   type Mover,
   type RoutePoint,
@@ -19,13 +20,14 @@ import {
  * driven line the hull will really follow (simulated forward through the
  * same turn-rate caps, alignment grip, and terrain gating the movers drive,
  * so corners read as arcs and walls read as stops instead of straight
- * waypoint chords), amber for orders and bright slate for patrols — with an
+ * waypoint chords), amber for orders, rose alert for retaliation pursuits,
+ * and bright slate for patrols — with an
  * animated tracer diamond flowing along it so the overlay reads direction
  * at a glance. The next patrol waypoint's diamond scales up to mark the
  * current leg. Wrecks and holders show nothing (they hold forever),
  * degenerate hold-routes (all waypoints coincident) show no patrol, and
- * ordered units hide their patrol loop so the overlay never promises two
- * futures at once. Owns one `THREE.Group` in the scene; `dispose()` removes
+ * ordered/pursuing units hide their patrol loop so the overlay never
+ * promises two futures at once. Owns one `THREE.Group` in the scene; `dispose()` removes
  * it and frees GPU resources.
  */
 
@@ -33,6 +35,13 @@ export const WAYPOINT_PATROL_COLOR = 0xe2e8f0;
 export const WAYPOINT_ORDER_COLOR = 0xfbbf24;
 /** Bright slate for the live patrol trail (static loops stay dimmer). */
 export const WAYPOINT_TRAIL_COLOR = 0xf1f5f9;
+/**
+ * Rose alert for a live retaliation pursuit (trail + tracer). Amber already
+ * means player orders and slate means patrol, so a chase needs its own hue:
+ * rose reads as hostile intent at a glance while staying inside the
+ * ember/damage palette (never cyan — that is selection).
+ */
+export const WAYPOINT_PURSUIT_COLOR = 0xfb7185;
 /** Height above the terrain surface so lines never z-fight the mesh. */
 export const WAYPOINT_LIFT = 3;
 /** Below selection markers (10), above scorch decals (2). */
@@ -99,9 +108,15 @@ export function remainingPatrolPoints(mover: Mover, route: readonly RoutePoint[]
 }
 
 /** Which live path a unit is trying to take (null = holding still). */
-export function activeTrailMode(mover: Mover, route: readonly RoutePoint[] | undefined): "order" | "patrol" | null {
+export function activeTrailMode(
+  mover: Mover,
+  route: readonly RoutePoint[] | undefined,
+): "order" | "patrol" | "pursue" | null {
   if (!mover || mover.hold) return null;
   if (hasOrder(mover)) return "order";
+  // A live threat memory steers before patrol does (see the core drive
+  // order) — the overlay promises the chase, not the loop, while it lasts.
+  if (hasThreat(mover)) return "pursue";
   if (!route || isHoldingRoute(route)) return null;
   return "patrol";
 }
@@ -154,6 +169,7 @@ export class WaypointFx {
   private lastMovers: Mover[] = [];
   private lastDestroyed: boolean[] = [];
   private lastKinds: UnitKind[] = [];
+  private lastModes: ("order" | "patrol" | "pursue" | null)[] = [];
   private lastTime = 0;
   private disposed = false;
   /**
@@ -195,10 +211,9 @@ export class WaypointFx {
   }
 
   /** Which live path a unit is currently showing, for tests. */
-  trailMode(index: number): "order" | "patrol" | null {
+  trailMode(index: number): "order" | "patrol" | "pursue" | null {
     if (this.orders[index]?.line.visible) return "order";
-    if (this.trails[index]?.visible) return "patrol";
-    return null;
+    return this.lastModes[index] ?? null;
   }
 
   /** Tracer position of a unit along its live path, for tests. */
@@ -395,8 +410,9 @@ export class WaypointFx {
   /**
    * Patrol loops are context, not the live path: they draw only while the
    * unit is actually walking them — not wrecked, not holding, not ordered,
-   * and not on a degenerate hold-route. Ordered/holding units hide the loop
-   * so the overlay promises exactly one future per hull.
+   * not pursuing, and not on a degenerate hold-route. Ordered/holding/
+   * pursuing units hide the loop so the overlay promises exactly one future
+   * per hull.
    */
   private refreshPatrolVisibility(): void {
     this.patrol.forEach((entry, i) => {
@@ -406,7 +422,8 @@ export class WaypointFx {
         !isHoldingRoute(entry.route) &&
         !!mover &&
         !mover.hold &&
-        !hasOrder(mover);
+        !hasOrder(mover) &&
+        !hasThreat(mover);
       entry.loop.visible = show;
       const n = entry.route.length;
       const leg = mover && n > 0 ? ((mover.leg % n) + n) % n : -1;
@@ -427,7 +444,12 @@ export class WaypointFx {
    * per active hull. The fallback cannot be degenerate here: callers only
    * ask while the mode is live, and both tail helpers return ≥2 points then.
    */
-  private livePath(index: number, mover: Mover, route: RoutePoint[], mode: "order" | "patrol"): RoutePoint[] {
+  private livePath(
+    index: number,
+    mover: Mover,
+    route: RoutePoint[],
+    mode: "order" | "patrol" | "pursue",
+  ): RoutePoint[] {
     const predicted = predictDrivenPath(
       this.lastKinds[index] ?? "flash",
       mover,
@@ -435,7 +457,15 @@ export class WaypointFx {
       this.env.field ?? null,
     );
     if (predicted.length >= 2) return predicted;
-    return mode === "order" ? remainingOrderPoints(mover) : remainingPatrolPoints(mover, route);
+    if (mode === "order") return remainingOrderPoints(mover);
+    if (mode === "pursue") {
+      // Static last-known threat: the live drive tracks moving attackers, the
+      // fallback just draws intent toward the memory.
+      const threat = mover.threat;
+      if (threat && threat.ttl > 0) return [{ x: mover.x, z: mover.z }, { x: threat.x, z: threat.z }];
+      return [];
+    }
+    return remainingPatrolPoints(mover, route);
   }
 
   /** Rebuild live order tails, patrol trails, and tracer positions. */
@@ -449,7 +479,7 @@ export class WaypointFx {
       const destroyed = this.lastDestroyed[i] ?? false;
       const route = this.routes[i];
       const mode = mover && !destroyed && route ? activeTrailMode(mover, route) : null;
-      const pts = mode ? this.livePath(i, mover!, mode === "patrol" ? route! : [], mode) : [];
+      const pts = mode ? this.livePath(i, mover!, mode === "order" ? [] : route!, mode) : [];
       if (mode === "order" && pts.length >= 2) {
         this.paintLine(entry.line, pts, WAYPOINT_LIFT + 1);
         entry.line.visible = true;
@@ -467,16 +497,24 @@ export class WaypointFx {
       }
       if (!flow) {
         trail.visible = false;
+        this.lastModes[i] = null;
         continue;
       }
       const flowMat = flow.material as THREE.MeshBasicMaterial;
-      if (mode === "patrol" && pts.length >= 2) {
+      const trailMat = trail.material as THREE.LineBasicMaterial;
+      if ((mode === "patrol" || mode === "pursue") && pts.length >= 2) {
         this.paintLine(trail, pts, WAYPOINT_LIFT + 1);
+        // Pursuits read as rose alert, patrols as bright slate — one future
+        // per hull, in its own color.
+        const tint = mode === "pursue" ? WAYPOINT_PURSUIT_COLOR : WAYPOINT_TRAIL_COLOR;
+        trailMat.color.setHex(tint);
         trail.visible = true;
-        flowMat.color.setHex(WAYPOINT_TRAIL_COLOR);
+        flowMat.color.setHex(tint);
         this.placeFlow(flow, pts, i);
+        this.lastModes[i] = mode;
       } else {
         trail.visible = false;
+        this.lastModes[i] = null;
         // Ordered units still get a tracer — amber, riding the driven order
         // line — so every live path animates in its own color.
         if (mode === "order" && pts.length >= 2) {
