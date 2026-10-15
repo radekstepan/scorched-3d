@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
+import { MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -73,8 +74,8 @@ function makeRig(zoomToCursor: boolean): ZoomRig {
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
   controls.maxPolarAngle = Math.PI * 0.49;
-  controls.minDistance = 80;
-  controls.maxDistance = 4200;
+  controls.minDistance = MIN_ZOOM_DISTANCE;
+  controls.maxDistance = MAX_ZOOM_DISTANCE;
   controls.zoomToCursor = zoomToCursor;
   controls.target.set(0, 0, 0);
   controls.update();
@@ -187,12 +188,12 @@ describe("cursor-anchored wheel zoom", () => {
     const { camera, controls, fireWheel } = makeRig(true);
     for (let i = 0; i < 80; i++) fireWheel(CX, CY, -400);
     const minDist = distanceOf(camera, controls.target);
-    expect(minDist).toBeGreaterThanOrEqual(80 - 1e-6);
-    expect(minDist).toBeLessThan(81);
+    expect(minDist).toBeGreaterThanOrEqual(MIN_ZOOM_DISTANCE - 1e-6);
+    expect(minDist).toBeLessThan(MIN_ZOOM_DISTANCE + 1);
     for (let i = 0; i < 80; i++) fireWheel(CX, CY, 400);
     const maxDist = distanceOf(camera, controls.target);
-    expect(maxDist).toBeLessThanOrEqual(4200 + 1e-6);
-    expect(maxDist).toBeGreaterThan(4199);
+    expect(maxDist).toBeLessThanOrEqual(MAX_ZOOM_DISTANCE + 1e-6);
+    expect(maxDist).toBeGreaterThan(MAX_ZOOM_DISTANCE - 1);
     for (const v of [
       camera.position.x,
       camera.position.y,
@@ -211,8 +212,8 @@ describe("cursor-anchored wheel zoom", () => {
     expect(groundHit(camera, WIDTH / 2, 0, controls.target.y)).toBeNull();
     fireWheel(WIDTH / 2, 0, -120);
     const dist = distanceOf(camera, controls.target);
-    expect(dist).toBeGreaterThanOrEqual(80 - 1e-6);
-    expect(dist).toBeLessThanOrEqual(4200 + 1e-6);
+    expect(dist).toBeGreaterThanOrEqual(MIN_ZOOM_DISTANCE - 1e-6);
+    expect(dist).toBeLessThanOrEqual(MAX_ZOOM_DISTANCE + 1e-6);
     for (const v of [
       camera.position.x,
       camera.position.y,
@@ -246,6 +247,16 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
   it("scales the orbit ceiling to the doubled map", () => {
     // 320x256 cells ≈ 5104 world units wide: the zoom-out ceiling sits at
     // twice the classic 4200 so the whole battlefield stays frameable.
-    expect(canvasSource).toMatch(/controls\.maxDistance\s*=\s*8400/);
+    expect(canvasSource).toMatch(/controls\.maxDistance\s*=\s*MAX_ZOOM_DISTANCE/);
+  });
+
+  it("lets the wheel dolly in closer than the old 80-unit floor", () => {
+    // Close enough for a single-hull close-up (~26-unit tank, 27-unit team
+    // ring) while staying far outside the 2-unit near plane, so hulls never
+    // clip and the polar clamp still holds the camera above the dirt.
+    expect(MIN_ZOOM_DISTANCE).toBe(30);
+    expect(MIN_ZOOM_DISTANCE).toBeLessThan(80);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 10);
+    expect(canvasSource).toMatch(/controls\.minDistance\s*=\s*MIN_ZOOM_DISTANCE/);
   });
 });

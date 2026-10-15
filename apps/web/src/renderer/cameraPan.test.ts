@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PAN_SPEED,
   DEFAULT_ZOOM_SPEED,
+  MAX_ZOOM_DISTANCE,
+  MIN_ZOOM_DISTANCE,
   PAN_EDGE_MARGIN,
   PAN_SPEED_FACTOR,
   PAN_SPEED_MAX,
@@ -209,5 +211,15 @@ describe("camera speed sliders", () => {
   it("stays put with zero distance or zero dt", () => {
     expect(panStepDistance(0, 0.016, 2)).toBe(0);
     expect(panStepDistance(1000, 0, 2)).toBe(0);
+  });
+
+  it("bounds the wheel-zoom range from close-up to whole-map", () => {
+    // Close-up floor: inside the old 80, far outside the 2-unit near plane.
+    expect(MIN_ZOOM_DISTANCE).toBe(30);
+    expect(MIN_ZOOM_DISTANCE).toBeLessThan(80);
+    expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 10);
+    // Whole-map ceiling for the doubled 320x256 field.
+    expect(MAX_ZOOM_DISTANCE).toBe(8400);
+    expect(MAX_ZOOM_DISTANCE).toBeGreaterThan(MIN_ZOOM_DISTANCE);
   });
 });

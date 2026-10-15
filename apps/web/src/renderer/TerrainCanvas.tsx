@@ -65,6 +65,8 @@ import {
   clampPanTarget,
   clampZoomSpeed,
   isPanKey,
+  MAX_ZOOM_DISTANCE,
+  MIN_ZOOM_DISTANCE,
   panInputFromCodes,
   panOffset,
   panStepDistance,
@@ -148,8 +150,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
     controls.maxPolarAngle = Math.PI * 0.49;
-    controls.minDistance = 80;
-    controls.maxDistance = 8400;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
     controls.panSpeed = clampPanSpeed(options.panSpeed);
     controls.zoomSpeed = clampZoomSpeed(options.zoomSpeed);
     // Cursor-anchored zoom: wheel/pinch dolly toward the ground point under
