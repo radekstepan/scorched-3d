@@ -291,6 +291,33 @@ describe("OcclusionFx ghost policy", () => {
     }
   });
 
+  it("tracks the live turret recoil slide in the silhouette", () => {
+    // Turret recoil (combatFx) slides the turret subgroup rearward along the
+    // barrel on position — the ghost syncs transforms only, so the offset
+    // follows with no recoil-aware code on this side.
+    const scene = new THREE.Scene();
+    const fx = new OcclusionFx(scene, ["stump"] as const);
+    const body = meshedBody();
+    const turret = body.getObjectByName("turret")!;
+    try {
+      turret.rotation.y = 0.6;
+      turret.position.set(-Math.sin(0.6) * 1.4, 0, -Math.cos(0.6) * 1.4);
+      fx.update(cam, [body], { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
+      const ghostTurret = fx.group.children[0]!.getObjectByName("turret")!;
+      expect(ghostTurret.position.x).toBeCloseTo(turret.position.x, 9);
+      expect(ghostTurret.position.z).toBeCloseTo(turret.position.z, 9);
+      // The slide restores: the ghost follows back to the seat exactly.
+      turret.position.set(0, 0, 0);
+      fx.update(cam, [body], { groundY: ridge, stands: [] }, { isDestroyedAt: () => false });
+      expect(fx.group.children[0]!.getObjectByName("turret")!.position.x).toBe(0);
+      expect(fx.group.children[0]!.getObjectByName("turret")!.position.z).toBe(0);
+    } finally {
+      fx.dispose();
+      disposeOcclusionAssets();
+      disposeBody(body);
+    }
+  });
+
   it("falls back to a footprint fill+outline box for mesh-less bodies", () => {
     const scene = new THREE.Scene();
     const fx = new OcclusionFx(scene, kinds);

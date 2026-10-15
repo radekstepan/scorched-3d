@@ -20,6 +20,8 @@ import {
   SHOT_GLOW_OPACITY,
   SHOT_GLOW_PEAK,
   SHOT_GLOW_RANGE,
+  TURRET_RECOIL_DURATION,
+  TURRET_RECOIL_KICK,
   wreckPopVelocity,
 } from "./combatFx";
 import { barrelElevation, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
@@ -334,6 +336,198 @@ describe("CombatFx", () => {
     });
     // Exactly the firing hull rode the shifted anchor home.
     expect(shifted).toBe(1);
+    fx.dispose();
+  });
+});
+
+describe("CombatFx turret recoil", () => {
+  /** Solo hull that never fires organically (single units hold fire). */
+  function makeSolo(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "stump", cellX: 10, cellZ: 10, rotation: 0 }];
+    const body = new THREE.Group();
+    body.rotation.order = "YXZ";
+    body.position.set(0, 100, 0);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+    return group;
+  }
+
+  /** Backdoor into the private fire kick (same white-box precedent as primeDamage). */
+  function recoil(
+    fx: CombatFx,
+    index: number,
+    body: THREE.Group,
+    dir: THREE.Vector3 = new THREE.Vector3(0, 0, 1),
+  ): void {
+    (fx as unknown as { kickRecoil(index: number, body: THREE.Group, dir: THREE.Vector3): void }).kickRecoil(
+      index,
+      body,
+      dir,
+    );
+  }
+
+  function splash(fx: CombatFx, x: number, y: number, z: number, kind: UnitKind = "hammer"): void {
+    (fx as unknown as { damageUnits(at: THREE.Vector3, kind: UnitKind): void }).damageUnits(
+      new THREE.Vector3(x, y, z),
+      kind,
+    );
+  }
+
+  function turretOf(units: THREE.Group, index: number): THREE.Group {
+    return getTurret(units.children[index] as THREE.Group)!;
+  }
+
+  it("kicks the firing turret rearward along the live barrel line", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    // Step to the first aimed shot (a single attacker kicks).
+    let fired = false;
+    for (let n = 0; n < 2000 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    // Exactly the firing hull slides its turret: full strength on the firing
+    // tick, already decaying by one frame.
+    const kicked = [0, 1, 2].filter((i) => {
+      const t = turretOf(units, i);
+      return Math.hypot(t.position.x, t.position.z) > 1e-9;
+    });
+    expect(kicked.length).toBe(1);
+    const i = kicked[0]!;
+    const turret = turretOf(units, i);
+    const offset = Math.hypot(turret.position.x, turret.position.z);
+    expect(offset).toBeGreaterThan(0);
+    expect(offset).toBeLessThanOrEqual(TURRET_RECOIL_KICK + 1e-9);
+    expect(offset).toBeCloseTo(TURRET_RECOIL_KICK * (1 - 1 / 60 / TURRET_RECOIL_DURATION), 9);
+    // Rearward along the live barrel in the hull frame: anti-parallel to the
+    // turret-relative yaw (the slide lives on turret.position, a body child),
+    // never sideways.
+    const pose = fx.aimState(i)!;
+    const bx = Math.sin(pose.turret);
+    const bz = Math.cos(pose.turret);
+    const dot = turret.position.x * bx + turret.position.z * bz;
+    expect(dot).toBeLessThan(0);
+    expect(Math.abs(turret.position.x * bz - turret.position.z * bx)).toBeLessThan(1e-9);
+    // Aiming is untouched: the slide lives on position, yaw on rotation.
+    expect(turret.rotation.y).toBeCloseTo(pose.turret, 12);
+    fx.dispose();
+  });
+
+  it("returns the turret to exact zero on its own shorter clock", () => {
+    const scene = new THREE.Scene();
+    const units = makeSolo();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.update(1 / 60);
+    const body = units.children[0] as THREE.Group;
+    const turret = turretOf(units, 0);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeGreaterThan(0);
+    // A second shot mid-envelope refreshes the slide back to full (re-hits
+    // re-kick instead of stacking past the cap).
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeCloseTo(
+      TURRET_RECOIL_KICK * (1 - 1 / 60 / TURRET_RECOIL_DURATION),
+      9,
+    );
+    // Past the envelope the turret sits bit-exact at rest with no entry left.
+    for (let n = 0; n < 120; n++) fx.update(1 / 60);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    fx.dispose();
+  });
+
+  it("stacks with the hull impact rock without fighting it", () => {
+    const scene = new THREE.Scene();
+    const units = makeSolo();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.update(1 / 60);
+    const body = units.children[0] as THREE.Group;
+    const basePos = body.position.clone();
+    const turret = turretOf(units, 0);
+    // Rock the hull from the flank, then fire through the rock: the hull
+    // keeps its rock, the turret still kicks.
+    splash(fx, 30, 100, 0, "hammer");
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(body.position.equals(basePos)).toBe(false);
+    expect(fx.impactAt(0).shoveX).toBeLessThan(0);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeGreaterThan(0);
+    // The turret yaw never moves under either system (rock tilts the hull,
+    // recoil slides the turret).
+    expect(turret.rotation.y).toBe(0);
+    // Long after both envelopes (1.1 s rock, 0.25 s turret) everything is
+    // bit-exact: hull on its seat, turret at rest.
+    for (let n = 0; n < 120; n++) fx.update(1 / 60);
+    expect(body.position.equals(basePos)).toBe(true);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    fx.dispose();
+  });
+
+  it("settles a mid-recoil turret on the kill and never kicks wrecks", () => {
+    // Commander solo: the walker keeps its torso aboard (tanks pop the
+    // turret into debris, which would move the reference), so the slide
+    // restore reads directly on the live subgroup.
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "commander", cellX: 10, cellZ: 10, rotation: 0 }];
+    const commander = new THREE.Group();
+    commander.rotation.order = "YXZ";
+    commander.position.set(0, 100, 0);
+    const torso = new THREE.Group();
+    torso.name = "turret";
+    commander.add(torso);
+    commander.userData.turret = torso;
+    group.add(commander);
+    const scene = new THREE.Scene();
+    const fx = new CombatFx(scene, group, mulberry32(21));
+    fx.update(1 / 60);
+    const body = group.children[0] as THREE.Group;
+    const turret = turretOf(group, 0);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeGreaterThan(0);
+    // The finishing blow settles the slide with the rock: the wreck holds.
+    (fx as unknown as { damage: number[] }).damage[0] = 0.99;
+    splash(fx, 5, 100, 0, "hammer");
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    // A wreck never gains a slide, even when kicked directly.
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(body.position.x).toBeCloseTo(0, 9);
+    expect(body.position.z).toBeCloseTo(0, 9);
+    fx.dispose();
+  });
+
+  it("restores the turret slide exactly on clearTransients", () => {
+    const scene = new THREE.Scene();
+    const units = makeSolo();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.update(1 / 60);
+    const body = units.children[0] as THREE.Group;
+    const turret = turretOf(units, 0);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeGreaterThan(0);
+    fx.clearTransients();
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
     fx.dispose();
   });
 });

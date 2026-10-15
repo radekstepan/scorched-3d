@@ -177,6 +177,19 @@ interface Nudge {
   /** Tilt applied last tick (subtracted before recomputing — exact). */
   appliedPitch: number;
   appliedRoll: number;
+  /**
+   * Turret-local recoil: full-strength rearward travel along the barrel at
+   * envelope 1 (body-frame units, direction re-read from the live turret yaw
+   * every tick so the kick tracks traverse). Runs on its own clock
+   * (`turretAge` / `turretDur`) inside the same entry, so a firing hull keeps
+   * one seated base for both systems and a hit-rocked hull still kicks its
+   * turret without disturbing the rock. Zero while the turret sits at rest.
+   */
+  turret: number;
+  /** Seconds since the turret kick (each shot refreshes to 0). */
+  turretAge: number;
+  /** Seconds for the turret envelope to reach 0. */
+  turretDur: number;
 }
 
 /**
@@ -208,6 +221,18 @@ interface TurretDebris {
 const RECOIL_KICK = 5;
 /** Attacker recoil envelope, seconds (snappy kick, faster than hit rock). */
 const RECOIL_DURATION = 0.28;
+/**
+ * Turret-local recoil: rearward turret travel along the barrel at full
+ * envelope — a fraction of the hull kick, so the gun visibly slams back
+ * inside the traversing turret while the hull takes the big shove.
+ */
+export const TURRET_RECOIL_KICK = 1.5;
+/**
+ * Turret recoil envelope, seconds: instant out (full strength on the firing
+ * tick) with a smooth linear return, slightly ahead of the hull kick so the
+ * turret is always re-seated before its hull restores.
+ */
+export const TURRET_RECOIL_DURATION = 0.25;
 const LIGHT_COUNT = 2;
 const FLASH_MAX_AGE = 0.35;
 /** Layered explosions live a beat longer than the old single flash. */
@@ -821,6 +846,11 @@ export class CombatFx {
         child.position.copy(nudge.base);
         child.rotation.x -= nudge.appliedPitch;
         child.rotation.z -= nudge.appliedRoll;
+        const turret = getTurret(child);
+        if (turret) {
+          turret.position.x = 0;
+          turret.position.z = 0;
+        }
       }
     }
     this.nudges.clear();
@@ -1002,13 +1032,17 @@ export class CombatFx {
       dur: IMPACT_DURATION,
       appliedPitch: 0,
       appliedRoll: 0,
+      turret: 0,
+      turretAge: 0,
+      turretDur: TURRET_RECOIL_DURATION,
     });
   }
 
   /**
    * Settle a hull's nudge back to its seated pose and drop the entry:
    * expiry, `clearTransients`, and the kill transition all restore exactly,
-   * so a rocked hull never keeps a lean and a wreck starts from its seat.
+   * so a rocked hull never keeps a lean, a recoiled turret never keeps a
+   * slide, and a wreck starts from its seat.
    */
   private settleNudge(index: number, body: THREE.Group): void {
     const nudge = this.nudges.get(index);
@@ -1016,6 +1050,13 @@ export class CombatFx {
     body.position.copy(nudge.base);
     body.rotation.x -= nudge.appliedPitch;
     body.rotation.z -= nudge.appliedRoll;
+    // Recoil only ever slides the turret in X/Z (Y is the wreck-slump axis),
+    // so the restore touches only what the kick wrote.
+    const turret = getTurret(body);
+    if (turret) {
+      turret.position.x = 0;
+      turret.position.z = 0;
+    }
     this.nudges.delete(index);
   }
 
@@ -1374,7 +1415,18 @@ export class CombatFx {
   }
 
   private kickRecoil(index: number, body: THREE.Group, barrelDir: THREE.Vector3): void {
-    if (this.nudges.has(index)) return;
+    // Wrecks never recoil (covers white-box kills that bypass `damageUnits`;
+    // organic fire only ever picks live attackers).
+    if (this.destroyed[index]) return;
+    const live = this.nudges.get(index);
+    if (live) {
+      // A rocked hull keeps its rock (hull fields untouched): only the turret
+      // re-kicks, so firing through a hit reaction never restarts the rock.
+      live.turret = TURRET_RECOIL_KICK;
+      live.turretAge = 0;
+      live.turretDur = TURRET_RECOIL_DURATION;
+      return;
+    }
     // Recoil opposes the barrel: horizontal projection, normalized. A
     // high-lobbed shell still kicks the hull straight back, not downward.
     const dir = new THREE.Vector3(barrelDir.x, 0, barrelDir.z);
@@ -1390,6 +1442,9 @@ export class CombatFx {
       dur: RECOIL_DURATION,
       appliedPitch: 0,
       appliedRoll: 0,
+      turret: TURRET_RECOIL_KICK,
+      turretAge: 0,
+      turretDur: TURRET_RECOIL_DURATION,
     });
   }
 
@@ -1927,7 +1982,13 @@ export class CombatFx {
    * base (no fighting between systems) and every entry restores exactly on
    * expiry. Position rides the base absolutely; tilt applies relatively on
    * top of the grade pose movement just seated (un-applying last tick first
-   * keeps headless restores exact and live wobble bounded).
+   * keeps headless restores exact and live wobble bounded). The turret-local
+   * recoil rides the same entry on its own shorter clock: the turret slides
+   * rearward along the live barrel line (re-read from the turret yaw every
+   * tick, so traverse during the kick tracks the gun) while aim yaw, hull
+   * rock, and idle breathing compose untouched — yaw lives on rotation,
+   * recoil on position, tremble on the hull. The entry drops only once both
+   * envelopes have restored (hull to its base, turret X/Z to zero).
    */
   private advanceNudges(dt: number): void {
     for (const [index, nudge] of this.nudges) {
@@ -1944,21 +2005,47 @@ export class CombatFx {
       // that bypass `damageUnits`; organic kills settle in the splash).
       if (this.destroyed[index]) {
         child.position.copy(nudge.base);
+        const turret = getTurret(child);
+        if (turret) {
+          turret.position.x = 0;
+          turret.position.z = 0;
+        }
         this.nudges.delete(index);
         continue;
       }
       nudge.age += dt;
       const k = 1 - nudge.age / nudge.dur;
+      let hullDone = false;
       if (k <= 0) {
         child.position.copy(nudge.base);
-        this.nudges.delete(index);
-        continue;
+        hullDone = true;
+      } else {
+        child.position.set(nudge.base.x + nudge.ox * k, nudge.base.y, nudge.base.z + nudge.oz * k);
+        child.rotation.x += nudge.pitch * k;
+        child.rotation.z += nudge.roll * k;
+        nudge.appliedPitch = nudge.pitch * k;
+        nudge.appliedRoll = nudge.roll * k;
       }
-      child.position.set(nudge.base.x + nudge.ox * k, nudge.base.y, nudge.base.z + nudge.oz * k);
-      child.rotation.x += nudge.pitch * k;
-      child.rotation.z += nudge.roll * k;
-      nudge.appliedPitch = nudge.pitch * k;
-      nudge.appliedRoll = nudge.roll * k;
+      let turretDone = true;
+      const turret = getTurret(child);
+      if (turret && nudge.turret > 0) {
+        nudge.turretAge += dt;
+        const tk = 1 - nudge.turretAge / nudge.turretDur;
+        if (tk <= 0) {
+          turret.position.x = 0;
+          turret.position.z = 0;
+          nudge.turret = 0;
+        } else {
+          // Rearward along the live barrel: the turret's own yaw in the hull
+          // frame, so the slide tracks traverse instead of freezing the
+          // firing line (aim yaw itself is never touched).
+          const yaw = turret.rotation.y;
+          turret.position.x = -Math.sin(yaw) * nudge.turret * tk;
+          turret.position.z = -Math.cos(yaw) * nudge.turret * tk;
+          turretDone = false;
+        }
+      }
+      if (hullDone && turretDone) this.nudges.delete(index);
     }
   }
 }
