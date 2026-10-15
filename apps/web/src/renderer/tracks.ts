@@ -32,13 +32,20 @@ export const TRACK_COLOR = 0x24211c;
 /** Surface lift above the seated terrain (below scorch, above z-fight). */
 export const TRACK_LIFT = 0.8;
 /** Tread length along travel (overlaps `TRACK_SPACING` so lanes link up). */
-export const TRACK_LENGTH = 26;
+export const TRACK_LENGTH = 28;
 /**
  * Footstep length along travel for the walker. Shorter than
  * `TRACK_SPACING`, so footsteps read as dashes with gaps between them
  * instead of a linked ribbon.
  */
 export const FOOTSTEP_LENGTH = 13;
+/**
+ * Footstep length along travel for the commander walker only. A touch
+ * longer than the infantry scuff so vehicle lanes read heavier than scout
+ * dashes, still shorter than `TRACK_SPACING` so commander prints stay
+ * gapped. Infantry (`peewee`) keeps `FOOTSTEP_LENGTH` untouched.
+ */
+export const COMMANDER_FOOTSTEP_LENGTH = 14;
 /**
  * Lateral footstep offset for the walker: matches the leg spread (±4 in
  * the body build), so left/right steps land under the striding feet.
@@ -52,11 +59,12 @@ export const FOOTSTEP_OFFSET = 4;
  * (see `trackOffsetFor`).
  */
 export const TRACK_WIDTH: Record<UnitKind, number> = {
-  flash: 5.5,
-  stump: 6.5,
-  hammer: 6,
-  commander: 4.5,
-  // Infantry scuff: narrower than any tank tread.
+  flash: 6,
+  stump: 7,
+  hammer: 6.5,
+  commander: 5,
+  // Infantry scuff: narrower than any vehicle mark, untouched by the
+  // vehicle visibility tune.
   peewee: 3.5,
 };
 
@@ -104,6 +112,9 @@ export function trackOffsetsFor(kind: UnitKind, step: number): number[] {
 
 /** Mark length along travel for a kind (treads link, footsteps gap). */
 export function trackLengthFor(kind: UnitKind): number {
+  if (kind === "commander") return COMMANDER_FOOTSTEP_LENGTH;
+  // Other walkers (peewee infantry, future legged kinds) keep the short scout
+  // scuff; tracked hulls keep the linked ribbon.
   return isWalker(kind) ? FOOTSTEP_LENGTH : TRACK_LENGTH;
 }
 

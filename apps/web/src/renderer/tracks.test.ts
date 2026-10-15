@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  COMMANDER_FOOTSTEP_LENGTH,
   FOOTSTEP_LENGTH,
   FOOTSTEP_OFFSET,
   MAX_TRACKS,
@@ -113,8 +114,11 @@ describe("track helpers", () => {
     for (const kind of ["flash", "stump", "hammer"] as const) {
       expect(trackLengthFor(kind)).toBeGreaterThan(TRACK_SPACING);
     }
-    expect(trackLengthFor("commander")).toBe(FOOTSTEP_LENGTH);
+    expect(trackLengthFor("commander")).toBe(COMMANDER_FOOTSTEP_LENGTH);
     expect(trackLengthFor("commander")).toBeLessThan(TRACK_SPACING);
+    // Infantry keeps the short scout scuff, gapped like the commander.
+    expect(trackLengthFor("peewee")).toBe(FOOTSTEP_LENGTH);
+    expect(trackLengthFor("peewee")).toBeLessThan(TRACK_SPACING);
   });
 
   it("gates emission on real driving only", () => {
@@ -213,7 +217,7 @@ describe("TrackTrails", () => {
     const steps = scene2.children.filter((c): c is THREE.Mesh => c.type === "Mesh");
     for (const mesh of steps) {
       expect(mesh.scale.x).toBeCloseTo(trackWidthFor("commander"), 9);
-      expect(mesh.scale.z).toBe(FOOTSTEP_LENGTH);
+      expect(mesh.scale.z).toBe(COMMANDER_FOOTSTEP_LENGTH);
     }
     walkTracks.dispose();
   });
@@ -304,18 +308,25 @@ describe("TrackTrails", () => {
   });
 
   it("renders wider, longer-lived marks under the scorch layer", () => {
-    // Visibility tune pinned: 16 s ribbons, overlapping tank treads
-    // (footsteps stay gapped), all still below scorch in every dimension.
+    // Vehicle visibility tune pinned: 16 s ribbons, overlapping tank treads
+    // (all footsteps stay gapped), all still below scorch in every dimension.
+    // Globals are untouched by the vehicle bump (a shared peak/lifetime lift
+    // would brighten infantry too); only vehicle widths/lengths move.
     expect(TRACK_LIFETIME).toBe(16);
     expect(TRACK_PEAK_OPACITY).toBe(0.55);
     expect(TRACK_PEAK_OPACITY).toBeLessThan(0.62);
-    expect(TRACK_LENGTH).toBe(26);
+    expect(TRACK_LENGTH).toBe(28);
     expect(TRACK_LENGTH).toBeGreaterThan(TRACK_SPACING);
+    expect(COMMANDER_FOOTSTEP_LENGTH).toBe(14);
+    expect(COMMANDER_FOOTSTEP_LENGTH).toBeLessThan(TRACK_SPACING);
     expect(FOOTSTEP_LENGTH).toBe(13);
     expect(FOOTSTEP_LENGTH).toBeLessThan(TRACK_SPACING);
-    expect(trackWidthFor("flash")).toBe(5.5);
-    expect(trackWidthFor("stump")).toBe(6.5);
-    expect(trackWidthFor("commander")).toBe(4.5);
+    expect(trackWidthFor("flash")).toBe(6);
+    expect(trackWidthFor("stump")).toBe(7);
+    expect(trackWidthFor("hammer")).toBe(6.5);
+    expect(trackWidthFor("commander")).toBe(5);
+    // Infantry scuff is pinned exactly: the vehicle bump leaves it alone.
+    expect(trackWidthFor("peewee")).toBe(3.5);
     const scene = new THREE.Scene();
     const far: TrackSource = {
       unitCount: 1,
@@ -345,5 +356,26 @@ describe("TrackTrails", () => {
     // dark-grey track color at the fresh peak on emission.
     expect((mark.material as THREE.MeshBasicMaterial).color.getHex()).toBe(TRACK_COLOR);
     tracks.dispose();
+  });
+
+  it("bumps vehicle marks only — every vehicle quad beats the scout scuff", () => {
+    // Vehicle-only increment over the task-79 tune (+0.5 u per vehicle
+    // width, +2 u tank length, +1 u commander step); infantry is bit-identical.
+    expect(trackWidthFor("flash")).toBeGreaterThan(5.5);
+    expect(trackWidthFor("stump")).toBeGreaterThan(6.5);
+    expect(trackWidthFor("hammer")).toBeGreaterThan(6);
+    expect(trackWidthFor("commander")).toBeGreaterThan(4.5);
+    expect(TRACK_LENGTH).toBeGreaterThan(26);
+    expect(COMMANDER_FOOTSTEP_LENGTH).toBeGreaterThan(FOOTSTEP_LENGTH);
+    // Quad area per single mark: every vehicle print covers more ground than
+    // one peewee scuff, so armor lanes read heavier than scout dashes.
+    const scoutArea = trackWidthFor("peewee") * trackLengthFor("peewee");
+    for (const kind of ["flash", "stump", "hammer", "commander"] as const) {
+      expect(trackWidthFor(kind) * trackLengthFor(kind)).toBeGreaterThan(scoutArea);
+    }
+    // The scout stays the narrowest mark on the field.
+    for (const kind of ["flash", "stump", "hammer", "commander"] as const) {
+      expect(trackWidthFor("peewee")).toBeLessThan(trackWidthFor(kind));
+    }
   });
 });
