@@ -79,12 +79,19 @@ import {
   pickNearest,
 } from "./selection";
 import {
-  SELECTION_CORE,
   buildSelectionMarker,
   disposeSelectionAssets,
   markerVisibility,
   updateSelectionMarker,
 } from "./selectionFx";
+import {
+  MOVE_PING_DURATION,
+  MOVE_PING_MAX,
+  buildMovePing,
+  buildMovePingGeometry,
+  movePingOpacity,
+  movePingScale,
+} from "./movePing";
 import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { createFpsSampler, formatFps } from "./fps";
@@ -560,25 +567,20 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     };
 
     // Move-order pings: short-lived expanding rings where an order landed.
-    const pingGeo = new THREE.RingGeometry(10, 13, 40);
-    pingGeo.rotateX(-Math.PI / 2);
+    // Same round-circle compositing as the unit selection rings
+    // (depth-test off, selection render-order band) so hilly terrain never
+    // cuts the destination circle off — see `movePing.ts`.
+    const pingGeo = buildMovePingGeometry();
     const pings: { mesh: THREE.Mesh; t: number }[] = [];
-    const pingBase = new THREE.MeshBasicMaterial({
-      color: SELECTION_CORE,
-      transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
-    });
     const addPing = (x: number, z: number): void => {
-      if (pings.length >= 8) {
+      if (pings.length >= MOVE_PING_MAX) {
         const oldest = pings.shift();
         if (oldest) {
           scene.remove(oldest.mesh);
           (oldest.mesh.material as THREE.Material).dispose();
         }
       }
-      const mesh = new THREE.Mesh(pingGeo, pingBase.clone());
-      mesh.position.set(x, groundY(x, z) + 1.5, z);
+      const mesh = buildMovePing(pingGeo, x, z, groundY);
       scene.add(mesh);
       pings.push({ mesh, t: 0 });
     };
@@ -926,14 +928,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       for (let i = pings.length - 1; i >= 0; i--) {
         const ping = pings[i]!;
         ping.t += dt;
-        const k = ping.t / 0.8;
+        const k = ping.t / MOVE_PING_DURATION;
         if (k >= 1) {
           scene.remove(ping.mesh);
           (ping.mesh.material as THREE.Material).dispose();
           pings.splice(i, 1);
         } else {
-          ping.mesh.scale.setScalar(1 + k * 2.5);
-          (ping.mesh.material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k);
+          ping.mesh.scale.setScalar(movePingScale(k));
+          (ping.mesh.material as THREE.MeshBasicMaterial).opacity = movePingOpacity(k);
         }
       }
       posTimer += dt;
@@ -988,7 +990,6 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       renderer.dispose();
       disposeSelectionAssets();
       pingGeo.dispose();
-      pingBase.dispose();
       for (const ping of pings) {
         scene.remove(ping.mesh);
         (ping.mesh.material as THREE.Material).dispose();
