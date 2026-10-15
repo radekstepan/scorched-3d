@@ -691,7 +691,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
       movement.update(dt);
       waypoints.setVisible(opt.showWaypoints);
-      waypoints.update(movement, units.children.length);
+      waypoints.update(movement, units.children.length, t);
       health.setVisible(opt.showHealth);
       health.update(combat, units.children, camera);
       combat.update(dt);
