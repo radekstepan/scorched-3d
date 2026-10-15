@@ -10,6 +10,7 @@ import {
   tickThreat,
   type ThreatMemory,
 } from "./retaliation.js";
+import { outnumbered } from "./strategy.js";
 import {
   CRUSH_DRAG,
   stepBlocked,
@@ -73,7 +74,10 @@ import type { UnitField } from "./place.js";
  *   the mover `threat` field): a splashed idle/patrolling hull steers toward
  *   its attacker's last-known position through the same drive — freezing its
  *   patrol leg, holding at weapons-range stand-off, giving up past the
- *   disengage bound, the patrol-anchor leash, or memory expiry. Orders and
+ *   disengage bound, the patrol-anchor leash, or memory expiry. With the
+ *   optional strategic context (core `strategy.ts` `PursuitTactics`) an
+ *   outnumbered pursuer holds in place facing the threat instead of charging
+ *   alone into the stronger force, re-engaging once backup arrives. Orders and
  *   holds clear and refuse threats (player orders win); stun only pauses the
  *   drive, the threat clock keeps ticking underneath.
  */
@@ -391,6 +395,26 @@ export function spacingScale(
 }
 
 /**
+ * Optional strategic context for retaliation pursuits (core `strategy.ts`):
+ * the roster snapshot a pursuit weighs before driving into a brawl. Absent,
+ * pursuits steer exactly as before — every existing caller and test holds
+ * byte-identical history without it.
+ */
+export interface PursuitTactics {
+  /** Roster index of the mover being advanced (who is asking). */
+  self: number;
+  /** Side per roster index (undefined for headless/team-less rosters). */
+  teams: readonly (number | undefined)[];
+  /** Live flags per roster index. */
+  alive: readonly boolean[];
+  /**
+   * Health fractions remaining (1 pristine .. 0 dead), parallel to the foe
+   * positions. Absent reads everyone pristine (counts-only odds).
+   */
+  hp?: readonly number[] | null;
+}
+
+/**
  * Advance one mover by `dt` seconds. A live move order takes precedence:
  * arrive (advance the order cursor, skipping waypoints already reached),
  * and on the final waypoint arrive → hold (order cleared, patrol does not
@@ -423,6 +447,7 @@ export function advanceMover(
   terrain?: SeatField | null,
   crush?: CrushContext | null,
   foes?: readonly { x: number; z: number }[] | null,
+  tactics?: PursuitTactics | null,
 ): Mover {
   if (!(dt > 0)) return mover;
   // Hit-stunned: hold the drive while the renderer-side rock plays (the hull
@@ -455,7 +480,7 @@ export function advanceMover(
   let calm = mover;
   const threat = mover.threat;
   if (threat && threat.ttl > 0) {
-    const chased = pursueStep(kind, mover, threat, route, dt, spacing, terrain, crush, foes);
+    const chased = pursueStep(kind, mover, threat, route, dt, spacing, terrain, crush, foes, tactics);
     if (chased) return { ...chased, leg };
     calm = clearThreat(mover);
   } else if (threat) {
@@ -519,7 +544,11 @@ function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: numb
  * patrol anchor) so the caller drops the memory and resumes patrol.
  * Inside weapons-range stand-off the hull holds and faces the threat while
  * the memory stays fresh; pinned against a slope it holds like an ordered
- * hull instead of skipping its frozen leg away. Pure.
+ * hull instead of skipping its frozen leg away. With `tactics`, a hull
+ * that would drive alone into a stronger force holds in place facing the
+ * threat instead — waiting for backup, not suiciding — while the memory
+ * stays fresh so it re-engages (or gives up by the usual gates) once the
+ * odds change. Pure.
  */
 function pursueStep(
   kind: UnitKind,
@@ -531,6 +560,7 @@ function pursueStep(
   terrain: SeatField | null | undefined,
   crush: CrushContext | null | undefined,
   foes: readonly { x: number; z: number }[] | null | undefined,
+  tactics?: PursuitTactics | null,
 ): Mover | null {
   const ttl = threat.ttl - dt;
   if (!(ttl > 0)) return null;
@@ -550,6 +580,21 @@ function pursueStep(
   const memory: ThreatMemory = { attacker: threat.attacker, x: tx, z: tz, ttl };
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });
+  // Outnumbered: hold facing the threat and wait for backup instead of
+  // driving alone into the stronger force. Allies count around me (who can
+  // reach me), enemies around the threat (what I would drive into). The
+  // memory stays fresh so the hull re-engages the moment friends arrive —
+  // and the usual expiry/disengage/leash gates still release it if the
+  // fight moves on without it.
+  if (
+    tactics && foes &&
+    outnumbered(
+      tactics.self, mover, { x: tx, z: tz },
+      foes, tactics.teams, tactics.alive, tactics.hp,
+    )
+  ) {
+    return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
+  }
   if (Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind)) {
     return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
   }
@@ -648,6 +693,7 @@ export function advanceMovers(
   dt: number,
   terrain?: SeatField | null,
   crush?: CrushContext | null,
+  tactics?: Omit<PursuitTactics, "self"> | null,
 ): Mover[] {
   if (!(dt > 0) || movers.length === 0) {
     // No time passes: keep the old step exactly (same refs, no separation —
@@ -660,9 +706,14 @@ export function advanceMovers(
     return hasOrder(m) ? Math.max(scale, ORDER_SPACING_FLOOR) : scale;
   });
   // Pursuit tracks moving attackers: the pre-tick roster positions double as
-  // the foe lookup (same snapshot discipline as spacing/separation).
+  // the foe lookup (same snapshot discipline as spacing/separation). The
+  // strategic context rides along per index so outnumbered hulls hold for
+  // backup instead of charging alone into a stronger force.
   const driven = movers.map((m, i) =>
-    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush, movers),
+    advanceMover(
+      kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush, movers,
+      tactics ? { ...tactics, self: i } : null,
+    ),
   );
   return resolveSeparation(driven, kinds, dt, terrain);
 }

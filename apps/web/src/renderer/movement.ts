@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {
-  acquireHunt,
+  acquireStrategicHunt,
   advanceMovers,
   clearThreat,
   findWorldPath,
@@ -20,6 +20,7 @@ import {
   type PlacedUnit,
   type RoutePoint,
   type SeatField,
+  type ThreatMemory,
   type UnitKind,
 } from "@scorched-3d/core";
 import { advanceLocomotion, applyIdleTremble, clearIdleTremble } from "./units";
@@ -78,6 +79,14 @@ export class UnitMovement {
    * through a wreck — but wrecks themselves never move.
    */
   private destroyed: boolean[] = [];
+  /**
+   * Per-unit accumulated damage 0..1, fed from combat once per tick (see
+   * `setDamage`): the strategic layer reads remaining health from it, so
+   * burning columns count for less than pristine ones when hulls weigh
+   * whether a fight is winnable. Null until the first feed — odds then read
+   * everyone pristine (counts only), matching headless history.
+   */
+  private damage: readonly number[] | null = null;
 
   constructor(
     units: THREE.Group,
@@ -197,6 +206,25 @@ export class UnitMovement {
   }
 
   /**
+   * Feed per-unit accumulated damage 0..1 (combat's roster, same order) so
+   * idle hulls weigh remaining health when deciding whether to engage, whom
+   * to pursue, and whether to wait for backup. The canvas refreshes this
+   * once per tick after combat runs; the drive uses the previous tick's
+   * snapshot (one tick stale, never torn). Stored by reference, never
+   * mutated — pass null to return to counts-only odds.
+   */
+  setDamage(damage: readonly number[] | null): void {
+    this.damage = damage;
+  }
+
+  /** Health fractions remaining (1 pristine .. 0 dead) for the roster. */
+  private health(): number[] | null {
+    if (!this.damage) return null;
+    const damage = this.damage;
+    return this.movers.map((_, i) => (this.destroyed[i] ? 0 : 1 - (damage[i] ?? 0)));
+  }
+
+  /**
    * Roster side of a unit (undefined when the group carries no placement —
    * headless test groups hunt nothing). For driven-path prediction and the
    * hunt sweep below.
@@ -207,23 +235,32 @@ export class UnitMovement {
   }
 
   /**
-   * Hunt sweep: every live idle/patrolling hull without a live memory checks
-   * for the nearest live enemy (core `acquireHunt`) and starts a pursuit on
-   * the wider hunt leash — so the two sides actively close instead of only
-   * answering fire. Memories pointing at wrecks clear first (survivors stop
-   * guarding corpses and may acquire a live enemy the same tick). Ordered,
-   * holding, stunned, threatened, and wrecked hulls are untouched —
-   * `acquireHunt` refuses them itself — and the sweep costs one O(n) scan
-   * per hull on a 6-roster, before the drive step so hunts steer same-tick.
+    * Hunt sweep with judgment: every live idle/patrolling hull without a live
+    * memory checks for a *winnable* fight (core `acquireStrategicHunt`) — an
+    * outnumbered hull patrols on and waits for backup instead of charging
+    * alone into a group — and quarries are chosen, not just nearest: hulls
+    * join their squad's focus and prefer wounded enemies (see `strategy.ts`).
+    * Memories pointing at wrecks clear first (survivors stop guarding corpses
+    * and may acquire a live enemy the same tick). Ordered, holding, stunned,
+    * threatened, and wrecked hulls are untouched, and the sweep costs one
+    * O(n) scan per hull on a 6-roster, before the drive step so hunts steer
+    * same-tick. In-progress pursuits that turn suicidal hold in place inside
+    * the drive itself (tactics ride `advanceMovers`), so the sweep only
+    * acquires.
    */
   sweepHunt(): void {
     if (this.movers.length === 0) return;
     const teams = this.movers.map((_, i) => this.teamAt(i));
     if (teams.every((t) => t === undefined)) return;
     // Pre-tick roster snapshot (same discipline as spacing/separation): the
-    // drive below resolves live attackers against these positions.
+    // drive below resolves live attackers against these positions, and the
+    // squad focus reads these memories.
     const foes = this.movers.map((m) => ({ x: m.x, z: m.z }));
     const alive = this.movers.map((_, i) => !this.destroyed[i]);
+    const threats: (ThreatMemory | undefined)[] = this.movers.map((m) =>
+      m.threat && m.threat.ttl > 0 ? { ...m.threat } : undefined,
+    );
+    const hp = this.health();
     for (let i = 0; i < this.movers.length; i++) {
       let mover = this.movers[i]!;
       const attacker = mover.threat?.attacker;
@@ -234,7 +271,7 @@ export class UnitMovement {
         mover = clearThreat(mover);
       }
       const anchor = this.routes[i]?.[0] ?? null;
-      this.movers[i] = acquireHunt(mover, i, teams, foes, alive, anchor);
+      this.movers[i] = acquireStrategicHunt(mover, i, teams, foes, alive, anchor, threats, hp ?? undefined);
     }
   }
 
@@ -297,7 +334,17 @@ export class UnitMovement {
     // Hunt first: idle hulls notice live enemies (and drop memories of dead
     // attackers) before the drive step, so acquisitions steer same-tick.
     this.sweepHunt();
-    const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush);
+    // The drive carries the roster sides, live flags, and health so an
+    // outnumbered pursuer holds facing the threat (waiting for backup)
+    // instead of charging alone into the stronger force.
+    const teams = this.movers.map((_, i) => this.teamAt(i));
+    const alive = this.movers.map((_, i) => !this.destroyed[i]);
+    const hp = this.health();
+    const next = teams.every((t) => t === undefined)
+      ? advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush)
+      : advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush, {
+        teams, alive, hp: hp ?? undefined,
+      });
     // Wrecks never move: freeze their movers at the pre-tick state (core
     // separation may have shoved them). Live hulls still spacing-avoid the
     // wreck positions, so nobody drives through a wreck.

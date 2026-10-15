@@ -33,6 +33,7 @@ import {
   nextShotDelay,
   pickHostilePair,
   pickSkirmishPair,
+  pickStrategicTarget,
   resolveScorchSeed,
   rollTreeStick,
   scorchAnisotropy,
@@ -736,6 +737,15 @@ export class CombatFx {
   /** Accumulated damage fraction of a unit (0 pristine .. 1 fully charred). */
   unitDamageAt(index: number): number {
     return this.damage[index] ?? 0;
+  }
+
+  /**
+   * Live per-unit damage roster (same order as the unit group), for the
+   * movement drive's strategic health read. By reference, never mutated by
+   * the caller — the canvas feeds it straight into `movement.setDamage`.
+   */
+  damageList(): readonly number[] {
+    return this.damage;
   }
 
   /** True once the unit has exhausted its health and died (wreck persists). */
@@ -1512,12 +1522,16 @@ export class CombatFx {
   }
 
   /**
-   * Draw an attacker/target pair uniformly from live hulls across team lines
-   * (wrecks excluded on both ends, friendlies never draw fire). Null when
-   * fewer than two hulls are alive or one side is wiped — the skirmish goes
-   * quiet instead of shelling wrecks or turning on its own side. Consumes rng
-   * exactly like the core hostile-pair picker so live rosters replay
-   * deterministically.
+   * Draw an attacker/target pair across team lines (wrecks excluded on both
+   * ends, friendlies never draw fire). The attacker draws uniformly from
+   * live hulls — one rng draw, exactly like the old hostile-pair picker, so
+   * live rosters replay deterministically — but the *target* is chosen, not
+   * random: guns finish burning hulls, pile onto the squad's current aims
+   * (focus fire over split shots), and stay on their current target instead
+   * of thrashing, while distance still dominates so admitted in-range duels
+   * keep their pace (see core `pickStrategicTarget`). Null when fewer than
+   * two hulls are alive or one side is wiped — the skirmish goes quiet
+   * instead of shelling wrecks or turning on its own side.
    */
   private pickLivePair(): { attacker: number; target: number } | null {
     const count = this.units.children.length;
@@ -1537,7 +1551,32 @@ export class CombatFx {
     }
     const pair = pickHostilePair(alive.length, teams, this.rng);
     if (!pair) return null;
-    return { attacker: alive[pair.attacker]!, target: alive[pair.target]! };
+    const attacker = alive[pair.attacker]!;
+    // Aim the uniform attacker strategically instead of firing the uniform
+    // target: the roster snapshot is positional (body X/Z), health reads
+    // live damage, and the pending aims are the squad's current focus.
+    const positions = this.units.children.map((body) => ({
+      x: (body as THREE.Group).position.x,
+      z: (body as THREE.Group).position.z,
+    }));
+    const fullTeams: (number | undefined)[] = this.units.children.map(
+      (_, i) => (this.destroyed[i] ? undefined : placed?.[i]?.team),
+    );
+    // Destroyed hulls are invisible to targeting (never shot, never counted
+    // as sides): mark them dead in a parallel live list.
+    const liveFlags = this.units.children.map((_, i) => !this.destroyed[i]);
+    const kind = this.unitKind(attacker);
+    const hp = this.damage.map((d) => 1 - d);
+    const target = pickStrategicTarget(attacker, positions, fullTeams, liveFlags, {
+      hp,
+      // Pending aims are the squad's current focus (structure aims live in
+      // a separate map keyed by attacker, so only hull-aim values count).
+      focusCounts: [...this.pending.values()],
+      sticky: this.pending.get(attacker) ?? -1,
+      maxDist: kind ? maxRangeFor(kind) + 50 : undefined,
+    });
+    if (target < 0) return null;
+    return { attacker, target };
   }
 
   /**

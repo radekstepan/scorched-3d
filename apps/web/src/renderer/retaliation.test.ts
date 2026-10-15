@@ -357,6 +357,76 @@ describe("UnitMovement hunt", () => {
     expect(movement.hasThreat(1)).toBe(false);
     movement.dispose();
   });
+
+  /** Four idle hulls with custom spawns: one scout vs a column, or a pair. */
+  function makeSquadMovement(
+    spawns: { x: number; z: number }[],
+    teams: number[],
+  ): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = spawns.map((_, i) => ({
+      kind: "flash",
+      cellX: 10 + i,
+      cellZ: 10,
+      rotation: 0,
+      team: teams[i],
+    }));
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(pos.x, 100, pos.z);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("waits instead of charging alone into a stronger column", () => {
+    // Lone scout at the origin facing three enemies inside 650.
+    const { movement } = makeSquadMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 500, z: 300 },
+        { x: 530, z: 310 },
+        { x: 560, z: 320 },
+      ],
+      [0, 1, 1, 1],
+    );
+    movement.update(1 / 60);
+    // The scout patrols on (no suicide charge) while the column — each hull
+    // backed by two mates — commits to the scout.
+    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.moverState(1)?.threat?.attacker).toBe(0);
+    expect(movement.moverState(2)?.threat?.attacker).toBe(0);
+    expect(movement.moverState(3)?.threat?.attacker).toBe(0);
+    movement.dispose();
+  });
+
+  it("joins the squad focus instead of starting its own fight", () => {
+    const { movement } = makeSquadMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+        { x: 600, z: 100 },
+        { x: 700, z: 120 },
+      ],
+      [0, 0, 1, 1],
+    );
+    // Mate already answering the farther enemy (retaliation memory).
+    movement.threatenUnit(1, 3, 700, 120);
+    expect(movement.hasThreat(1)).toBe(true);
+    movement.update(1 / 60);
+    // The free hull piles onto the squad's target (farther, but focused)
+    // instead of duelling the nearer enemy alone.
+    expect(movement.moverState(0)?.threat?.attacker).toBe(3);
+    movement.dispose();
+  });
 });
 
 describe("waypoint pursuit display", () => {

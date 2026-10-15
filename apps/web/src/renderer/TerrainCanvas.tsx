@@ -888,6 +888,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       health.update(combat, units.children, camera);
       occlusion.update(camera.position, units.children, { groundY, stands: getStands() }, combat);
       combat.update(dt);
+      // Feed live damage into the movement drive so idle hulls weigh remaining
+      // health when deciding whether to engage, whom to pursue, and whether
+      // to wait for backup (one tick stale: movement already ran this tick).
+      movement.setDamage(combat.damageList());
       // HQ clocks, door slides, and releases run after combat so a kill and
       // a due release on the same tick resolve the wreck first.
       hq?.update(dt);
