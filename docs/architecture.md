@@ -30,7 +30,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
 | `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission capped under half the map so HQs never take cross-map lobs), plus cross-team pair picking. |
-| `packages/core/src/units/hq.ts` | Team HQ factory works: deterministic valley-floor siting (dry margin, map-relative high-ground cap, hall-clear exit lane, island fallback), honest blast splash, and the reinforcement clock (interval + per-side cap + kind cycle). |
+| `packages/core/src/units/hq.ts` | Team HQ factory works: deterministic valley-floor siting (dry margin, map-relative high-ground cap, hall-clear exit lane, island fallback), honest blast splash, and the reinforcement clock (first release at 40 s, per-side cap of 4, weighted-random kinds with per-kind build times — stronger units rarer and slower). |
 | `apps/web/src/renderer/hq.ts` | HQ factory view (production hall, monitor roof, chimney stacks, silo, workshop annex, framed sectional door, exit hall, team ring) with wreck pose. |
 | `apps/web/src/renderer/hqFx.ts` | HQ manager: damage, spawn clocks, door-slide animation, release/kill/damage hooks. |
 | `packages/core/src/units/destruction.ts` | Blast scorch + graduated collateral damage (tree burn states, rock levels, spread). |

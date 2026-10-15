@@ -1,6 +1,14 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
-import { HQ_MAX_SPAWNS, HQ_SPAWN_CYCLE, HQ_SPAWN_INTERVAL } from "@scorched-3d/core";
+import {
+  HQ_MAX_SPAWNS,
+  HQ_SPAWN_INTERVAL,
+  HQ_SPAWN_ROSTER,
+  mulberry32,
+  pickNextSpawnUnit,
+  spawnIntervalFor,
+  type UnitKind,
+} from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
 import { HQ_BEACON_PERIOD } from "./hq";
 import { HealthBars } from "./healthBars";
@@ -30,10 +38,16 @@ describe("HqFx", () => {
   it("releases one reinforcement per interval through the hall mouth", () => {
     const scene = new THREE.Scene();
     const spawns: { team: 0 | 1; kind: string; x: number; z: number }[] = [];
+    // Seeded draw stream: both forts release the kinds a fresh stream draws.
+    const seed = 41;
     const hq = new HqFx(scene, anchors(), {
       groundY: () => 40,
+      rng: mulberry32(seed),
       onSpawn: (team, kind, x, z) => spawns.push({ team, kind, x, z }),
     });
+    const expectRng = mulberry32(seed);
+    const kind0 = pickNextSpawnUnit(expectRng);
+    const kind1 = pickNextSpawnUnit(expectRng);
     expect(hq.count).toBe(2);
     // Nothing before the first interval.
     hq.update(HQ_SPAWN_INTERVAL - 1);
@@ -46,11 +60,13 @@ describe("HqFx", () => {
     expect(hq.doorLift(0)).toBeGreaterThan(0);
     expect(spawns).toHaveLength(0);
     hq.update(HQ_DOOR_OPEN_T / 2);
-    // Both forts run the same clock, so both release on the same tick.
+    // Both forts run the same clock, so both release on the same tick —
+    // each its own weighted draw, in team order.
     expect(spawns).toHaveLength(2);
     expect(spawns[0]!.team).toBe(0);
     expect(spawns[1]!.team).toBe(1);
-    expect(spawns[0]!.kind).toBe(HQ_SPAWN_CYCLE[0]);
+    expect(spawns[0]!.kind).toBe(kind0);
+    expect(spawns[1]!.kind).toBe(kind1);
     // Hall mouth sits outside the bunker, toward the map center.
     expect(spawns[0]!.x).toBeGreaterThan(-1000);
     // Door shuts behind the release; both HQs run their own clocks.
@@ -61,19 +77,61 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("caps releases per team and cycles the roster", () => {
+  it("caps releases per team with a seeded, reproducible roster", () => {
     const scene = new THREE.Scene();
+    const seed = 7;
     const kinds: string[] = [];
     const hq = new HqFx(scene, [anchors()[0]!], {
       groundY: () => 40,
+      rng: mulberry32(seed),
       onSpawn: (_team, kind) => kinds.push(kind),
     });
     for (let n = 0; n < 3 * (HQ_MAX_SPAWNS + 2); n++) {
       hq.update(HQ_SPAWN_INTERVAL + HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
     }
     expect(kinds).toHaveLength(HQ_MAX_SPAWNS);
-    expect(kinds).toEqual(["peewee", "flash", "stump", "hammer"]);
+    for (const kind of kinds) expect(HQ_SPAWN_ROSTER).toContain(kind);
+    // Same seed, same war: a twin HQ draws the identical sequence.
+    const twin: string[] = [];
+    const hq2 = new HqFx(scene, [anchors()[0]!], {
+      groundY: () => 40,
+      rng: mulberry32(seed),
+      onSpawn: (_team, kind) => twin.push(kind),
+    });
+    for (let n = 0; n < 3 * (HQ_MAX_SPAWNS + 2); n++) {
+      hq2.update(HQ_SPAWN_INTERVAL + HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    }
+    expect(twin).toEqual(kinds);
     expect(hq.spawnedAt(0)).toBe(HQ_MAX_SPAWNS);
+    hq.dispose();
+    hq2.dispose();
+  });
+
+  it("waits longer after stronger releases (per-kind build times)", () => {
+    const scene = new THREE.Scene();
+    const releases: { kind: UnitKind; at: number }[] = [];
+    let clock = 0;
+    const hq = new HqFx(scene, [anchors()[0]!], {
+      groundY: () => 40,
+      rng: mulberry32(99),
+      onSpawn: (_team, kind) => releases.push({ kind, at: clock }),
+    });
+    // Step 1 s at a time until the cap releases (worst case 4 × 70 s).
+    for (let n = 0; n < 400 && releases.length < HQ_MAX_SPAWNS; n++) {
+      hq.update(1);
+      clock += 1;
+    }
+    expect(releases).toHaveLength(HQ_MAX_SPAWNS);
+    // The spawn clock pauses while the door slides (2.6 s against ≥30 s
+    // build times), so the gap between two releases is the previous kind's
+    // build time plus the door overhead (±1 step of 1 s granularity).
+    const door = HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T;
+    for (let n = 0; n + 1 < releases.length; n++) {
+      const gap = releases[n + 1]!.at - releases[n]!.at;
+      const build = spawnIntervalFor(releases[n]!.kind);
+      expect(gap).toBeGreaterThanOrEqual(Math.ceil(build) + Math.floor(door) - 1);
+      expect(gap).toBeLessThanOrEqual(Math.ceil(build) + Math.ceil(door) + 1);
+    }
     hq.dispose();
   });
 

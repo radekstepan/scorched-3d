@@ -4,7 +4,6 @@ import {
   createHqDamage,
   createHqSpawns,
   isHqDestroyed,
-  spawnKindFor,
   tickHqSpawn,
   type HqSpawnState,
   type AttackMode,
@@ -63,6 +62,13 @@ export interface HqEnv {
   onKilled?: (index: number) => void;
   /** Fired per splash that chips a live HQ (canvas rallies defenders). */
   onDamaged?: (index: number, shooter: number | null) => void;
+  /**
+   * Reinforcement draw stream (one draw per release — weaker units more
+   * often, stronger units slower to build). Defaults to `Math.random` like
+   * the ambient combat stream; pass a seeded stream for deterministic
+   * replays and tests.
+   */
+  rng?: () => number;
 }
 
 /**
@@ -99,14 +105,19 @@ export class HqFx {
   private anim: number[] = [-1, -1];
   /** True once the running release fired `onSpawn`. */
   private released: boolean[] = [false, false];
+  /** Kind drawn for the running release (set when its clock fires). */
+  private pendingKind: (UnitKind | null)[] = [];
   /** Beacon flash clock: every live HQ blinks on this shared phase. */
   private clock = 0;
   private env: HqEnv;
+  private rng: () => number;
   private disposed = false;
 
   constructor(scene: THREE.Scene, anchors: readonly HqAnchorInput[], env: HqEnv) {
     this.scene = scene;
     this.env = env;
+    this.rng = env.rng ?? Math.random;
+    this.pendingKind = anchors.map(() => null);
     for (const a of anchors) {
       const facing = hqFacingFor(a.team);
       const group = buildHq(a.team);
@@ -217,6 +228,7 @@ export class HqFx {
       if (isHqDestroyed(this.damage[i]!)) {
         this.destroyed[i] = true;
         this.anim[i] = -1;
+        this.pendingKind[i] = null;
         const group = this.groups[i];
         if (group) poseHqWreck(group);
         this.onKilledRef(i);
@@ -244,11 +256,15 @@ export class HqFx {
       if (!group) continue;
       setHqBeaconLevel(group, blink);
       if (this.anim[i]! < 0) {
-        // Idle: tick the reinforcement clock (a due release starts the door).
+        // Idle: tick the reinforcement clock (a due release draws a random
+        // kind and starts the door — stronger units also rearm a longer
+        // build time, all inside `tickHqSpawn`).
         const state = this.spawns[i]!;
-        if (tickHqSpawn(state, dt, true)) {
+        const kind = tickHqSpawn(state, dt, true, this.rng);
+        if (kind !== null) {
           this.anim[i] = 0;
           this.released[i] = false;
+          this.pendingKind[i] = kind;
         }
         continue;
       }
@@ -257,10 +273,11 @@ export class HqFx {
       const t = this.anim[i]!;
       if (!this.released[i] && t >= HQ_DOOR_OPEN_T) {
         this.released[i] = true;
-        const state = this.spawns[i]!;
         const exit = this.exitAt(i);
         const team = (group.userData.hqTeam as 0 | 1 | undefined) ?? 0;
-        this.env.onSpawn?.(team, spawnKindFor(state.spawned - 1), exit.x, exit.z);
+        // Set when the clock fired above; the HQ cannot die mid-release
+        // without cancelling `anim` (see `splash`), so it is always present.
+        this.env.onSpawn?.(team, this.pendingKind[i]!, exit.x, exit.z);
       }
       const total = HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T;
       if (t >= total) {

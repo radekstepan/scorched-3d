@@ -11,21 +11,29 @@ import {
   HQ_HIGH_FRACTION,
   HQ_MAX_SLOPE,
   HQ_MAX_SPAWNS,
-  HQ_SPAWN_CYCLE,
   HQ_SPAWN_INTERVAL,
+  HQ_SPAWN_MAX_INTERVAL,
+  HQ_SPAWN_MIN_INTERVAL,
+  HQ_SPAWN_ROSTER,
   hqAnchor,
   hqCellSlope,
   hqCellX,
   hqFoundationDrop,
   hqHallClear,
   hqMaxAboveSea,
+  hqSpawnStrength,
   isHqDestroyed,
   isHqGround,
+  pickNextSpawnUnit,
   placeHqs,
-  spawnKindFor,
+  spawnIntervalFor,
+  spawnWeightFor,
   tickHqSpawn,
   HQ_HIT_DAMAGE,
 } from "./hq.js";
+import { BLAST_RADIUS } from "./destruction.js";
+import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
+import { mulberry32 } from "../terrain/noise.js";
 import { generateMap } from "../terrain/generate.js";
 import type { MapPreset } from "../terrain/types.js";
 
@@ -231,37 +239,121 @@ describe("applyBlastToHqs", () => {
 });
 
 describe("tickHqSpawn", () => {
-  it("fires once per interval while the HQ lives", () => {
+  it("releases a random kind per interval while the HQ lives", () => {
     const [state] = createHqSpawns();
     expect(state!.timer).toBe(HQ_SPAWN_INTERVAL);
-    // Partial ticks never fire.
-    expect(tickHqSpawn(state!, HQ_SPAWN_INTERVAL - 1, true)).toBe(false);
-    expect(tickHqSpawn(state!, 1, true)).toBe(true);
+    // Partial ticks release nothing and draw no rng.
+    let draws = 0;
+    const counting = (rng: () => number): (() => number) => () => {
+      draws++;
+      return rng();
+    };
+    expect(tickHqSpawn(state!, HQ_SPAWN_INTERVAL - 1, true, counting(mulberry32(7)))).toBeNull();
+    expect(draws).toBe(0);
+    const kind = tickHqSpawn(state!, 1, true, mulberry32(7));
+    expect(kind).not.toBeNull();
+    expect(HQ_SPAWN_ROSTER).toContain(kind);
     expect(state!.spawned).toBe(1);
-    expect(state!.timer).toBeCloseTo(HQ_SPAWN_INTERVAL, 6);
+    // The clock rearms for the released kind's own build time.
+    expect(state!.timer).toBeCloseTo(spawnIntervalFor(kind!), 9);
   });
 
-  it("stays quiet for dead HQs and past the cap", () => {
+  it("draws the same kind for the same seed", () => {
+    const [a] = createHqSpawns();
+    const [b] = createHqSpawns();
+    const ka = tickHqSpawn(a!, HQ_SPAWN_INTERVAL, true, mulberry32(21));
+    const kb = tickHqSpawn(b!, HQ_SPAWN_INTERVAL, true, mulberry32(21));
+    expect(ka).toBe(kb);
+  });
+
+  it("stays quiet for dead HQs and past the cap, drawing no rng", () => {
     const [state] = createHqSpawns();
-    expect(tickHqSpawn(state!, 1000, false)).toBe(false);
+    const throwing = (): number => {
+      throw new Error("rng must not be drawn while silent");
+    };
+    expect(tickHqSpawn(state!, 1000, false, throwing)).toBeNull();
     expect(state!.spawned).toBe(0);
     state!.spawned = HQ_MAX_SPAWNS;
-    expect(tickHqSpawn(state!, 1000, true)).toBe(false);
+    expect(tickHqSpawn(state!, 1000, true, throwing)).toBeNull();
   });
 
-  it("cycles the spawn roster deterministically", () => {
-    expect(HQ_SPAWN_CYCLE).toContain("flash");
-    expect(HQ_SPAWN_CYCLE).not.toContain("commander");
-    const n = HQ_SPAWN_CYCLE.length;
-    expect(n).toBeGreaterThanOrEqual(3);
-    expect([0, 1, 2, n, n + 1].map(spawnKindFor)).toEqual([
-      HQ_SPAWN_CYCLE[0],
-      HQ_SPAWN_CYCLE[1],
-      HQ_SPAWN_CYCLE[2 % n],
-      HQ_SPAWN_CYCLE[0],
-      HQ_SPAWN_CYCLE[1 % n],
-    ]);
-    // Negative indices wrap too (no undefined holes in the cycle).
-    expect(spawnKindFor(-1)).toBe(HQ_SPAWN_CYCLE[(n - 1) % n]);
+  it("fields the line roster but never commanders", () => {
+    expect(HQ_SPAWN_ROSTER).toEqual(["peewee", "flash", "stump", "hammer"]);
+    expect(HQ_SPAWN_ROSTER).not.toContain("commander");
+  });
+});
+
+describe("hqSpawnStrength", () => {
+  it("ranks peewee < flash < stump < hammer as splash-weighted punch", () => {
+    for (const kind of HQ_SPAWN_ROSTER) {
+      expect(hqSpawnStrength(kind)).toBeCloseTo(UNIT_HIT_DAMAGE[kind]! * BLAST_RADIUS[kind]!, 12);
+    }
+    const order = HQ_SPAWN_ROSTER.map(hqSpawnStrength);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(hqSpawnStrength("commander")).toBeGreaterThan(0);
+  });
+});
+
+describe("spawnWeightFor", () => {
+  it("weighs weaker units heavier, commanders zero", () => {
+    expect(spawnWeightFor("peewee")).toBe(1);
+    expect(spawnWeightFor("flash")).toBeLessThan(1);
+    expect(spawnWeightFor("stump")).toBeLessThan(spawnWeightFor("flash"));
+    expect(spawnWeightFor("hammer")).toBeLessThan(spawnWeightFor("stump"));
+    expect(spawnWeightFor("hammer")).toBeGreaterThan(0);
+    expect(spawnWeightFor("commander")).toBe(0);
+    expect(spawnWeightFor("bogus" as never)).toBe(0);
+  });
+});
+
+describe("spawnIntervalFor", () => {
+  it("builds stronger units slower, bounded by the min/max build times", () => {
+    expect(spawnIntervalFor("peewee")).toBe(HQ_SPAWN_MIN_INTERVAL);
+    expect(spawnIntervalFor("hammer")).toBe(HQ_SPAWN_MAX_INTERVAL);
+    expect(spawnIntervalFor("flash")).toBeGreaterThan(spawnIntervalFor("peewee"));
+    expect(spawnIntervalFor("stump")).toBeGreaterThan(spawnIntervalFor("flash"));
+    expect(spawnIntervalFor("hammer")).toBeGreaterThan(spawnIntervalFor("stump"));
+    // Unknown kinds fall back to the legacy cadence.
+    expect(spawnIntervalFor("commander")).toBe(HQ_SPAWN_INTERVAL);
+    expect(spawnIntervalFor("bogus" as never)).toBe(HQ_SPAWN_INTERVAL);
+  });
+});
+
+describe("pickNextSpawnUnit", () => {
+  it("pins roster bands with stub rolls", () => {
+    // Weights peewee 1 / flash ≈0.58 / stump ≈0.32 / hammer ≈0.12 read
+    // cumulative bands [0, .494) / [.494, .782) / [.782, .939) / [.939, 1).
+    expect(pickNextSpawnUnit(() => 0)).toBe("peewee");
+    expect(pickNextSpawnUnit(() => 0.5)).toBe("flash");
+    expect(pickNextSpawnUnit(() => 0.8)).toBe("stump");
+    expect(pickNextSpawnUnit(() => 0.95)).toBe("hammer");
+    expect(pickNextSpawnUnit(() => 0.999999)).toBe("hammer");
+  });
+
+  it("consumes exactly one draw, so seeded streams replay", () => {
+    let draws = 0;
+    const rng = mulberry32(99);
+    const counting = (): number => {
+      draws++;
+      return rng();
+    };
+    const first = pickNextSpawnUnit(counting);
+    expect(draws).toBe(1);
+    expect(pickNextSpawnUnit(mulberry32(99))).toBe(first);
+  });
+
+  it("covers the roster but favors the weak over many draws", () => {
+    const rng = mulberry32(1234);
+    const counts: Record<string, number> = { peewee: 0, flash: 0, stump: 0, hammer: 0 };
+    const N = 2000;
+    for (let n = 0; n < N; n++) counts[pickNextSpawnUnit(rng)]!++;
+    for (const kind of HQ_SPAWN_ROSTER) expect(counts[kind]).toBeGreaterThan(0);
+    expect(counts.peewee).toBeGreaterThan(counts.flash!);
+    expect(counts.flash).toBeGreaterThan(counts.stump!);
+    expect(counts.stump).toBeGreaterThan(counts.hammer!);
+    // Spot-check the mix against the weights (wide tolerance — bounded
+    // randomness, not an exact shuffle).
+    expect(counts.peewee! / N).toBeGreaterThan(0.35);
+    expect(counts.hammer! / N).toBeLessThan(0.15);
   });
 });

@@ -28,7 +28,7 @@ import {
 import { BLAST_RADIUS, blastRadiusFor, PEEWEE_GRENADE_BLAST_RADIUS, scorchForAttack, scorchForKind } from "./destruction.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, TURRET_LIMIT, TURRET_SLEW_RATE } from "./facing.js";
-import { HQ_HIT_DAMAGE, HQ_SPAWN_CYCLE, hqHitDamage, PEEWEE_GRENADE_HQ_DAMAGE, spawnKindFor } from "./hq.js";
+import { HQ_HIT_DAMAGE, HQ_SPAWN_ROSTER, hqHitDamage, PEEWEE_GRENADE_HQ_DAMAGE, pickNextSpawnUnit, spawnIntervalFor } from "./hq.js";
 import { LEG_STRIDE, WHEEL_RADIUS } from "./locomotion.js";
 import { MOVE_SPEED } from "./movement.js";
 import { placeUnits } from "./place.js";
@@ -131,16 +131,12 @@ describe("peewee infantry kind", () => {
   });
 
   it("reinforces from live HQs but never musters as a commander", () => {
-    expect(HQ_SPAWN_CYCLE).toContain("peewee");
-    expect(HQ_SPAWN_CYCLE).not.toContain("commander");
-    expect(spawnKindFor(0)).toBe("peewee");
-    expect([0, 1, 2, 3, 4].map(spawnKindFor)).toEqual([
-      "peewee",
-      "flash",
-      "stump",
-      "hammer",
-      "peewee",
-    ]);
+    expect(HQ_SPAWN_ROSTER).toContain("peewee");
+    expect(HQ_SPAWN_ROSTER).not.toContain("commander");
+    // The weakest roster member is the likeliest draw and the quickest
+    // build; artillery is the rarest and slowest.
+    expect(pickNextSpawnUnit(() => 0)).toBe("peewee");
+    expect(spawnIntervalFor("peewee")).toBeLessThan(spawnIntervalFor("hammer"));
   });
 
   it("fires faster than the tanks, commander-quick", () => {

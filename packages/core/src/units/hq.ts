@@ -1,4 +1,5 @@
 import { BLAST_RADIUS, PEEWEE_GRENADE_BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
+import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { TEAM_IDS } from "./types.js";
 import type { AttackMode, TeamId, UnitKind } from "./types.js";
@@ -23,18 +24,78 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  * where each reinforcement appears facing the map center, then drives out
  * through the normal movement pipeline. Deviations are deliberate
  * simplifications: fixed interval + per-team cap instead of build queues and
- * metal/energy costs, and a cycling spawn roster instead of player choice.
+ * metal/energy costs, and a weighted-random spawn roster instead of player choice.
  */
 
-/** Seconds between reinforcements from one live HQ. */
+/** Seconds from battle start to the first reinforcement (also the unknown-kind fallback). */
 export const HQ_SPAWN_INTERVAL = 40;
 /** Reinforcements one HQ may ever release (per-team pop cap). */
 export const HQ_MAX_SPAWNS = 4;
-/** Roster the HQ cycles through, one kind per release (no commanders). */
-export const HQ_SPAWN_CYCLE: UnitKind[] = ["peewee", "flash", "stump", "hammer"];
-/** Kind released as the `n`th reinforcement (0-based, deterministic). */
-export function spawnKindFor(n: number): UnitKind {
-  return HQ_SPAWN_CYCLE[((n % HQ_SPAWN_CYCLE.length) + HQ_SPAWN_CYCLE.length) % HQ_SPAWN_CYCLE.length]!;
+/** Kinds an HQ may release, weakest first (no commanders — factories build line units). */
+export const HQ_SPAWN_ROSTER: UnitKind[] = ["peewee", "flash", "stump", "hammer"];
+
+/**
+ * Build strength of a spawnable kind: splash-weighted punch per landed hit
+ * (`UNIT_HIT_DAMAGE × BLAST_RADIUS`). Hull health is uniform — damage is a
+ * 0..1 fraction for every kind (see `unitDamage.ts`) — so the gun is the
+ * whole story: per-hit damage times the splash it drags along. The admitted
+ * range order agrees (hammer longest, peewee shortest), so any reasonable
+ * metric ranks peewee < flash < stump < hammer; the weights and build times
+ * below only rely on that order, not the exact product.
+ */
+export function hqSpawnStrength(kind: UnitKind): number {
+  return (UNIT_HIT_DAMAGE[kind] ?? 0) * (BLAST_RADIUS[kind] ?? 0);
+}
+
+/**
+ * Spawn weight of a kind: inverse strength against the weakest roster
+ * member, so the peewee reads 1 and everything stronger reads a fraction
+ * (flash ≈ 0.58, stump ≈ 0.32, hammer ≈ 0.12) — weaker units come out more
+ * often. Unknown kinds (commanders) weigh 0: they never spawn.
+ */
+export function spawnWeightFor(kind: UnitKind): number {
+  if (!HQ_SPAWN_ROSTER.includes(kind)) return 0;
+  const weakest = hqSpawnStrength("peewee");
+  const strength = hqSpawnStrength(kind);
+  if (!(weakest > 0) || !(strength > 0)) return 0;
+  return weakest / strength;
+}
+
+/**
+ * Random next reinforcement: one weighted draw over `HQ_SPAWN_ROSTER`.
+ * Consumes exactly one `rng` draw, so seeded streams replay exactly.
+ */
+export function pickNextSpawnUnit(rng: () => number): UnitKind {
+  const total = HQ_SPAWN_ROSTER.reduce((sum, kind) => sum + spawnWeightFor(kind), 0);
+  let roll = rng() * total;
+  for (const kind of HQ_SPAWN_ROSTER) {
+    const weight = spawnWeightFor(kind);
+    if (roll < weight) return kind;
+    roll -= weight;
+  }
+  return HQ_SPAWN_ROSTER[HQ_SPAWN_ROSTER.length - 1]!;
+}
+
+/** Build time of the weakest roster member (fast scout reinforcements). */
+export const HQ_SPAWN_MIN_INTERVAL = 30;
+/** Build time of the strongest roster member (artillery takes a while). */
+export const HQ_SPAWN_MAX_INTERVAL = 70;
+
+/**
+ * Seconds to build one `kind`: linear in strength from the weakest roster
+ * member (30 s) to the strongest (70 s), so stronger units take more time to
+ * make (peewee 30, flash ≈ 34, stump ≈ 42, hammer 70 — weighted mean ≈ 35 s,
+ * near the legacy 40 s cadence). Unknown kinds fall back to
+ * `HQ_SPAWN_INTERVAL`.
+ */
+export function spawnIntervalFor(kind: UnitKind): number {
+  if (!HQ_SPAWN_ROSTER.includes(kind)) return HQ_SPAWN_INTERVAL;
+  const strength = hqSpawnStrength(kind);
+  const lo = hqSpawnStrength("peewee");
+  const hi = hqSpawnStrength("hammer");
+  if (!(strength > 0) || !(hi > lo)) return HQ_SPAWN_INTERVAL;
+  const t = Math.min(Math.max((strength - lo) / (hi - lo), 0), 1);
+  return HQ_SPAWN_MIN_INTERVAL + t * (HQ_SPAWN_MAX_INTERVAL - HQ_SPAWN_MIN_INTERVAL);
 }
 
 /** One HQ site: its side plus its map-end cell. */
@@ -406,16 +467,27 @@ export function createHqSpawns(): HqSpawnState[] {
 }
 
 /**
- * Tick one HQ's spawn clock by `dt` seconds. Returns true exactly on the
- * tick a reinforcement is due: the HQ lives, its cap is unreached, and the
- * countdown crossed zero (it then resets for the next interval). Pure —
- * the renderer owns the door animation and the body it releases.
+ * Tick one HQ's spawn clock by `dt` seconds. Returns the released kind
+ * exactly on the tick a reinforcement is due — the HQ lives, its cap is
+ * unreached, and the countdown crossed zero — else null. The kind is a
+ * weighted random draw (`pickNextSpawnUnit`: weaker units more often) and
+ * the clock rearms for that kind's own build time (`spawnIntervalFor`: the
+ * stronger the unit, the longer the wait). Consumes one `rng` draw per
+ * release only; pass a seeded stream for deterministic replays. Pure apart
+ * from the state mutation — the renderer owns the door animation and the
+ * body it releases.
  */
-export function tickHqSpawn(state: HqSpawnState, dt: number, hqAlive: boolean): boolean {
-  if (!hqAlive || state.spawned >= HQ_MAX_SPAWNS) return false;
+export function tickHqSpawn(
+  state: HqSpawnState,
+  dt: number,
+  hqAlive: boolean,
+  rng: () => number = Math.random,
+): UnitKind | null {
+  if (!hqAlive || state.spawned >= HQ_MAX_SPAWNS) return null;
   state.timer -= dt;
-  if (state.timer > 0) return false;
-  state.timer += HQ_SPAWN_INTERVAL;
+  if (state.timer > 0) return null;
+  const kind = pickNextSpawnUnit(rng);
+  state.timer += spawnIntervalFor(kind);
   state.spawned += 1;
-  return true;
+  return kind;
 }
