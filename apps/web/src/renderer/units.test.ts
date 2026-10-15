@@ -13,6 +13,7 @@ import {
   getTurret,
   getWheels,
   advanceLocomotion,
+  hideUnitCircles,
   muzzleWorld,
   placeUnitsGroup,
   restBarrelElevation,
@@ -509,6 +510,35 @@ describe("team ring selection emphasis (one circle, thicker on select)", () => {
     } finally {
       disposeSelectionAssets();
     }
+  });
+
+  it("dead hulls drop every circle at once while the husk stays", () => {
+    const body = buildSpawnedUnit("stump", 0, 0, 0, 0, () => 100);
+    const marker = buildSelectionMarker();
+    body.add(marker);
+    try {
+      setTeamRingSelected(body, true);
+      updateSelectionMarker(marker, 0, true);
+      expect(getTeamRing(body)!.visible).toBe(true);
+      expect(marker.visible).toBe(true);
+      hideUnitCircles(body);
+      // Ring + beacon gone, hull meshes untouched.
+      expect(getTeamRing(body)!.visible).toBe(false);
+      expect(marker.visible).toBe(false);
+      expect(body.visible).toBe(true);
+      // A later (stale) selection retint never resurrects the dead ring.
+      setTeamRingSelected(body, false);
+      setTeamRingSelected(body, true);
+      expect(getTeamRing(body)!.visible).toBe(false);
+      // Idempotent, and safe on marker-less hulls.
+      expect(() => hideUnitCircles(body)).not.toThrow();
+    } finally {
+      disposeSelectionAssets();
+    }
+  });
+
+  it("hideUnitCircles no-ops on plain groups", () => {
+    expect(() => hideUnitCircles(new THREE.Group())).not.toThrow();
   });
 });
 

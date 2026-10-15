@@ -40,7 +40,7 @@ import {
   waterFragment,
   waterVertex,
 } from "./shaders";
-import { buildUnits, buildSpawnedUnit, setTeamRingSelected } from "./units";
+import { buildUnits, buildSpawnedUnit, hideUnitCircles, setTeamRingSelected } from "./units";
 import { CombatFx } from "./combatFx";
 import { HqFx, type HqStatus } from "./hqFx";
 import { applyCraters } from "./craters";
@@ -559,6 +559,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // instance over its slow decay; the scorch scar stays).
     combat.onUnitKilled = (index) => {
       movement.markDestroyed(index);
+      // Circles drop with the hull: the team ring + selection beacon hide
+      // immediately (the husk still smoulders until decay). Combat already
+      // hides them in `poseWreck`; this is belt-and-braces for hook order.
+      const dead = units.children[index] as THREE.Group | undefined;
+      if (dead) hideUnitCircles(dead);
       if (selection.includes(index)) {
         applySelection(selection.filter((s) => s !== index));
       }

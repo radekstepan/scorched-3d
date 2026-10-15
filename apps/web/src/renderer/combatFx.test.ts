@@ -26,7 +26,7 @@ import {
   TURRET_RECOIL_KICK,
   wreckPopVelocity,
 } from "./combatFx";
-import { barrelElevation, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
+import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
 
 function makeUnits(): THREE.Group {
@@ -1010,6 +1010,34 @@ describe("CombatFx unit death", () => {
     expect(fx.isDestroyedAt(0)).toBe(true);
     expect(fx.unitDamageAt(0)).toBe(1);
     fx.dispose();
+  });
+
+  it("death drops the team ring + selection beacon at once (husk keeps rendering)", async () => {
+    const { buildSelectionMarker, disposeSelectionAssets, updateSelectionMarker } =
+      await import("./selectionFx");
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const body = units.children[0] as THREE.Group;
+    body.add(buildTeamRing(0));
+    const marker = buildSelectionMarker();
+    updateSelectionMarker(marker, 0, true);
+    body.add(marker);
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    try {
+      expect(body.getObjectByName("team-ring")!.visible).toBe(true);
+      expect(marker.visible).toBe(true);
+      primeDamage(fx, 0, 0.99);
+      stepUntilKill(fx);
+      expect(fx.isDestroyedAt(0)).toBe(true);
+      // Circles gone immediately — the fresh husk itself still renders
+      // until full decay (see the husk-age test above).
+      expect(body.getObjectByName("team-ring")!.visible).toBe(false);
+      expect(marker.visible).toBe(false);
+      expect(body.visible).toBe(true);
+    } finally {
+      disposeSelectionAssets();
+      fx.dispose();
+    }
   });
 
   it("dead hulls stop firing and stop drawing fire", () => {

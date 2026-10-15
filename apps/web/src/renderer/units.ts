@@ -299,6 +299,22 @@ export function getTeamRing(body: THREE.Group): THREE.Mesh | null {
   return (ring as THREE.Mesh | undefined) ?? null;
 }
 
+/**
+ * Hide a dead hull's ground/selection circles immediately on death: the
+ * team ring plus the selection beacon (when the canvas has attached one).
+ * The husk body itself stays rendered (smouldering/sinking until decay) —
+ * only the circles drop, mirroring the health-bar policy (wrecks report no
+ * live state). Idempotent and safe on plain test groups. Later
+ * `setTeamRingSelected` calls never resurrect the ring: they only retint
+ * the hidden mesh in place.
+ */
+export function hideUnitCircles(body: THREE.Group): void {
+  const ring = body.getObjectByName("team-ring");
+  if (ring) ring.visible = false;
+  const marker = body.getObjectByName("select-marker");
+  if (marker) marker.visible = false;
+}
+
 /** Turret/torso subgroup of a unit body, or null when absent. */
 export function getTurret(body: THREE.Group): THREE.Group | null {
   return (body.userData.turret as THREE.Group | undefined) ?? null;

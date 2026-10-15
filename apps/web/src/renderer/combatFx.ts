@@ -66,7 +66,7 @@ import {
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
-import { muzzleWorld, getTurret, barrelElevation, setBarrelElevation, setUnitAim } from "./units";
+import { muzzleWorld, getTurret, barrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 
@@ -1290,6 +1290,12 @@ export class CombatFx {
   private poseWreck(index: number, body: THREE.Group): void {
     if (this.wreckPosed[index]) return;
     this.wreckPosed[index] = true;
+    // Dead hulls keep no circles: the team ring + selection beacon drop
+    // immediately (the husk body itself still renders until decay). This
+    // mirrors the health-bar gate (wrecks report no live state) and runs
+    // here — not just in the canvas kill hook — so white-box kills that
+    // dress via `poseHusks` lose their circles too.
+    hideUnitCircles(body);
     const kind = this.unitKind(index);
     applyUnitDamageTint(body, 1);
     applyWreckChar(body);
