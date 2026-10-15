@@ -289,6 +289,49 @@ const HALO_GROWTH = 2.4;
 const HALO_PEAK = 0.4;
 /** World up (scratch tilt quaternions align ground discs from this). */
 const UP = new THREE.Vector3(0, 1, 0);
+/**
+ * In-flight projectile glow: pooled dynamic lights riding the brightest live
+ * rounds plus an additive ground blob under each one. The terrain (and water
+ * and sky) are custom `ShaderMaterial`s that ignore scene lights entirely —
+ * see `shaders.ts`, which has no light uniforms — so real `PointLight`s alone
+ * could never brighten the dirt. The split is deliberate:
+ *
+ * - Pooled `PointLight`s (no shadows) light `MeshLambert` neighbors — tree
+ *   trunks/canopies (`features.ts`), rocks, and hulls — with physical
+ *   distance/decay falloff, exactly like the muzzle/explosion kick pool.
+ * - Pooled additive ground blobs fake the same light on the unlit terrain
+ *   shader: a soft disc seated on `env.groundY` under each glowing round,
+ *   fading with height above the dirt.
+ *
+ * Both pools are fixed-size (no per-shot alloc, no per-frame leak): the first
+ * `SHOT_GLOW_LIGHTS` live rounds glow, the rest fly dark. Muzzle/explosion
+ * kicks keep their own 2-light pool, untouched; wreck/husk posing is
+ * untouched. Pure sim state never sees the glow.
+ */
+export const SHOT_GLOW_LIGHTS = 4;
+/** Peak intensity of one riding glow light (matches the muzzle-kick order). */
+export const SHOT_GLOW_PEAK = 1800;
+/** Falloff range of the riding lights (distance + decay, no shadows). */
+export const SHOT_GLOW_DISTANCE = 600;
+/** Height above the dirt over which the glow fades to zero. */
+export const SHOT_GLOW_RANGE = 380;
+/** Ground-blob disc radius at full strength (order of a scorch radius). */
+export const SHOT_GLOW_RADIUS = 70;
+/** Ground-blob peak opacity (additive, seated like the blast glow). */
+export const SHOT_GLOW_OPACITY = 0.4;
+
+/**
+ * Glow strength 0..1 for a projectile `height` above the dirt: full at the
+ * surface, linear fade to zero at `SHOT_GLOW_RANGE`, clamped. Drives both
+ * the riding-light dim and the ground-blob opacity, so night/low-light
+ * flight reads near the ground and dies out on high lobbed arcs. Pure for
+ * tests.
+ */
+export function projectileGlowFalloff(height: number): number {
+  if (height <= 0) return 1;
+  if (height >= SHOT_GLOW_RANGE) return 0;
+  return 1 - height / SHOT_GLOW_RANGE;
+}
 /** Scratch yaw quaternion for scorch instance orientation (no per-mark alloc). */
 const _yawQuat = new THREE.Quaternion();
 /** Scratch shot velocity for per-tick orientation (no per-shot alloc). */
@@ -374,6 +417,17 @@ export class CombatFx {
   private explosions: Explosion[] = [];
   private nudges = new Map<number, Nudge>();
   private lights: THREE.PointLight[] = [];
+  /**
+   * In-flight glow pool: riding lights + ground blobs, one slot per glowing
+   * round (first `SHOT_GLOW_LIGHTS` live shots, reassigned every tick — no
+   * per-shot ownership, so simultaneous volleys reuse instead of leaking).
+   * Ground-blob materials are per-slot (weapon tint varies per round);
+   * the disc geometry is shared and owned by the fx.
+   */
+  private shotGlowLights: THREE.PointLight[] = [];
+  private shotGlowMeshes: THREE.Mesh[] = [];
+  private shotGlowMats: THREE.MeshBasicMaterial[] = [];
+  private shotGlowGeo = new THREE.CircleGeometry(1, 20);
   private fired = 0;
   /** Rounds stuck in live wood (stuck bolt embers + shell early bursts). */
   private stuck = 0;
@@ -499,6 +553,27 @@ export class CombatFx {
       this.scene.add(light);
       this.lights.push(light);
     }
+    // Projectile-glow pool: riding lights start dark, ground blobs start
+    // hidden; `poseShotGlow` seats them every tick shots fly.
+    this.shotGlowGeo.rotateX(-Math.PI / 2);
+    for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+      const light = new THREE.PointLight(0xffc46b, 0, SHOT_GLOW_DISTANCE, 1.8);
+      this.scene.add(light);
+      this.shotGlowLights.push(light);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xffc46b,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const blob = new THREE.Mesh(this.shotGlowGeo, mat);
+      blob.visible = false;
+      blob.frustumCulled = false;
+      this.scene.add(blob);
+      this.shotGlowMeshes.push(blob);
+      this.shotGlowMats.push(mat);
+    }
   }
 
   /** Active transient count (shots + flashes + explosions), for tests/HUD. */
@@ -528,6 +603,29 @@ export class CombatFx {
   /** Rounds intercepted by live trees (stuck embers + early bursts). */
   get stuckCount(): number {
     return this.stuck;
+  }
+
+  /**
+   * Glowing in-flight rounds right now: min(live shots, `SHOT_GLOW_LIGHTS`).
+   * The pool is fixed — a full volley reuses slots instead of adding lights.
+   */
+  get shotGlowCount(): number {
+    return Math.min(this.shots.length, SHOT_GLOW_LIGHTS);
+  }
+
+  /**
+   * Riding-light intensity of glow slot `i` (0 while dark), for tests/HUD.
+   * Slots 0..`shotGlowCount`-1 ride the first live shots in order.
+   */
+  shotGlowIntensityAt(i: number): number {
+    return this.shotGlowLights[i]?.intensity ?? 0;
+  }
+
+  /** Ground-blob opacity of glow slot `i` (0 while hidden), for tests. */
+  shotGlowOpacityAt(i: number): number {
+    const mesh = this.shotGlowMeshes[i];
+    if (!mesh || !mesh.visible) return 0;
+    return this.shotGlowMats[i]?.opacity ?? 0;
   }
 
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
@@ -687,6 +785,7 @@ export class CombatFx {
       }
     }
     this.advanceShots(dt);
+    this.poseShotGlow();
     this.advanceFlashes(dt);
     this.advanceExplosions(dt);
     this.advanceNudges(dt);
@@ -727,6 +826,10 @@ export class CombatFx {
     this.nudges.clear();
     this.pending.clear();
     for (const light of this.lights) light.intensity = 0;
+    // In-flight glow goes dark with the shots (persistent scorch, kill
+    // flags, and wreck dressing are untouched — glow is transient).
+    for (const light of this.shotGlowLights) light.intensity = 0;
+    for (const blob of this.shotGlowMeshes) blob.visible = false;
   }
 
   /**
@@ -758,6 +861,13 @@ export class CombatFx {
     this.damageFx.dispose();
     for (const light of this.lights) this.scene.remove(light);
     this.lights = [];
+    for (const light of this.shotGlowLights) this.scene.remove(light);
+    this.shotGlowLights = [];
+    for (const blob of this.shotGlowMeshes) this.scene.remove(blob);
+    this.shotGlowMeshes = [];
+    for (const mat of this.shotGlowMats) mat.dispose();
+    this.shotGlowMats = [];
+    this.shotGlowGeo.dispose();
     this.boltGeo.dispose();
     this.shellGeo.dispose();
     this.flashGeo.dispose();
@@ -1694,8 +1804,57 @@ export class CombatFx {
     }
   }
 
-  private advanceFlashes(dt: number): void {
-    for (let i = this.flashes.length - 1; i >= 0; i--) {
+  /**
+   * Seat the projectile-glow pool on the live rounds: slot `i` rides
+   * `shots[i]` — a weapon-tinted light at the round for Lambert neighbors
+   * (trees, rocks, hulls) plus a ground blob on `env.groundY` under it for
+   * the unlit terrain shader. Both fade with height above the dirt via
+   * `projectileGlowFalloff`, so low skimmers light the undergrowth while
+   * high lobbed arcs go quiet. Slots past the live shots go dark/hidden;
+   * with no shots (or no env surface) the blobs hide and only the falloff
+   * math remains. Runs after `advanceShots` every tick — never touches sim
+   * state, muzzle/explosion pools, or wreck dressing.
+   */
+  private poseShotGlow(): void {
+    for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+      const light = this.shotGlowLights[i];
+      const blob = this.shotGlowMeshes[i];
+      const mat = this.shotGlowMats[i];
+      if (!light || !blob || !mat) continue;
+      const shot = this.shots[i];
+      if (!shot) {
+        light.intensity = 0;
+        blob.visible = false;
+        continue;
+      }
+      const pos = shot.mesh.position;
+      const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
+      light.color.setHex(color);
+      light.position.copy(pos);
+      mat.color.setHex(color);
+      if (!this.env) {
+        // Headless (no terrain): lights still ride the rounds (Lambert
+        // neighbors), blobs hide — there is no dirt to seat them on.
+        light.intensity = SHOT_GLOW_PEAK;
+        blob.visible = false;
+        continue;
+      }
+      const ground = this.env.groundY(pos.x, pos.z);
+      const falloff = projectileGlowFalloff(pos.y - ground);
+      if (falloff <= 0) {
+        light.intensity = 0;
+        blob.visible = false;
+        continue;
+      }
+      light.intensity = SHOT_GLOW_PEAK * falloff;
+      blob.visible = true;
+      blob.position.set(pos.x, ground + 1.4, pos.z);
+      blob.scale.setScalar(Math.max(SHOT_GLOW_RADIUS * (0.6 + 0.4 * falloff), 1));
+      mat.opacity = SHOT_GLOW_OPACITY * falloff;
+    }
+  }
+
+  private advanceFlashes(dt: number): void {    for (let i = this.flashes.length - 1; i >= 0; i--) {
       const flash = this.flashes[i]!;
       flash.life -= dt;
       if (flash.life <= 0) {

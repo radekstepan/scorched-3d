@@ -11,7 +11,17 @@ import {
   type TNTMap,
   type UnitKind,
 } from "@scorched-3d/core";
-import { CombatFx, impactPoint, muzzlePoint, wreckPopVelocity } from "./combatFx";
+import {
+  CombatFx,
+  impactPoint,
+  muzzlePoint,
+  projectileGlowFalloff,
+  SHOT_GLOW_LIGHTS,
+  SHOT_GLOW_OPACITY,
+  SHOT_GLOW_PEAK,
+  SHOT_GLOW_RANGE,
+  wreckPopVelocity,
+} from "./combatFx";
 import { barrelElevation, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
 
@@ -361,13 +371,12 @@ describe("CombatFx AAA muzzle/explosion layering", () => {
     expect(fired).toBe(true);
     // One shot leaves two flashes: the white-hot core plus the halo shell.
     expect(fx.flashCount).toBeGreaterThanOrEqual(2);
-    // The pooled light carries the pop to whatever is nearby — hulls or
-    // trees/rocks/dirt — with no per-shot light objects.
-    const lit = scene.children.some(
-      (c) => (c as THREE.PointLight).isPointLight && (c as THREE.PointLight).intensity > 0,
+    // The pooled kick lights carry the pop to whatever is nearby — hulls or
+    // trees/rocks/dirt — with no per-shot light objects. The fx also owns
+    // the in-flight projectile-glow pool beside them (bounded, dark at rest).
+    expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(
+      2 + SHOT_GLOW_LIGHTS,
     );
-    expect(lit).toBe(true);
-    expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(2);
     fx.dispose();
   });
 
@@ -472,10 +481,10 @@ describe("CombatFx AAA muzzle/explosion layering", () => {
     expect(fx.shotCount).toBe(0);
     expect(fx.flashCount).toBe(0);
     expect(fx.explosionCount).toBe(0);
-    // Only the pooled lights + the persistent scorch layer + the two
-    // damage-view instanced draws (smoke/embers, owned by UnitDamageFx)
-    // survive a clear.
-    expect(scene.children.length).toBe(before + 5);
+    // Only the pooled kick + projectile-glow lights, the pooled ground
+    // blobs, the persistent scorch layer, and the two damage-view instanced
+    // draws (smoke/embers, owned by UnitDamageFx) survive a clear.
+    expect(scene.children.length).toBe(before + 2 + SHOT_GLOW_LIGHTS * 2 + 1 + 2);
     fx.dispose();
     expect(scene.children.length).toBe(before);
   });
@@ -1400,5 +1409,110 @@ describe("CombatFx slope-aware blasts (gradient wash)", () => {
       }
     }
     fx.dispose();
+  });
+});
+
+describe("CombatFx projectile glow", () => {
+  /** Scene-level ground-blob discs (scorch is instanced; blast glows live in groups). */
+  function glowBlobs(scene: THREE.Scene): THREE.Mesh[] {
+    return scene.children.filter(
+      (c) =>
+        c instanceof THREE.Mesh &&
+        !(c as THREE.InstancedMesh).isInstancedMesh &&
+        (c as THREE.Mesh).geometry?.type === "CircleGeometry",
+    ) as THREE.Mesh[];
+  }
+
+  function flatEnv(ground: number) {
+    return { groundY: () => ground, blastFeatures: () => {} };
+  }
+
+  /** Step until at least one round is in flight (shots live many ticks). */
+  function stepToShot(fx: CombatFx, maxSteps = 4000): void {
+    for (let n = 0; n < maxSteps && fx.shotCount === 0; n++) fx.update(1 / 60);
+    expect(fx.shotCount).toBeGreaterThan(0);
+  }
+
+  it("fades linearly with height above the dirt (pure falloff)", () => {
+    expect(projectileGlowFalloff(-10)).toBe(1);
+    expect(projectileGlowFalloff(0)).toBe(1);
+    expect(projectileGlowFalloff(SHOT_GLOW_RANGE / 2)).toBeCloseTo(0.5, 5);
+    expect(projectileGlowFalloff(SHOT_GLOW_RANGE)).toBe(0);
+    expect(projectileGlowFalloff(SHOT_GLOW_RANGE + 500)).toBe(0);
+    // Monotonic: nearer dirt never glows dimmer.
+    let prev = 2;
+    for (let h = 0; h <= SHOT_GLOW_RANGE + 50; h += 10) {
+      const f = projectileGlowFalloff(h);
+      expect(f).toBeLessThanOrEqual(prev);
+      prev = f;
+    }
+  });
+
+  it("rides live rounds with a bounded light + ground-blob pool", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    stepToShot(fx);
+    // Pool bounds: never more glow slots than lights, no per-shot objects.
+    expect(fx.shotGlowCount).toBe(Math.min(fx.shotCount, SHOT_GLOW_LIGHTS));
+    expect(fx.shotGlowCount).toBeLessThanOrEqual(SHOT_GLOW_LIGHTS);
+    expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(
+      2 + SHOT_GLOW_LIGHTS,
+    );
+    expect(glowBlobs(scene).length).toBe(SHOT_GLOW_LIGHTS);
+    // Live slots ride near-surface rounds: light up, blob seated + faint.
+    for (let i = 0; i < fx.shotGlowCount; i++) {
+      expect(fx.shotGlowIntensityAt(i)).toBeGreaterThan(0);
+      expect(fx.shotGlowIntensityAt(i)).toBeLessThanOrEqual(SHOT_GLOW_PEAK);
+      expect(fx.shotGlowOpacityAt(i)).toBeGreaterThan(0);
+      expect(fx.shotGlowOpacityAt(i)).toBeLessThanOrEqual(SHOT_GLOW_OPACITY);
+    }
+    // Idle slots stay dark/hidden — no light leak past the live rounds.
+    for (let i = fx.shotGlowCount; i < SHOT_GLOW_LIGHTS; i++) {
+      expect(fx.shotGlowIntensityAt(i)).toBe(0);
+      expect(fx.shotGlowOpacityAt(i)).toBe(0);
+    }
+    fx.dispose();
+  });
+
+  it("goes quiet far above the dirt (high lobbed arcs light nothing)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    // Dirt far below every flight path: every height exceeds the range.
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(-10000));
+    stepToShot(fx);
+    // Rounds still fly (sim untouched) but no slot glows.
+    expect(fx.shotGlowCount).toBeGreaterThan(0);
+    for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+      expect(fx.shotGlowIntensityAt(i)).toBe(0);
+      expect(fx.shotGlowOpacityAt(i)).toBe(0);
+    }
+    expect(glowBlobs(scene).every((b) => !b.visible)).toBe(true);
+    fx.dispose();
+  });
+
+  it("hides the glow with no shots and drops it on clear/dispose (no sim impact)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    stepToShot(fx);
+    const fired = fx.totalFired;
+    expect(fired).toBeGreaterThan(0);
+    fx.clearTransients();
+    // Transient glow clears; persistent + sim counters survive the clear.
+    expect(fx.shotCount).toBe(0);
+    expect(fx.shotGlowCount).toBe(0);
+    for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+      expect(fx.shotGlowIntensityAt(i)).toBe(0);
+      expect(fx.shotGlowOpacityAt(i)).toBe(0);
+    }
+    expect(fx.totalFired).toBe(fired);
+    // Skirmish resumes after the clear — glow never gates firing.
+    for (let n = 0; n < 4000 && fx.shotCount === 0; n++) fx.update(1 / 60);
+    expect(fx.shotCount).toBeGreaterThan(0);
+    fx.dispose();
+    // Dispose removes every pooled light and blob (no per-frame leak).
+    expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(0);
+    expect(glowBlobs(scene).length).toBe(0);
   });
 });
