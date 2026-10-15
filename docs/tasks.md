@@ -16,14 +16,20 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Units are clipping through trees, let's make sure they are not clipping through the trunks.
+A destroyed unit should leave behind a husk that slowly decays
 
-The units on fire/smoking animation needs to be a bit more subtle with more smaller "puffs" here and there. Also sometimes the units turn completely black (charred I guess) - don't make it that severe.
+Units can walk through forest but much slower if they are destroying trees. The trees should fall and decay too.
 
-Make the destruction of the environment a bit less severe. And make the brown blotches of ground blown up less severe and less "poop colored"
+Make the forest fires a bit more subtle and make them burn/smoulder for longer.
 
-The projectile firing looks great, make it look even more amazing an awesome. I like that you can see the flash against the units. Do the same against environment and when there is an explosion make it look even more realisting and AAA RTS like.
+Be able to turn on waypoints for units that they want to walk in the View menu.
 
-The physics of some of the units, give them little wheels, legs should realistically move, the turrets should move slower I think.
+Move the panels like View and probe and Units further down so they don't cover up the TNT, tileset, grid information.
 
-Add explosion of units when they exhaust their health. Make it look epic.
+Be able to toggle an overhead "health" of a unit in the View
+
+When an explosion happens on a gradient, the explosion is still "flat". It should respect the physics of the terrain and explain outwardly like it would in "real life".
+
+Be able to control pan and zoom speed with a slider.
+
+Add more interesting maps open to terrain battles like perhaps a river with a crossing(s) through a forest, plains etc.
