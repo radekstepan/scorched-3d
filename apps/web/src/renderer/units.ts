@@ -1,8 +1,16 @@
 import * as THREE from "three";
 import {
+  advanceGait,
+  GAIT_SETTLE_RATE,
+  LEG_STRIDE,
+  legLift,
+  legSwing,
+  settleToward,
   UNIT_DEFS,
   seatHull,
   unitAnchor,
+  WHEEL_RADIUS,
+  wheelSpinFor,
   type PlacedUnit,
   type TNTMap,
   type UnitKind,
@@ -68,6 +76,36 @@ function barrel(
   parent.add(pivot);
 }
 
+/**
+ * Road wheels for a tracked hull: `stations.length` wheels per side at the
+ * given half-track `x`, rolling radius `radius` (mesh origin on the axle so
+ * `rotation.x` spins them). Geometry is pre-rotated (axle along X), so the
+ * meshes stay direct hull children and the hull-bbox tests keep reading the
+ * same footprint.
+ */
+function addWheels(
+  parent: THREE.Group,
+  radius: number,
+  width: number,
+  stations: readonly number[],
+  halfTrack: number,
+  axleY: number,
+): void {
+  for (const z of stations) {
+    for (const x of [-halfTrack, halfTrack]) {
+      const geo = new THREE.CylinderGeometry(radius, radius, width, 10);
+      geo.rotateZ(Math.PI / 2);
+      const wheel = new THREE.Mesh(
+        geo,
+        new THREE.MeshLambertMaterial({ color: 0x3a3a40 }),
+      );
+      wheel.name = "wheel";
+      wheel.position.set(x, axleY, z);
+      parent.add(wheel);
+    }
+  }
+}
+
 /** Rest barrel elevation per tank kind, radians (matches the build poses). */
 export function restBarrelElevation(kind: UnitKind): number {
   switch (kind) {
@@ -95,22 +133,34 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     // Hull longer than wide along +Z (direction of travel): a tank wider
     // than long reads as driving sideways.
     box(parent, 13, 6, 18, 0, 4, 0, def.color);
+    addWheels(parent, 3, 1.6, [-6, 0, 6], 6.9, 3);
     box(turret, 8, 5, 9, 0, 9.5, -1, def.color);
     box(turret, 8.5, 1.5, 9.5, 0, 7, -1, def.accent);
     barrel(turret, 1.2, 14, 0, 9.5, 3, 0.03, def.accent);
   } else if (kind === "stump") {
     box(parent, 18, 8, 26, 0, 5, 0, def.color);
     box(parent, 19, 2.5, 27, 0, 2, 0, def.accent);
+    addWheels(parent, 4, 2, [-8, 0, 8], 9.4, 4);
     box(turret, 12, 7, 14, 0, 12.5, -2, def.color);
     barrel(turret, 1.6, 22, 0, 12.5, 4, 0.05, def.accent);
   } else if (kind === "hammer") {
     box(parent, 16, 8, 24, 0, 5, 0, def.color);
+    addWheels(parent, 4, 2, [-7, 0, 7], 8.4, 4);
     box(turret, 10, 6, 10, 0, 11, -2, def.accent);
     barrel(turret, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
   } else {
     // commander: biped construction kbot, the tallest silhouette on the field.
-    box(parent, 5, 14, 6, -4, 7, 0, def.color);
-    box(parent, 5, 14, 6, 4, 7, 0, def.color);
+    // Legs pivot at the hip (geometry translated so the mesh origin sits at
+    // the hip joint) for the alternating walk gait in `advanceLocomotion`.
+    for (const x of [-4, 4]) {
+      const geo = new THREE.BoxGeometry(5, 14, 6);
+      geo.translate(0, -7, 0);
+      const leg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: def.color }));
+      leg.name = "leg";
+      leg.position.set(x, 14, 0);
+      leg.userData.baseY = 14;
+      parent.add(leg);
+    }
     box(turret, 15, 15, 11, 0, 21.5, 0, def.color);
     box(turret, 16, 3, 12, 0, 26, 0, def.accent);
     box(turret, 7, 6, 7, 0, 32, 0, def.color);
@@ -199,6 +249,75 @@ export function setUnitAim(body: THREE.Group, hullYaw: number, turretRel: number
   body.rotation.order = "YXZ";
   body.rotation.y = hullYaw;
   getTurret(body)?.rotation.set(0, turretRel, 0);
+}
+
+/** Road-wheel meshes of a unit body (empty for the walker, plain groups). */
+export function getWheels(body: THREE.Group): THREE.Mesh[] {
+  return body.children.filter(
+    (c): c is THREE.Mesh => c.type === "Mesh" && c.name === "wheel",
+  );
+}
+
+/** Leg meshes of a unit body (commander only; empty otherwise). */
+export function getLegs(body: THREE.Group): THREE.Mesh[] {
+  return body.children.filter(
+    (c): c is THREE.Mesh => c.type === "Mesh" && c.name === "leg",
+  );
+}
+
+interface LocomotionState {
+  /** Accumulated wheel spin, radians. */
+  spin?: number;
+  /** Walker gait phase, radians. */
+  gait?: number;
+  /** Gait amplitude 0 (neutral) .. 1 (full stride). */
+  amp?: number;
+}
+
+/**
+ * Pose drive locomotion for `distance` world units travelled this tick:
+ * tracked wheels spin `distance / radius`, the commander's legs stride
+ * antiphase with step lift, and the stride amplitude settles back to
+ * neutral when the hull stops so legs never freeze mid-step. No-op for
+ * bodies without wheels/legs (plain test groups). Re-snaps only move body
+ * origins/tilt, so spin and gait survive exaggeration changes.
+ */
+export function advanceLocomotion(
+  body: THREE.Group,
+  kind: UnitKind,
+  distance: number,
+  dt: number,
+): void {
+  const state = body.userData as LocomotionState;
+  const travel = Math.max(distance, 0);
+  const step = Math.max(dt, 0);
+  const radius = WHEEL_RADIUS[kind] ?? 0;
+  if (radius > 0) {
+    const wheels = getWheels(body);
+    if (wheels.length > 0) {
+      state.spin = (state.spin ?? 0) + wheelSpinFor(travel, radius);
+      for (const wheel of wheels) wheel.rotation.x = state.spin;
+    }
+  }
+  const stride = LEG_STRIDE[kind] ?? 0;
+  if (stride > 0) {
+    const legs = getLegs(body);
+    if (legs.length > 0) {
+      state.gait = advanceGait(state.gait ?? 0, travel, stride);
+      state.amp = settleToward(
+        state.amp ?? 0,
+        travel > 1e-6 ? 1 : 0,
+        GAIT_SETTLE_RATE * step,
+      );
+      const gait = state.gait;
+      const amp = state.amp;
+      legs.forEach((leg, i) => {
+        leg.rotation.x = legSwing(gait, i, amp);
+        const baseY = (leg.userData.baseY as number | undefined) ?? leg.position.y;
+        leg.position.y = baseY + legLift(gait, i, amp);
+      });
+    }
+  }
 }
 
 export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {

@@ -9,9 +9,11 @@ import {
   trunkBlockedAt,
   yawToTarget,
   type RoutePoint,
+  type TNTMap,
   type UnitKind,
 } from "@scorched-3d/core";
 import { UnitMovement } from "./movement";
+import { buildUnits, getLegs, getWheels } from "./units";
 
 function makeGroup(): THREE.Group {
   const group = new THREE.Group();
@@ -375,6 +377,64 @@ describe("terrain seating", () => {
     movement.resnap();
     expect((units.children[0] as THREE.Group).position.x).toBeCloseTo(parked.x, 9);
     expect((units.children[0] as THREE.Group).position.z).toBeCloseTo(parked.z, 9);
+    movement.dispose();
+  });
+});
+
+describe("drive locomotion", () => {
+  function flatMap(): TNTMap {
+    const width = 32;
+    const height = 32;
+    return {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "commander", cellX: 8, cellZ: 8, rotation: 0 },
+        { kind: "stump", cellX: 20, cellZ: 20, rotation: 0 },
+      ],
+    } as unknown as TNTMap;
+  }
+
+  it("spins wheels and strides legs while driving, settling at rest", () => {
+    const map = flatMap();
+    const group = buildUnits(map, 1);
+    // Straight +Z legs from the live anchors so both hulls drive at speed.
+    const routes: RoutePoint[][] = group.children.map((child) => {
+      const p = (child as THREE.Group).position;
+      return [
+        { x: p.x, z: p.z },
+        { x: p.x, z: p.z + 400 },
+        { x: p.x + 400, z: p.z + 400 },
+        { x: p.x + 400, z: p.z },
+      ];
+    });
+    const movement = new UnitMovement(group, routes, { groundY: () => 100 });
+    const walker = group.children[0] as THREE.Group;
+    const tank = group.children[1] as THREE.Group;
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    // Tracked hulls roll: ~80u at radius 4 reads ~20 rad of spin.
+    for (const wheel of getWheels(tank)) expect(wheel.rotation.x).toBeGreaterThan(10);
+    // The walker strides at full amplitude with phase advanced by the road.
+    expect((walker.userData as { amp?: number }).amp).toBe(1);
+    expect((walker.userData as { gait?: number }).gait).toBeGreaterThan(0);
+    // Park both hulls where they stand: orders complete, patrol holds.
+    group.children.forEach((_, i) => {
+      const m = movement.moverState(i)!;
+      movement.orderUnit(i, { x: m.x, z: m.z });
+    });
+    for (let n = 0; n < 10; n++) movement.update(1 / 60);
+    expect(movement.hasOrder(0)).toBe(false);
+    expect(movement.hasOrder(1)).toBe(false);
+    const parkedSpin = getWheels(tank)[0]!.rotation.x;
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    // Held hulls never roll: wheels frozen, legs back to neutral.
+    expect(getWheels(tank)[0]!.rotation.x).toBeCloseTo(parkedSpin, 10);
+    expect((walker.userData as { amp?: number }).amp).toBe(0);
+    for (const leg of getLegs(walker)) {
+      expect(leg.rotation.x).toBeCloseTo(0, 10);
+      expect(leg.position.y).toBeCloseTo(14, 10);
+    }
     movement.dispose();
   });
 });

@@ -5,8 +5,11 @@ import {
   barrelElevation,
   buildUnits,
   getBarrel,
+  getLegs,
   getMuzzleTip,
   getTurret,
+  getWheels,
+  advanceLocomotion,
   muzzleWorld,
   placeUnitsGroup,
   restBarrelElevation,
@@ -234,5 +237,105 @@ describe("grade seating", () => {
       expect(body.rotation.x).toBeCloseTo(0, 12);
       expect(body.rotation.z).toBeCloseTo(0, 12);
     }
+  });
+});
+
+describe("drive locomotion", () => {
+  it("fits road wheels to tracked hulls and legs to the walker", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const kinds = ["commander", "stump", "flash", "hammer"] as const;
+    group.children.forEach((child, i) => {
+      const body = child as THREE.Group;
+      if (kinds[i] === "commander") {
+        expect(getWheels(body).length).toBe(0);
+        expect(getLegs(body).length).toBe(2);
+      } else {
+        // 3 axle stations × 2 sides, no legs.
+        expect(getWheels(body).length).toBe(6);
+        expect(getLegs(body).length).toBe(0);
+      }
+    });
+  });
+
+  it("keeps tank hulls longer than wide with wheels fitted", () => {
+    const group = buildUnits(fakeMap(), 1);
+    // Wheels widen the bbox slightly; depth must still win for tanks.
+    for (const child of group.children) (child as THREE.Group).rotation.set(0, 0, 0);
+    group.updateMatrixWorld(true);
+    const kinds = ["commander", "stump", "flash", "hammer"] as const;
+    group.children.forEach((child, i) => {
+      const body = child as THREE.Group;
+      const box3 = new THREE.Box3();
+      const tmp = new THREE.Box3();
+      for (const part of body.children) {
+        if (part.type !== "Mesh") continue;
+        tmp.setFromObject(part);
+        box3.union(tmp);
+      }
+      const size = box3.getSize(new THREE.Vector3());
+      if (kinds[i] === "commander") {
+        expect(size.x).toBeGreaterThan(size.z);
+      } else {
+        expect(size.z).toBeGreaterThan(size.x);
+      }
+    });
+  });
+
+  it("spins wheels with travelled distance and holds at rest", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[1] as THREE.Group; // stump, radius 4
+    advanceLocomotion(body, "stump", 8, 1 / 60);
+    for (const wheel of getWheels(body)) expect(wheel.rotation.x).toBeCloseTo(2);
+    // Double the road, double the spin.
+    advanceLocomotion(body, "stump", 8, 1 / 60);
+    for (const wheel of getWheels(body)) expect(wheel.rotation.x).toBeCloseTo(4);
+    // A pinned hull never spins its wheels: no travel, no spin.
+    advanceLocomotion(body, "stump", 0, 1 / 60);
+    for (const wheel of getWheels(body)) expect(wheel.rotation.x).toBeCloseTo(4);
+  });
+
+  it("strides the walker antiphase and settles to neutral at rest", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[0] as THREE.Group; // commander
+    const legs = getLegs(body);
+    expect(legs.length).toBe(2);
+    // Drive two full strides: amplitude ramps to 1, phase lands back at 0.
+    for (let n = 0; n < 60; n++) advanceLocomotion(body, "commander", 32 / 60, 1 / 60);
+    expect((body.userData as { amp?: number }).amp).toBe(1);
+    const [left, right] = [legs[0]!, legs[1]!];
+    expect(left.rotation.x).toBeCloseTo(-right.rotation.x, 10);
+    // One leg lifts while the other plants (a full stride apart in phase).
+    const lifts = [left.position.y - 14, right.position.y - 14];
+    expect(Math.abs(lifts[0]! - lifts[1]!)).toBeGreaterThan(1);
+    expect(Math.max(...lifts)).toBeLessThanOrEqual(2 + 1e-9);
+    expect(Math.min(...lifts)).toBeGreaterThanOrEqual(-1e-9);
+    // At rest the stride collapses back to neutral, never frozen mid-step.
+    for (let n = 0; n < 60; n++) advanceLocomotion(body, "commander", 0, 1 / 60);
+    expect(left.rotation.x).toBeCloseTo(0, 10);
+    expect(right.rotation.x).toBeCloseTo(0, 10);
+    expect(left.position.y).toBeCloseTo(14, 10);
+    expect(right.position.y).toBeCloseTo(14, 10);
+  });
+
+  it("keeps spin and gait through exaggeration re-snaps", () => {
+    const map = fakeMap();
+    const group = buildUnits(map, 1);
+    const tank = group.children[1] as THREE.Group;
+    advanceLocomotion(tank, "stump", 8, 1 / 60);
+    const walker = group.children[0] as THREE.Group;
+    advanceLocomotion(walker, "commander", 4, 1 / 60);
+    const legY = getLegs(walker)[0]!.position.y;
+    placeUnitsGroup(group, map, 2);
+    // Re-snapping moves origins/tilt only; locomotion pose survives.
+    for (const wheel of getWheels(tank)) expect(wheel.rotation.x).toBeCloseTo(2);
+    expect(getLegs(walker)[0]!.position.y).toBeCloseTo(legY);
+  });
+
+  it("no-ops on plain groups without wheels or legs", () => {
+    const bare = new THREE.Group();
+    expect(() => advanceLocomotion(bare, "stump", 10, 1 / 60)).not.toThrow();
+    expect(() => advanceLocomotion(bare, "commander", 10, 1 / 60)).not.toThrow();
+    expect(getWheels(bare).length).toBe(0);
+    expect(getLegs(bare).length).toBe(0);
   });
 });

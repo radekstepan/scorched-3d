@@ -154,4 +154,24 @@ describe("aimStep", () => {
     // Light tanks traverse hulls fastest, artillery slowest.
     expect(HULL_TURN_RATE.flash).toBeGreaterThan(HULL_TURN_RATE.hammer!);
   });
+
+  it("keeps turret traverse weighty: slower than the original tune", () => {
+    // Pinned so traverses stay heavy-feeling: turrets visibly wind up
+    // before the first aimed shot, while the pending-pair scheduler's fast
+    // retry (~0.15s) still fires engagements as soon as they aim.
+    expect(TURRET_SLEW_RATE.flash).toBeCloseTo(2.4);
+    expect(TURRET_SLEW_RATE.stump).toBeCloseTo(1.9);
+    expect(TURRET_SLEW_RATE.hammer).toBeCloseTo(1.4);
+    expect(TURRET_SLEW_RATE.commander).toBeCloseTo(1.9);
+    // A 90° turret correction takes a beat even on the fastest mount.
+    const dt = 1 / 60;
+    let turret = 0;
+    let steps = 0;
+    for (let n = 0; n < 600; n++) {
+      turret = stepAngle(turret, Math.PI / 2, TURRET_SLEW_RATE.flash! * dt);
+      steps++;
+      if (Math.abs(turret - Math.PI / 2) < 1e-9) break;
+    }
+    expect(steps).toBeGreaterThan(Math.PI / 2 / (3.0 * dt));
+  });
 });

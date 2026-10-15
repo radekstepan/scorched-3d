@@ -40,10 +40,13 @@ export const HULL_TURN_RATE: Record<UnitKind, number> = {
 
 /** Turret slew rate per kind, radians per second. */
 export const TURRET_SLEW_RATE: Record<UnitKind, number> = {
-  flash: 3.0,
-  stump: 2.4,
-  hammer: 1.8,
-  commander: 2.2,
+  // Deliberately weighty: turrets stay faster than their hulls (fine vs
+  // gross motion) but traverse ~20% slower than the original tune, so
+  // engagements visibly wind up before the first aimed shot leaves.
+  flash: 2.4,
+  stump: 1.9,
+  hammer: 1.4,
+  commander: 1.9,
 };
 
 /** Aim error under which a shot may leave the muzzle, radians (~3.4°). */

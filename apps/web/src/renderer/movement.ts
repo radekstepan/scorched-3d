@@ -16,6 +16,7 @@ import {
   type SeatField,
   type UnitKind,
 } from "@scorched-3d/core";
+import { advanceLocomotion } from "./units";
 
 /**
  * Thin three.js patrol driver: each unit body follows its core looping route
@@ -26,7 +27,9 @@ import {
  * changes only need a re-seat.
  * The turret/torso subgroup rotation is never touched here — combat aim
  * (external-hull mode) owns it, so turrets track targets independently
- * while hulls face the direction of travel. Owns no scene objects, so
+ * while hulls face the direction of travel. Drive locomotion (wheel spin,
+ * walker gait from travelled distance per tick) is posed here alongside
+ * the seat. Owns no scene objects, so
  * dispose just stops updates; regen builds a fresh instance.
  */
 export interface MovementEnv {
@@ -140,6 +143,8 @@ export class UnitMovement {
       const dx = mover.x - prev.x;
       const dz = mover.z - prev.z;
       if (dx !== 0 || dz !== 0) this.env.onShift?.(i, dx, dz);
+      // Wheels stride with travelled distance; legs settle at rest.
+      advanceLocomotion(body, this.kinds[i] ?? "flash", Math.hypot(dx, dz), dt);
       this.pose(body, mover, this.kinds[i] ?? "flash", dt);
     });
     this.movers = next;
