@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   accumulateImpact,
+  accumulateStun,
   IMPACT_DURATION,
   IMPACT_MAX_SHOVE,
   IMPACT_MAX_TILT,
@@ -8,6 +9,11 @@ import {
   IMPACT_SIDE_BIAS,
   IMPACT_TILT_PER_DAMAGE,
   impactKick,
+  STUN_MAX_DURATION,
+  STUN_MIN_DURATION,
+  STUN_PER_DAMAGE,
+  stunDuration,
+  tickStun,
   zeroImpact,
 } from "./impact.js";
 
@@ -130,5 +136,65 @@ describe("impact pacing", () => {
   it("settles in about a second (suspension rock, not a permanent lean)", () => {
     expect(IMPACT_DURATION).toBeGreaterThanOrEqual(0.5);
     expect(IMPACT_DURATION).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("stunDuration", () => {
+  it("returns 0 for non-positive damage (a miss never pauses the drive)", () => {
+    expect(stunDuration(0)).toBe(0);
+    expect(stunDuration(-0.1)).toBe(0);
+    expect(stunDuration(Number.NaN)).toBe(0);
+  });
+
+  it("scales linearly with dealt damage inside the band", () => {
+    // Mid-band hits scale exactly: a 0.12 hit hesitates twice as long as a
+    // flash point-blank hit (0.06).
+    expect(stunDuration(0.06)).toBeCloseTo(0.06 * STUN_PER_DAMAGE, 12);
+    expect(stunDuration(0.12)).toBeCloseTo(stunDuration(0.06) * 2, 12);
+  });
+
+  it("pins fringe chips at the floor and heavies at the cap", () => {
+    expect(stunDuration(0.001)).toBe(STUN_MIN_DURATION);
+    // A hammer point-blank hit (0.16) lands the max pause, and runaway
+    // volleys can never park a hull past it.
+    expect(stunDuration(0.16)).toBe(STUN_MAX_DURATION);
+    expect(stunDuration(10)).toBe(STUN_MAX_DURATION);
+  });
+
+  it("stays a brief beat: bounded well under a second", () => {
+    expect(STUN_MIN_DURATION).toBeGreaterThanOrEqual(0.1);
+    expect(STUN_MAX_DURATION).toBeLessThanOrEqual(1);
+    expect(STUN_MIN_DURATION).toBeLessThan(STUN_MAX_DURATION);
+  });
+
+  it("is deterministic (no rng, no clocks)", () => {
+    expect(stunDuration(0.11)).toBe(stunDuration(0.11));
+  });
+});
+
+describe("accumulateStun / tickStun", () => {
+  it("refreshes the countdown with the longer beat, capped at the max", () => {
+    expect(accumulateStun(0, 0.06)).toBeCloseTo(stunDuration(0.06), 12);
+    // A fresh heavy re-hit extends a fading chip instead of restarting it.
+    expect(accumulateStun(0.1, 0.16)).toBe(STUN_MAX_DURATION);
+    // A chip landing mid-heavy never shortens the clock...
+    expect(accumulateStun(STUN_MAX_DURATION, 0.001)).toBe(STUN_MAX_DURATION);
+    // ...and a barrage pins at the cap instead of parking the hull.
+    let run = 0;
+    for (let i = 0; i < 50; i++) run = accumulateStun(run, 0.16);
+    expect(run).toBeLessThanOrEqual(STUN_MAX_DURATION + 1e-9);
+  });
+
+  it("ignores non-positive damage and zero clocks", () => {
+    expect(accumulateStun(0.4, 0)).toBe(0.4);
+    expect(accumulateStun(0, 0)).toBe(0);
+  });
+
+  it("ticks the clock down by dt, floored at 0, leaving bad steps alone", () => {
+    expect(tickStun(0.5, 0.2)).toBeCloseTo(0.3, 12);
+    expect(tickStun(0.1, 0.5)).toBe(0);
+    expect(tickStun(0, 0.5)).toBe(0);
+    expect(tickStun(0.5, 0)).toBe(0.5);
+    expect(tickStun(0.5, -1)).toBe(0.5);
   });
 });

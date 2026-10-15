@@ -162,6 +162,31 @@ describe("CombatFx hit reaction", () => {
     fx.dispose();
   });
 
+  it("hesitates survivors (stun hook with dealt damage) but never the kill", () => {
+    const scene = new THREE.Scene();
+    const units = makePair();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.update(1 / 60);
+    const stunned: { index: number; damageAdd: number }[] = [];
+    fx.onUnitStunned = (index, damageAdd) => stunned.push({ index, damageAdd });
+    // A fringe splash on hull 0 hesitates it with its dealt damage...
+    splash(fx, 5, 100, 0, "flash");
+    expect(stunned.length).toBeGreaterThan(0);
+    expect(stunned[0]!.index).toBe(0);
+    expect(stunned[0]!.damageAdd).toBeGreaterThan(0);
+    expect(fx.isDestroyedAt(0)).toBe(false);
+    // ...but the finishing blow stuns nothing: the wreck holds instead.
+    stunned.length = 0;
+    primeDamage(fx, 0, 0.99);
+    splash(fx, 5, 100, 0, "hammer");
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(stunned.filter((s) => s.index === 0)).toEqual([]);
+    // And later barrages wash over the wreck without stunning it either.
+    splash(fx, 10, 100, 0, "hammer");
+    expect(stunned.filter((s) => s.index === 0)).toEqual([]);
+    fx.dispose();
+  });
+
   it("wrecks never rock: the kill settles the nudge and later blasts add none", () => {
     const scene = new THREE.Scene();
     const units = makePair();

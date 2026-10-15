@@ -229,7 +229,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // blast cores flatten trees to toppled/stump/snag and bury rocks, while
     // the fringe ignites burning → smouldering → terminal states with spread;
     // splashed units rock with a decaying directional nudge (renderer-side
-    // only — movers never move, so drive/pathing never see it).
+    // only — blasts never displace movers, so drive/pathing never see the
+    // kick) and hesitate their drive briefly while the rock plays.
     // Bilinear surface sampling (continuous across cell edges, so hulls,
     // scorch, and probes never pop by whole height steps mid-cell) tracking
     // the live exaggeration slider, minus the accumulated crater bowls.
@@ -414,6 +415,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (selection.includes(index)) {
         applySelection(selection.filter((s) => s !== index));
       }
+    };
+    // Hit-stun: a surviving splash hesitates that hull's drive for a
+    // damage-scaled beat (the visible jerk back is the combat nudge rock;
+    // this is the gameplay beat under it). Wrecks refuse the stun.
+    combat.onUnitStunned = (index, damageAdd) => {
+      movement.stunUnit(index, damageAdd);
     };
 
     // Move-order pings: short-lived expanding rings where an order landed.

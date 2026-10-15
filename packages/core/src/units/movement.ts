@@ -1,6 +1,7 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
+import { accumulateStun, tickStun } from "./impact.js";
 import {
   CRUSH_DRAG,
   stepBlocked,
@@ -50,6 +51,16 @@ import type { UnitField } from "./place.js";
  * - `internal/content/compile_unit.go` unit-record fields (`MaxVelocity`,
  *   `TurnRate`) become per-kind `MOVE_SPEED` plus the shared hull turn-rate
  *   caps, instead of fixed-point yard-map stamping.
+ * - Hit-stun hesitation (core `impact.ts` `stunDuration`, owned here as the
+ *   mover `stun` countdown): a splashed hull holds its forward drive for a
+ *   damage-scaled beat (0.25–0.8 s, re-hits refresh under the cap) while the
+ *   renderer-side impact rock plays the visible jerk back away from the
+ *   blast. The hull still turns and the crowd still jostles it — only its
+ *   own drive pauses — so stuns compose with spacing, separation, and the
+ *   slope clamp instead of fighting them. Firing is deliberately untouched:
+ *   the ambient scheduler owns aim/fire per attacker/target pair, and a
+ *   per-victim fire pause would fight traverse without reading any clearer
+ *   than the drive beat plus the rock.
  */
 
 /** Patrol speed per kind, world units per second (fast scouts → slow guns). */
@@ -141,6 +152,17 @@ export interface Mover {
    * skips its leg past `BLOCKED_SKIP_AFTER`; orders ignore it (they hold).
    */
   stuck?: number;
+  /**
+   * Seconds of hit-stun hesitation remaining (core `stunDuration`): a hull
+   * splashed by a blast holds its drive while the renderer-side rock plays,
+   * then resumes. The hull still turns toward its target and the crowd can
+   * still jostle it via separation — only forward drive pauses — so stuns
+   * never fight spacing, separation, or slope gating. Absent (not zero)
+   * when unstunned, matching the `stuck` convention. Wrecks never carry it
+   * (the renderer refuses stuns for destroyed hulls and freezes their
+   * movers), and firing is untouched — see the module docstring.
+   */
+  stun?: number;
   /**
    * Player-issued move order: a smoothed world-space waypoint list with a
    * cursor. Present while the unit drives to an ordered destination;
@@ -293,6 +315,21 @@ export function hasOrder(mover: Mover): boolean {
 }
 
 /**
+ * Stun a mover from a splash dealing `damageAdd` fractional damage: refresh
+ * the hesitation countdown under the stun caps (re-hits extend, never park).
+ * Pure: returns a new mover. Non-positive damage leaves the mover untouched
+ * (same move, same keys — unstunned stays key-absent); wreck callers must
+ * refuse stuns themselves (see `UnitMovement.stunUnit`).
+ */
+export function stunMover(mover: Mover, damageAdd: number): Mover {
+  const current = mover.stun ?? 0;
+  const next = accumulateStun(current, damageAdd);
+  if (!(next > 0)) return mover;
+  if (next === current && mover.stun !== undefined) return mover;
+  return { ...mover, stun: next };
+}
+
+/**
  * Speed multiplier from nearby movers: 0 inside stop radius (hold to avoid
  * stacking), SLOW_SCALE inside slow radius, 1 otherwise. Pure helper so the
  * renderer and vitest share the same spacing rule — simple slow/stop, no
@@ -352,6 +389,13 @@ export function advanceMover(
   crush?: CrushContext | null,
 ): Mover {
   if (!(dt > 0)) return mover;
+  // Hit-stunned: hold the drive while the renderer-side rock plays (the hull
+  // still turns toward its current target and the clock ticks down, but no
+  // order cursor advances, no step is taken, and no blocked time accrues —
+  // so the pause never fights orders, patrol legs, or the slope clamp).
+  // Separation still applies afterward in `advanceMovers`: the crowd can
+  // jostle a stunned hull, it just cannot drive itself.
+  if ((mover.stun ?? 0) > 0) return tickStunned(kind, mover, route, dt);
   const order = mover.order;
   if (order && order.at < order.points.length) {
     let at = order.at;
@@ -380,6 +424,32 @@ export function advanceMover(
     return { ...driven.mover, leg: (leg + 1) % route.length, stuck: 0 };
   }
   return { ...driven.mover, leg };
+}
+
+/**
+ * Tick a hit-stunned mover by `dt` seconds: turn the hull toward its current
+ * target (order cursor or patrol leg, frozen — never advanced) at the kind's
+ * turn rate, count the clock down, and hold X/Z. The key drops when the
+ * clock expires so stunned-then-free snapshots compare equal with
+ * never-stunned ones. Pure: returns a new mover.
+ */
+function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: number): Mover {
+  const order = mover.order;
+  let target: RoutePoint | null = null;
+  if (order && order.at < order.points.length) {
+    target = order.points[order.at] ?? null;
+  } else if (!mover.hold && route.length >= 2) {
+    const leg = ((mover.leg % route.length) + route.length) % route.length;
+    target = route[leg] ?? null;
+  }
+  const rate = HULL_TURN_RATE[kind] ?? 1.5;
+  const hull = target ? stepAngle(mover.hull, yawToTarget(mover, target), rate * dt) : mover.hull;
+  const remain = tickStun(mover.stun ?? 0, dt);
+  if (!(remain > 0)) {
+    const { stun: _dropped, ...rest } = mover;
+    return { ...rest, hull };
+  }
+  return { ...mover, hull, stun: remain };
 }
 
 /** Turn the hull toward `target` and drive forward along it. */

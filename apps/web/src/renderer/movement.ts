@@ -9,6 +9,7 @@ import {
   orderMover,
   slewTilt,
   snappedFormationTargets,
+  stunMover,
   type CrushContext,
   type HullSeat,
   type Mover,
@@ -140,7 +141,23 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    this.movers[index] = { ...mover, order: undefined, hold: true };
+    const { stun: _dropped, ...rest } = mover;
+    this.movers[index] = { ...rest, order: undefined, hold: true };
+  }
+
+  /**
+   * Hesitate a live hull's drive from a splash dealing `damageAdd`
+   * fractional damage (core `stunMover`: refresh the countdown under the
+   * caps). The hull holds its drive while the renderer-side impact rock
+   * plays the visible jerk back, then resumes — it is never displaced, so
+   * spacing, separation, and slope gating never fight the pause. Wrecks
+   * refuse the stun (they hold forever); non-positive damage is a no-op.
+   * Idempotent per tick: re-hits refresh, they never stack past the cap.
+   */
+  stunUnit(index: number, damageAdd: number): void {
+    const mover = this.movers[index];
+    if (!mover || this.destroyed[index]) return;
+    this.movers[index] = stunMover(mover, damageAdd);
   }
 
   /**

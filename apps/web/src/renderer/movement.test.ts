@@ -130,6 +130,29 @@ describe("UnitMovement", () => {
     expect((units.children[0] as THREE.Group).position.equals(before)).toBe(true);
   });
 
+  it("hesitates a stunned hull's drive, then resumes — wrecks refuse", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // A hammer point-blank splash hesitates the drive for the max beat.
+    movement.stunUnit(0, 0.16);
+    expect(movement.moverState(0)!.stun).toBeCloseTo(0.8, 9);
+    const held = movement.moverState(0)!;
+    // One tick: the mover holds X/Z (the countdown, not the hull, moves).
+    movement.update(1 / 60);
+    const ticked = movement.moverState(0)!;
+    expect(ticked.x).toBe(held.x);
+    expect(ticked.z).toBe(held.z);
+    expect(ticked.stun).toBeLessThan(held.stun!);
+    // Non-positive damage is a no-op (no key appears on a fresh hull).
+    movement.stunUnit(1, 0);
+    expect(movement.moverState(1)!.stun).toBeUndefined();
+    // Wrecks refuse the stun and stay frozen.
+    movement.markDestroyed(0);
+    movement.stunUnit(0, 0.16);
+    expect(movement.moverState(0)!.stun).toBeUndefined();
+    movement.dispose();
+  });
+
   it("drives ordered units to their target and holds on arrival", () => {
     const units = makeGroup();
     const movement = new UnitMovement(units, routes(), { groundY: () => 100 });

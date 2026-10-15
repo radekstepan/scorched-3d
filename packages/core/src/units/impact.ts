@@ -23,7 +23,10 @@
  * The renderer owns the envelope (entries decay back to the seated pose
  * over `IMPACT_DURATION`, re-hits refresh and stack under the clamps), so
  * this module only shapes single kicks: no clocks, no rng, deterministic
- * given the same blast and hull pose.
+ * given the same blast and hull pose. Hit-stun hesitation (the gameplay
+ * beat under the visual jerk — a brief drive hold scaled by dealt damage)
+ * is shaped here too (`stunDuration` / `accumulateStun` / `tickStun`); the
+ * mover in `movement.ts` owns the countdown.
  */
 
 /** Shove per unit of dealt damage, in world units (hammer point-blank ≈ 3.5). */
@@ -46,6 +49,22 @@ export const IMPACT_MAX_TILT = 0.16;
  * exchange. Re-hits refresh the envelope instead of stacking duration.
  */
 export const IMPACT_DURATION = 1.1;
+
+/**
+ * Hit-stun (gameplay drive hesitation) pacing. The renderer-side rock above
+ * is the visible "jerk back" away from the blast; the stun is the matching
+ * gameplay beat: a hit hull holds its drive briefly while the rock plays,
+ * then resumes — no displacement, so separation/spacing/slope gating never
+ * fight it. Seconds per unit of dealt damage: a hammer point-blank hit
+ * (0.16) lands the max pause, a flash point-blank hit (0.06) lands ~0.3 s,
+ * and fringe chips pin at the floor instead of vanishing. Pure shaping —
+ * the mover owns the countdown, this module only sizes it.
+ */
+export const STUN_PER_DAMAGE = 5;
+/** Floor on one hit's drive hesitation, seconds (fringe chips still read). */
+export const STUN_MIN_DURATION = 0.25;
+/** Cap on one hit's drive hesitation, seconds (a volley never parks a hull). */
+export const STUN_MAX_DURATION = 0.8;
 
 /** Directional kick for one splash on one hull (hull-frame rock + shove). */
 export interface ImpactKick {
@@ -133,4 +152,40 @@ export function accumulateImpact(current: ImpactKick, kick: ImpactKick): ImpactK
     pitch: clampTilt(current.pitch + kick.pitch),
     roll: clampTilt(current.roll + kick.roll),
   };
+}
+
+/**
+ * Seconds of drive hesitation for a splash dealing `damageAdd` fractional
+ * damage. Zero for non-positive damage (a miss never pauses the drive);
+ * otherwise linear in dealt damage under the stun caps, so heavy hits
+ * hesitate longer and fringe chips barely pause. Pure: no rng, no clocks.
+ */
+export function stunDuration(damageAdd: number): number {
+  if (!(damageAdd > 0)) return 0;
+  const raw = damageAdd * STUN_PER_DAMAGE;
+  if (raw <= STUN_MIN_DURATION) return STUN_MIN_DURATION;
+  if (raw >= STUN_MAX_DURATION) return STUN_MAX_DURATION;
+  return raw;
+}
+
+/**
+ * Refresh a standing stun countdown with a fresh hit: the longer of the two
+ * wins, capped at the max — sustained fire keeps the hull hesitating instead
+ * of restarting or parking it. Pure; non-positive damage leaves the clock.
+ */
+export function accumulateStun(current: number, damageAdd: number): number {
+  const fresh = stunDuration(damageAdd);
+  if (!(fresh > 0)) return current > 0 ? current : 0;
+  const base = current > 0 ? current : 0;
+  return Math.min(Math.max(base, fresh), STUN_MAX_DURATION);
+}
+
+/**
+ * Tick a stun countdown down by `dt` seconds, floored at 0. Pure; a
+ * non-positive step leaves the clock untouched.
+ */
+export function tickStun(stun: number, dt: number): number {
+  if (!(dt > 0)) return stun;
+  if (!(stun > 0)) return 0;
+  return Math.max(stun - dt, 0);
 }

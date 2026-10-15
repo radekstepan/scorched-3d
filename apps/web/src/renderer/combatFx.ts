@@ -90,7 +90,7 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   damages nearby trees/rocks through the CombatEnv blast hook (blast
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
  *   accumulating damage (charring hull tint, damage smoke, heavy-hit
- *   embers — hulls are rocked by every splash (decaying directional shove + tilt); a hull that exhausts its
+ *   embers — hulls are rocked by every splash (decaying directional shove + tilt, plus a brief drive hesitation while the rock plays); a hull that exhausts its
  *   health dies once, epicly, and lingers as a smouldering husk that slowly sinks, gutters out, and vanishes).
  */
 
@@ -153,8 +153,10 @@ interface Explosion {
  * grade pose movement just seated. The envelope decays linearly to zero
  * over `dur` and re-hits refresh it — sustained fire keeps the hull
  * rocking instead of restarting it. Wrecks never hold entries (cleared on
- * the kill), and movers never move: this is renderer-side only, restored
- * exactly on expiry/clear, so drive/pathing/separation never see it.
+ * the kill), and blasts never displace movers: this kick is renderer-side
+ * only, restored exactly on expiry/clear, so drive/pathing/separation never
+ * see it. The matching gameplay beat is drive hesitation (see
+ * `onUnitStunned`) — the mover holds briefly, it never moves.
  */
 interface Nudge {
   /** Seated body position the offsets decay back to (shifted by movement). */
@@ -333,6 +335,15 @@ export class CombatFx {
    * the canvas; null in headless tests.
    */
   onUnitKilled: ((index: number) => void) | null = null;
+  /**
+   * Fired once per surviving hull per splash with the dealt fractional
+   * damage, so the canvas can hesitate that hull's drive (see
+   * `UnitMovement.stunUnit`). The visual jerk back is already posed here
+   * through the nudge map; this hook carries only the gameplay beat.
+   * Assigned by the canvas; null in headless tests. Killing blows never
+   * fire it (the wreck holds instead) and wrecks never re-fire it.
+   */
+  onUnitStunned: ((index: number, damageAdd: number) => void) | null = null;
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Deterministic clock for damage smoke/ember phase (no rng per frame). */
@@ -630,7 +641,10 @@ export class CombatFx {
    * the hull with a directional nudge — a short shove away from the blast
    * plus a hull-frame pitch/roll rock that decays back to the grade seat
    * (flank hits rock harder, see core `impactKick`). Renderer-side only:
-   * movers never move, so drive/pathing/separation never see it. On graded
+   * blasts never displace movers, so drive/pathing/separation never see the
+   * kick — but surviving hulls do hesitate: the splash also fires
+   * `onUnitStunned` with the dealt damage, and the canvas holds that hull's
+   * drive for a damage-scaled beat while the rock plays. On graded
    * ground the wash stretches the splash downhill and shields uphill hulls
    * behind the rise. A hull crossing the kill threshold dies exactly once:
    * its nudge settles first (wrecks hold still), then an epic explosion at
@@ -667,6 +681,12 @@ export class CombatFx {
           this.explodeDeath(new THREE.Vector3(wreck.position.x, wreck.position.y, wreck.position.z));
         }
         this.onUnitKilled?.(i);
+      }
+      // Survivors hesitate: hesitate the drive for a damage-scaled beat while
+      // the nudge rock plays the visible jerk. Killing blows skip it (the
+      // wreck holds instead) and wrecks never re-fire it.
+      if (added > 0 && !this.destroyed[i]) {
+        this.onUnitStunned?.(i, added);
       }
     }
   }

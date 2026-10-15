@@ -22,12 +22,14 @@ import {
   SLOW_SCALE,
   spacingScale,
   STOP_RADIUS,
+  stunMover,
   worldFromCell,
   type CrushContext,
   type Mover,
   type RoutePoint,
 } from "./movement.js";
 import { addScorchMark, createDamageField, type DamageField } from "./destruction.js";
+import { STUN_MAX_DURATION } from "./impact.js";
 import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
 import { CRUSH_DRAG, TREE_DRAG, trunkBlockedAt } from "./terrain.js";
@@ -180,6 +182,91 @@ describe("advanceMover", () => {
     expect(advanceMover("stump", mover, [{ x: 5, z: 5 }], 0.05)).toEqual(mover);
     expect(advanceMover("stump", mover, flatRoute(), 0)).toEqual(mover);
     expect(advanceMover("stump", mover, flatRoute(), -1)).toEqual(mover);
+  });
+});
+
+describe("hit-stun hesitation", () => {
+  it("stuns by dealt damage and leaves misses untouched", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+    // A miss returns the move untouched (no stun key appears).
+    expect(stunMover(mover, 0)).toEqual(mover);
+    expect(stunMover(mover, -0.2)).toEqual(mover);
+    // A flash point-blank chip hesitates ~0.3 s; a hammer point-blank hit
+    // lands the max beat.
+    expect(stunMover(mover, 0.06).stun).toBeCloseTo(0.3, 12);
+    expect(stunMover(mover, 0.16).stun).toBe(STUN_MAX_DURATION);
+  });
+
+  it("refreshes re-hits under the cap instead of parking the hull", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1, stun: 0.2 };
+    // A fading chip refreshed by a heavy lands the heavy's beat...
+    expect(stunMover(mover, 0.16).stun).toBe(STUN_MAX_DURATION);
+    // ...while a chip landing mid-heavy never shortens the clock.
+    expect(stunMover({ ...mover, stun: STUN_MAX_DURATION }, 0.001).stun).toBe(
+      STUN_MAX_DURATION,
+    );
+  });
+
+  it("holds the drive while stunned, still turns, then resumes exactly", () => {
+    const route = flatRoute();
+    // Hull spun halfway around: it must turn back toward the leg, not drive.
+    let mover: Mover = { x: 0, z: 0, hull: Math.PI, leg: 1, stun: 0.5 };
+    const dt = 0.05;
+    const turned = advanceMover("flash", mover, route, dt);
+    expect(turned.x).toBe(0);
+    expect(turned.z).toBe(0);
+    expect(Math.abs(turned.hull - Math.PI)).toBeLessThan(Math.PI);
+    expect(turned.hull).not.toBeCloseTo(Math.PI, 6);
+    expect(turned.stun).toBeCloseTo(0.45, 12);
+    expect(turned.leg).toBe(1);
+    // Run out the clock: the key drops (not zero — absent, like `stuck`)
+    // and the hull drives again.
+    mover = turned;
+    let ticks = 0;
+    while (mover.stun !== undefined && ticks < 20) {
+      mover = advanceMover("flash", mover, route, dt);
+      ticks++;
+    }
+    expect(mover.stun).toBeUndefined();
+    expect(ticks).toBeLessThanOrEqual(11);
+    const parked = { x: mover.x, z: mover.z };
+    mover = advanceMover("flash", mover, route, dt);
+    expect(Math.hypot(mover.x - parked.x, mover.z - parked.z)).toBeGreaterThan(0);
+  });
+
+  it("freezes the order cursor while stunned (no waypoint skipping)", () => {
+    let mover: Mover = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [
+      { x: 0, z: 400 },
+      { x: 400, z: 400 },
+    ]);
+    mover = stunMover(mover, 0.16);
+    const at = mover.order!.at;
+    const stepped = advanceMover("flash", mover, [], 0.05);
+    expect(stepped.order!.at).toBe(at);
+    expect(stepped.x).toBe(0);
+    expect(stepped.z).toBe(0);
+    expect(hasOrder(stepped)).toBe(true);
+  });
+
+  it("keeps a non-positive dt a pure no-op on stunned hulls", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1, stun: 0.5 };
+    expect(advanceMover("flash", mover, flatRoute(), 0)).toBe(mover);
+    expect(advanceMover("flash", mover, flatRoute(), -1)).toBe(mover);
+  });
+
+  it("still separates stunned hulls (the crowd jostles, drive stays held)", () => {
+    const kinds = ["flash", "flash"] as const;
+    const routes: RoutePoint[][] = [flatRoute(), flatRoute(600)];
+    const movers: Mover[] = [
+      { x: 0, z: 0, hull: 0, leg: 1, stun: 0.8 },
+      { x: 0, z: 20, hull: 0, leg: 1 },
+    ];
+    const next = advanceMovers([...kinds], movers, routes, 0.05);
+    // The pair opened past its 20-unit hold even though hull 0 never drove.
+    const gap = Math.hypot(next[0]!.x - next[1]!.x, next[0]!.z - next[1]!.z);
+    expect(gap).toBeGreaterThan(20);
+    // And the stun clock still ticked down through the shove.
+    expect(next[0]!.stun).toBeCloseTo(0.75, 12);
   });
 });
 
