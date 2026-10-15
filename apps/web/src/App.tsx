@@ -35,6 +35,7 @@ export default function App() {
     showContours: false,
     pixelFilter: true,
     showWaypoints: false,
+    showHealth: false,
   });
 
   const map = useMemo(() => generateMap(preset, seed), [preset, seed]);
@@ -182,6 +183,7 @@ export default function App() {
           <Toggle label="Wireframe" on={options.showWire} onClick={() => patch({ showWire: !options.showWire })} />
           <Toggle label="Contours" on={options.showContours} onClick={() => patch({ showContours: !options.showContours })} />
           <Toggle label="Waypoints" on={options.showWaypoints} onClick={() => patch({ showWaypoints: !options.showWaypoints })} />
+          <Toggle label="Health" on={options.showHealth} onClick={() => patch({ showHealth: !options.showHealth })} />
           <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
         </div>
 

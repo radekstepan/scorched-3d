@@ -46,6 +46,7 @@ import {
   writeTreePose,
 } from "./features";
 import { UnitMovement } from "./movement";
+import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
 import {
   PAN_SPEED_FACTOR,
@@ -314,6 +315,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live remaining order path per unit, re-seated with the terrain.
     const waypoints = new WaypointFx(scene, routes, { groundY });
     waypoints.setVisible(optsRef.current.showWaypoints);
+    // Overhead health bars (View menu): billboarded per-unit bars reading
+    // live CombatFx damage, re-seated every tick from the body origins.
+    const health = new HealthBars(scene, units.children.length);
+    health.setVisible(optsRef.current.showHealth);
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
     // spinning/bobbing chevron beacon above the hull, with a subtle hull
@@ -661,6 +666,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       movement.update(dt);
       waypoints.setVisible(opt.showWaypoints);
       waypoints.update(movement, units.children.length);
+      health.setVisible(opt.showHealth);
+      health.update(combat, units.children, camera);
       combat.update(dt);
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
@@ -736,6 +743,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       ro.disconnect();
       movement.dispose();
       waypoints.dispose();
+      health.dispose();
       combat.dispose();
       fire.dispose();
       selectionRef.current?.([]);
