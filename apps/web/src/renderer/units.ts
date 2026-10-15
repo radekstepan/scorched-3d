@@ -321,18 +321,21 @@ export function advanceLocomotion(
 }
 
 /**
- * Engine-idle instability: max positional jitter per axis, world units. A
- * ~26 u hull shivering ±0.35 u reads as a running engine, never as driving
- * (well under the 5 u recoil kick and the 7 u stacked hit-reaction cap, and
- * sub-cell on a 16 u attribute cell so selection/pathing never notice).
+ * Engine-idle footprint, retired: hulls no longer slide on their tracks at
+ * rest — the old ±0.35 u positional jitter at ~2 Hz read as a distracting
+ * shake/dance rather than a running engine (a real idling hull breathes in
+ * place; it never translates). Kept at zero so existing bounds imports keep
+ * compiling and keep asserting exact seating; `idleTremble` always shapes
+ * x/z as 0 and `applyIdleTremble` never touches position.
  */
-export const IDLE_POS = 0.35;
+export const IDLE_POS = 0;
 /**
- * Engine-idle instability: max hull judder per tilt axis, radians. A ~0.3°
- * shiver against the grade seat — an order below the 0.16 rad
- * hit-reaction clamp.
+ * Engine-idle breathing: max hull sway per tilt axis, radians. A ~0.09°
+ * slow sway against the grade seat — an order below the old 0.005 judder
+ * and two orders below the 0.16 rad hit-reaction clamp. Felt, not seen:
+ * neighbouring hulls visibly hold still unless watched.
  */
-export const IDLE_TILT = 0.005;
+export const IDLE_TILT = 0.0015;
 /** Per-unit tremble phase step (golden angle, matching the scorch-jitter style). */
 const IDLE_PHASE = 2.39996;
 
@@ -347,12 +350,12 @@ interface IdleTrembleState {
 const _idle = { x: 0, z: 0, pitch: 0, roll: 0 };
 
 /**
- * Shape the engine-idle tremble for unit `index` at clock `elapsed`: tiny
- * position jitter plus pitch/roll judder, each an averaged pair of sines
- * (~1.5–2 Hz engine judder) phased per unit, so the same tick sequence
- * replays the same shiver with no rng. Returns a shared scratch object —
- * copy the fields before the next call. Visual only: callers apply it to
- * the body, never to the mover.
+ * Shape the engine-idle breathing for unit `index` at clock `elapsed`: a
+ * slow pitch/roll sway (averaged sine pairs at ~0.5–0.8 Hz, phased per
+ * unit), so the same tick sequence replays the same breath with no rng.
+ * Position is always zero — the hull never slides. Returns a shared
+ * scratch object — copy the fields before the next call. Visual only:
+ * callers apply it to the body, never to the mover.
  */
 export function idleTremble(
   elapsed: number,
@@ -360,24 +363,21 @@ export function idleTremble(
 ): { x: number; z: number; pitch: number; roll: number } {
   const t = Math.max(elapsed, 0);
   const p = index * IDLE_PHASE;
-  _idle.x = IDLE_POS * 0.5 * (Math.sin(12.9 * t + p) + Math.sin(8.7 * t + 2.1 * p));
-  _idle.z = IDLE_POS * 0.5 * (Math.sin(11.3 * t + 1.3 * p) + Math.sin(9.5 * t + 2.7 * p));
-  _idle.pitch = IDLE_TILT * 0.5 * (Math.sin(10.1 * t + 1.7 * p) + Math.sin(13.7 * t + 3.1 * p));
-  _idle.roll = IDLE_TILT * 0.5 * (Math.sin(9.1 * t + 2.3 * p) + Math.sin(12.3 * t + 1.1 * p));
+  _idle.x = 0;
+  _idle.z = 0;
+  _idle.pitch = IDLE_TILT * 0.5 * (Math.sin(5.1 * t + 1.7 * p) + Math.sin(3.3 * t + 3.1 * p));
+  _idle.roll = IDLE_TILT * 0.5 * (Math.sin(4.6 * t + 2.3 * p) + Math.sin(3.9 * t + 1.1 * p));
   return _idle;
 }
 
 /**
- * Tremble a seated body with engine-idle instability: the shaped jitter on
- * top of the grade pose. Position needs no un-apply (the seat absolute-sets
- * X/Z every pose, so last tick's jitter is already gone); the tilt judder
- * is recorded for `clearIdleTremble`. Plain test groups tremble like built
- * bodies. — every body trembles alike.
+ * Breathe a seated body with engine-idle sway: the shaped tilt on top of
+ * the grade pose. Position is never touched (the seat owns X/Z absolutely,
+ * so the hull sits bit-exact on its mover); the tilt sway is recorded for
+ * `clearIdleTremble`. Plain test groups breathe like built bodies.
  */
 export function applyIdleTremble(body: THREE.Group, index: number, elapsed: number): void {
   const j = idleTremble(elapsed, index);
-  body.position.x += j.x;
-  body.position.z += j.z;
   body.rotation.x += j.pitch;
   body.rotation.z += j.roll;
   const state = body.userData as IdleTrembleState;
@@ -386,8 +386,8 @@ export function applyIdleTremble(body: THREE.Group, index: number, elapsed: numb
 }
 
 /**
- * Remove the last pose's tremble judder from the hull tilt, restoring the
- * grade pose exactly. No-op when the body never trembled. Position is never
+ * Remove the last pose's breathing sway from the hull tilt, restoring the
+ * grade pose exactly. No-op when the body never breathed. Position is never
  * touched (the seat owns X/Z absolutely).
  */
 export function clearIdleTremble(body: THREE.Group): void {

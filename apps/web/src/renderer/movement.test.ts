@@ -13,7 +13,7 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { UnitMovement } from "./movement";
-import { buildUnits, getLegs, getWheels, IDLE_POS, IDLE_TILT } from "./units";
+import { buildUnits, getLegs, getWheels, IDLE_TILT } from "./units";
 
 function makeGroup(): THREE.Group {
   const group = new THREE.Group();
@@ -170,10 +170,10 @@ describe("UnitMovement", () => {
     const heldMover = movement.moverState(0)!;
     expect(heldMover.x).toBe(parkedMover.x);
     expect(heldMover.z).toBe(parkedMover.z);
-    // …while the body trembles faintly on its seat (engine idle, visual
-    // only: bounded shiver around the frozen mover).
-    expect(Math.abs(body.position.x - heldMover.x)).toBeLessThanOrEqual(IDLE_POS + 1e-9);
-    expect(Math.abs(body.position.z - heldMover.z)).toBeLessThanOrEqual(IDLE_POS + 1e-9);
+    // …while the body breathes faintly on its seat (engine idle, visual
+    // only: exact X/Z on the frozen mover, bounded tilt sway).
+    expect(body.position.x).toBe(heldMover.x);
+    expect(body.position.z).toBe(heldMover.z);
     // Flat ground seats zero tilt, so the hull judder reads directly.
     expect(Math.abs(body.rotation.x)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);
     expect(Math.abs(body.rotation.z)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);

@@ -31,8 +31,8 @@ import { advanceLocomotion, applyIdleTremble, clearIdleTremble } from "./units";
  * (external-hull mode) owns it, so turrets track targets independently
  * while hulls face the direction of travel. Drive locomotion (wheel spin,
  * walker gait from travelled distance per tick) is posed here alongside
- * the seat, and live hulls at rest tremble faintly with engine-idle
- * instability (visual only: movers never move). Owns no scene objects, so
+ * the seat, and live hulls at rest breathe faintly with engine-idle
+ * sway (tilt-only, visual only: movers never move). Owns no scene objects, so
  * dispose just stops updates; regen builds a fresh instance.
  */
 export interface MovementEnv {
@@ -62,8 +62,8 @@ export class UnitMovement {
   private disposed = false;
   /**
    * Deterministic engine-idle clock, seconds (advanced by `update` only):
-   * the tremble phase reads this, so the same tick sequence replays the
-   * same shiver with no rng and no per-frame allocation.
+   * the breathing phase reads this, so the same tick sequence replays the
+   * same sway with no rng and no per-frame allocation.
    */
   private elapsed = 0;
   /**
@@ -215,7 +215,7 @@ export class UnitMovement {
       if (dx !== 0 || dz !== 0) this.env.onShift?.(i, dx, dz);
       // Wheels stride with travelled distance; legs settle at rest.
       advanceLocomotion(body, this.kinds[i] ?? "flash", Math.hypot(dx, dz), dt);
-      // Live hulls tremble at rest (zero travel this tick); driving hulls
+      // Live hulls breathe at rest (zero travel this tick); driving hulls
       // and wrecks hold their grade pose exactly.
       this.pose(body, mover, this.kinds[i] ?? "flash", dt, i, !this.destroyed[i] && dx === 0 && dz === 0);
     });
@@ -239,15 +239,14 @@ export class UnitMovement {
    * slews toward the seat at `HULL_TILT_SLEW` (suspension settling instead
    * of a snap when cresting a grade break); height applies instantly so
    * tracks never float or sink, and re-snaps pass infinite `dt` to land
-   * exactly. Last tick's tremble judder is always shed first (even when the
+   * exactly. Last tick's breathing sway is always shed first (even when the
    * fresh one is skipped for driving hulls, wrecks, and re-snaps), so the
-   * shiver never leaks into the slew state or survives a re-seat.
+   * sway never leaks into the slew state or survives a re-seat.
    */
   private pose(body: THREE.Group, mover: Mover, kind: UnitKind, dt: number, index: number, tremble: boolean): void {
-    // Shed last tick's tremble judder first (exact — combat nudge tilts
-    // un-apply their own offsets, so only the tremble remains on top of the
-    // slewed grade pose); the seat then absolute-sets position, which also
-    // discards last tick's positional jitter with no bookkeeping.
+    // Shed last tick's breathing sway first (exact — combat nudge tilts
+    // un-apply their own offsets, so only the sway remains on top of the
+    // slewed grade pose); the seat then absolute-sets position.
     clearIdleTremble(body);
     const seat = this.env.seat?.(mover.x, mover.z, mover.hull, kind);
     body.position.set(mover.x, seat?.y ?? this.env.groundY(mover.x, mover.z) + 0.5, mover.z);
@@ -256,9 +255,9 @@ export class UnitMovement {
     const maxStep = HULL_TILT_SLEW * dt;
     body.rotation.x = seat ? slewTilt(body.rotation.x, seat.pitch, maxStep) : 0;
     body.rotation.z = seat ? slewTilt(body.rotation.z, seat.roll, maxStep) : 0;
-    // Engine idling: a tiny positional/tilt shiver on the seated hull.
-    // Driving hulls already read as alive through locomotion and wrecks hold
-    // still, so only live hulls at rest tremble — visual only, the mover
+    // Engine idling: a faint slow tilt sway on the seated hull. Driving
+    // hulls already read as alive through locomotion and wrecks hold
+    // still, so only live hulls at rest breathe — visual only, the mover
     // never moves.
     if (tremble) applyIdleTremble(body, index, this.elapsed);
   }
