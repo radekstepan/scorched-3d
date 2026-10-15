@@ -1,11 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_PAN_SPEED,
+  DEFAULT_ZOOM_SPEED,
   PAN_EDGE_MARGIN,
+  PAN_SPEED_FACTOR,
+  PAN_SPEED_MAX,
+  PAN_SPEED_MIN,
+  ZOOM_SPEED_MAX,
+  ZOOM_SPEED_MIN,
   applyPan,
+  clampPanSpeed,
   clampPanTarget,
+  clampZoomSpeed,
   isPanKey,
   panInputFromCodes,
   panOffset,
+  panStepDistance,
   shouldIgnoreKeyEvent,
 } from "./cameraPan";
 
@@ -144,5 +154,60 @@ describe("shouldIgnoreKeyEvent", () => {
     expect(shouldIgnoreKeyEvent({})).toBe(false);
     expect(shouldIgnoreKeyEvent(null)).toBe(false);
     expect(shouldIgnoreKeyEvent(undefined)).toBe(false);
+  });
+});
+
+describe("camera speed sliders", () => {
+  it("exposes a sane 0.2x–3x slider range around a 1x default", () => {
+    expect(DEFAULT_PAN_SPEED).toBe(1);
+    expect(DEFAULT_ZOOM_SPEED).toBe(1);
+    expect(PAN_SPEED_MIN).toBe(0.2);
+    expect(PAN_SPEED_MAX).toBe(3);
+    expect(ZOOM_SPEED_MIN).toBe(0.2);
+    expect(ZOOM_SPEED_MAX).toBe(3);
+  });
+
+  it("clamps pan speed into range", () => {
+    expect(clampPanSpeed(1)).toBe(1);
+    expect(clampPanSpeed(0.2)).toBe(0.2);
+    expect(clampPanSpeed(3)).toBe(3);
+    expect(clampPanSpeed(-5)).toBe(PAN_SPEED_MIN);
+    expect(clampPanSpeed(99)).toBe(PAN_SPEED_MAX);
+  });
+
+  it("clamps zoom speed into range", () => {
+    expect(clampZoomSpeed(1)).toBe(1);
+    expect(clampZoomSpeed(-5)).toBe(ZOOM_SPEED_MIN);
+    expect(clampZoomSpeed(99)).toBe(ZOOM_SPEED_MAX);
+  });
+
+  it("falls back to 1x on non-finite input", () => {
+    expect(clampPanSpeed(NaN)).toBe(DEFAULT_PAN_SPEED);
+    expect(clampPanSpeed(Infinity)).toBe(DEFAULT_PAN_SPEED);
+    expect(clampZoomSpeed(NaN)).toBe(DEFAULT_ZOOM_SPEED);
+    expect(clampZoomSpeed(-Infinity)).toBe(DEFAULT_ZOOM_SPEED);
+  });
+
+  it("scales the keyboard pan step linearly with the speed multiplier", () => {
+    const base = panStepDistance(1000, 0.016, 1);
+    expect(base).toBeCloseTo(1000 * PAN_SPEED_FACTOR * 0.016, 10);
+    expect(panStepDistance(1000, 0.016, 2)).toBeCloseTo(base * 2, 10);
+    expect(panStepDistance(1000, 0.016, 0.5)).toBeCloseTo(base * 0.5, 10);
+  });
+
+  it("clamps out-of-range speeds before stepping", () => {
+    expect(panStepDistance(1000, 0.016, 99)).toBeCloseTo(
+      panStepDistance(1000, 0.016, PAN_SPEED_MAX),
+      10,
+    );
+    expect(panStepDistance(1000, 0.016, -1)).toBeCloseTo(
+      panStepDistance(1000, 0.016, PAN_SPEED_MIN),
+      10,
+    );
+  });
+
+  it("stays put with zero distance or zero dt", () => {
+    expect(panStepDistance(0, 0.016, 2)).toBe(0);
+    expect(panStepDistance(1000, 0, 2)).toBe(0);
   });
 });

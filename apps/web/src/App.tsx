@@ -36,6 +36,8 @@ export default function App() {
     pixelFilter: true,
     showWaypoints: false,
     showHealth: false,
+    panSpeed: 1,
+    zoomSpeed: 1,
   });
 
   const map = useMemo(() => generateMap(preset, seed), [preset, seed]);
@@ -177,6 +179,22 @@ export default function App() {
             max={6}
             step={0.1}
             onChange={(v) => patch({ exaggeration: v })}
+          />
+          <Slider
+            label="Pan speed"
+            value={options.panSpeed}
+            min={0.2}
+            max={3}
+            step={0.1}
+            onChange={(v) => patch({ panSpeed: v })}
+          />
+          <Slider
+            label="Zoom speed"
+            value={options.zoomSpeed}
+            min={0.2}
+            max={3}
+            step={0.1}
+            onChange={(v) => patch({ zoomSpeed: v })}
           />
           <Toggle label="Water" on={options.showWater} onClick={() => patch({ showWater: !options.showWater })} />
           <Toggle label="Features" on={options.showFeatures} onClick={() => patch({ showFeatures: !options.showFeatures })} />

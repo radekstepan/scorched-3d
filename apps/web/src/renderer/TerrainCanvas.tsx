@@ -51,12 +51,14 @@ import { UnitMovement } from "./movement";
 import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
 import {
-  PAN_SPEED_FACTOR,
   applyPan,
+  clampPanSpeed,
   clampPanTarget,
+  clampZoomSpeed,
   isPanKey,
   panInputFromCodes,
   panOffset,
+  panStepDistance,
   shouldIgnoreKeyEvent,
 } from "./cameraPan";
 import {
@@ -128,6 +130,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.minDistance = 80;
     controls.maxDistance = 4200;
+    controls.panSpeed = clampPanSpeed(options.panSpeed);
+    controls.zoomSpeed = clampZoomSpeed(options.zoomSpeed);
     controls.target.set(startPose.target.x, startPose.target.y, startPose.target.z);
 
     const fogColor = new THREE.Color(0x8eb4c8);
@@ -668,10 +672,19 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         const input = panInputFromCodes(pressed);
         if (input.right !== 0 || input.forward !== 0) {
           const dist = camera.position.distanceTo(controls.target);
-          const offset = panOffset(camera.position, controls.target, input, dist * PAN_SPEED_FACTOR * dt);
+          const offset = panOffset(camera.position, controls.target, input, panStepDistance(dist, dt, opt.panSpeed));
           applyPan(camera.position, controls.target, offset);
           clampPanTarget(controls.target, worldW, worldD);
         }
+      }
+
+      // View-menu sliders: OrbitControls reads panSpeed/zoomSpeed live, so
+      // re-sync every tick (options arrive via ref, not effect re-runs).
+      if (controls.panSpeed !== clampPanSpeed(opt.panSpeed)) {
+        controls.panSpeed = clampPanSpeed(opt.panSpeed);
+      }
+      if (controls.zoomSpeed !== clampZoomSpeed(opt.zoomSpeed)) {
+        controls.zoomSpeed = clampZoomSpeed(opt.zoomSpeed);
       }
 
       controls.update();

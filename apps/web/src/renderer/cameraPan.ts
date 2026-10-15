@@ -21,6 +21,16 @@ export interface PanInput {
 /** World units the target travels per second, relative to camera distance. */
 export const PAN_SPEED_FACTOR = 1.2;
 
+/** Default orbit multipliers (1 = stock OrbitControls / keyboard feel). */
+export const DEFAULT_PAN_SPEED = 1;
+export const DEFAULT_ZOOM_SPEED = 1;
+
+/** Slider bounds for the View-menu pan/zoom speed controls. */
+export const PAN_SPEED_MIN = 0.2;
+export const PAN_SPEED_MAX = 3;
+export const ZOOM_SPEED_MIN = 0.2;
+export const ZOOM_SPEED_MAX = 3;
+
 /** How far past the map half-extents the orbit target may travel (fraction). */
 export const PAN_EDGE_MARGIN = 0.25;
 
@@ -127,4 +137,28 @@ export function shouldIgnoreKeyEvent(target: unknown): boolean {
     return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
   }
   return false;
+}
+
+/** Clamp a raw slider value into [lo, hi]; non-finite input falls back. */
+function clampSpeed(value: number, lo: number, hi: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(hi, Math.max(lo, value));
+}
+
+/** Clamp a raw pan-speed slider value into [PAN_SPEED_MIN, PAN_SPEED_MAX]. */
+export function clampPanSpeed(value: number): number {
+  return clampSpeed(value, PAN_SPEED_MIN, PAN_SPEED_MAX, DEFAULT_PAN_SPEED);
+}
+
+/** Clamp a raw zoom-speed slider value into [ZOOM_SPEED_MIN, ZOOM_SPEED_MAX]. */
+export function clampZoomSpeed(value: number): number {
+  return clampSpeed(value, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, DEFAULT_ZOOM_SPEED);
+}
+
+/**
+ * Frame step for keyboard panning: zoom-proportional, frame-rate
+ * independent, and scaled by the View-menu pan-speed multiplier.
+ */
+export function panStepDistance(distance: number, dt: number, speed: number): number {
+  return distance * PAN_SPEED_FACTOR * clampPanSpeed(speed) * dt;
 }

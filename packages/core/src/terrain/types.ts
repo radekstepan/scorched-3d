@@ -110,4 +110,8 @@ export interface ViewOptions {
   showWaypoints: boolean;
   /** Overhead health bars above each live unit. */
   showHealth: boolean;
+  /** Keyboard + right-drag pan multiplier (1 = default). */
+  panSpeed: number;
+  /** Scroll-wheel zoom multiplier (1 = default). */
+  zoomSpeed: number;
 }
