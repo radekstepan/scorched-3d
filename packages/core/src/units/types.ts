@@ -60,10 +60,38 @@ export const UNIT_DEFS: Record<UnitKind, UnitDef> = {
 
 export const UNIT_KINDS: UnitKind[] = ["commander", "stump", "flash", "hammer"];
 
+/** Which side of the demo battle a unit fights for (see `place.ts`). */
+export type TeamId = 0 | 1;
+
+/** Team identity: display name + base color as 0xRRGGBB. */
+export interface TeamDef {
+  id: TeamId;
+  /** Short display name used by the HUD. */
+  name: string;
+  /** Base color as 0xRRGGBB (ground rings, HUD chips, minimap outlines). */
+  color: number;
+}
+
+/**
+ * The two demo sides. Blue vs orange is the color-blind-safe opposition
+ * (same split the selection-contrast task picked: cyan/blue reads opposite
+ * ember orange for most color-vision deficiency), and both sit clear of the
+ * cyan selection core and the rose pursuit trail so team identity never
+ * collides with selection or chase state.
+ */
+export const TEAM_DEFS: Record<TeamId, TeamDef> = {
+  0: { id: 0, name: "Blue", color: 0x38bdf8 },
+  1: { id: 1, name: "Orange", color: 0xfb923c },
+};
+
+export const TEAM_IDS: TeamId[] = [0, 1];
+
 /** A unit placed on the attribute grid. Rotation is radians, 0..2π, about Y. */
 export interface PlacedUnit {
   kind: UnitKind;
   cellX: number;
   cellZ: number;
   rotation: number;
+  /** Which side of the demo battle the unit fights for (0 west, 1 east). */
+  team: TeamId;
 }

@@ -3,10 +3,12 @@ import * as THREE from "three";
 import type { TNTMap } from "@scorched-3d/core";
 import {
   barrelElevation,
+  buildTeamRing,
   buildUnits,
   getBarrel,
   getLegs,
   getMuzzleTip,
+  getTeamRing,
   getTurret,
   getWheels,
   advanceLocomotion,
@@ -15,7 +17,11 @@ import {
   restBarrelElevation,
   setBarrelElevation,
   setUnitAim,
+  TEAM_RING_INNER,
+  TEAM_RING_OUTER,
+  teamRingColor,
 } from "./units";
+import { TEAM_DEFS } from "@scorched-3d/core";
 
 function fakeMap(): TNTMap {
   const width = 32;
@@ -53,7 +59,8 @@ describe("buildUnits turrets", () => {
       kind: (fakeMap().units[i] as { kind: string }).kind,
     }));
     for (const { body, kind } of byKind) {
-      const hullMeshes = body.children.filter((c) => c.type === "Mesh").length;
+      // Team ground rings are markers, not hull geometry.
+      const hullMeshes = body.children.filter((c) => c.type === "Mesh" && c.name !== "team-ring").length;
       if (kind === "commander") {
         // Two legs stay on the hull; chest/head/antenna yaw with the torso.
         expect(hullMeshes).toBe(2);
@@ -139,6 +146,9 @@ describe("hull orientation", () => {
     const tmp = new THREE.Box3();
     for (const child of body.children) {
       if (child.type !== "Mesh") continue;
+      // Team ground rings are markers, not hull: skip them like the hull
+      // box skips turret geometry (measured separately below).
+      if (child.name === "team-ring") continue;
       tmp.setFromObject(child);
       box.union(tmp);
     }
@@ -269,6 +279,7 @@ describe("drive locomotion", () => {
       const tmp = new THREE.Box3();
       for (const part of body.children) {
         if (part.type !== "Mesh") continue;
+        if (part.name === "team-ring") continue;
         tmp.setFromObject(part);
         box3.union(tmp);
       }
@@ -337,5 +348,65 @@ describe("drive locomotion", () => {
     expect(() => advanceLocomotion(bare, "commander", 10, 1 / 60)).not.toThrow();
     expect(getWheels(bare).length).toBe(0);
     expect(getLegs(bare).length).toBe(0);
+  });
+});
+
+describe("team ground rings", () => {
+  function teamMap(): TNTMap {
+    const width = 32;
+    const height = 32;
+    return {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "stump", cellX: 8, cellZ: 8, rotation: 0, team: 0 },
+        { kind: "flash", cellX: 20, cellZ: 20, rotation: 0, team: 1 },
+      ],
+    } as unknown as TNTMap;
+  }
+
+  it("rings every hull in its side color without touching hull paint", () => {
+    const group = buildUnits(teamMap(), 1);
+    expect(group.children.length).toBe(2);
+    group.children.forEach((child, i) => {
+      const body = child as THREE.Group;
+      const ring = getTeamRing(body);
+      expect(ring).not.toBeNull();
+      expect(ring!.name).toBe("team-ring");
+      expect((ring!.material as THREE.MeshBasicMaterial).color.getHex()).toBe(
+        teamRingColor(i as 0 | 1),
+      );
+      // Marker, not hull: damage charring skips it, the occlusion ghost
+      // skips it, and it lifts just above the dirt under the scorch layer.
+      expect(ring!.userData.noHighlight).toBe(true);
+      expect(ring!.position.y).toBeGreaterThan(0);
+      expect(ring!.position.y).toBeLessThan(2);
+    });
+    // Blue west, Orange east — the color-blind-safe opposition.
+    expect(teamRingColor(0)).toBe(TEAM_DEFS[0].color);
+    expect(teamRingColor(1)).toBe(TEAM_DEFS[1].color);
+    expect(TEAM_RING_OUTER).toBeGreaterThan(TEAM_RING_INNER);
+  });
+
+  it("builds standalone rings per side and answers null on plain groups", () => {
+    expect(getTeamRing(new THREE.Group())).toBeNull();
+    for (const team of [0, 1] as const) {
+      const ring = buildTeamRing(team);
+      expect(ring.name).toBe("team-ring");
+      expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(teamRingColor(team));
+      ring.geometry.dispose();
+      (ring.material as THREE.Material).dispose();
+    }
+  });
+
+  it("survives exaggeration re-snaps with the body", () => {
+    const map = teamMap();
+    const group = buildUnits(map, 1);
+    const body = group.children[0] as THREE.Group;
+    placeUnitsGroup(group, map, 2);
+    // Re-snapping moves origins/tilt only; the ring rides along.
+    expect(getTeamRing(body)).not.toBeNull();
+    expect(getTeamRing(body)!.position.y).toBeGreaterThan(0);
   });
 });

@@ -8,10 +8,13 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import {
+  HUNT_ENGAGE_RADIUS,
+  HUNT_LEASH_RADIUS,
   THREAT_DISENGAGE_RADIUS,
   THREAT_ENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
+  acquireHunt,
   clearThreat,
   hasThreat,
   notifyThreat,
@@ -242,5 +245,128 @@ describe("pursuit driving", () => {
     // Victim closes on the attacker; the attacker's own patrol is unaffected.
     expect(Math.hypot(next[0]!.x - 300, next[0]!.z - 0)).toBeLessThan(300);
     expect(hasThreat(next[0]!)).toBe(true);
+  });
+
+  it("honors the leash carried on the memory (hunt ranges wider)", () => {
+    const route = flatRoute();
+    const victim = { ...initMover(route, 0), hull: 0 };
+    // Threat past the retaliation leash but inside the hunt leash: a hunt
+    // memory keeps steering where a retaliation memory gives up.
+    const hunted: Mover = {
+      ...victim,
+      threat: { attacker: 1, x: THREAT_LEASH_RADIUS + 200, z: 0, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS },
+    };
+    const foes = [
+      { x: victim.x, z: victim.z },
+      { x: THREAT_LEASH_RADIUS + 200, z: 0 },
+    ];
+    const chasing = advanceMover("stump", hunted, route, 1, 1, null, null, foes);
+    expect(hasThreat(chasing)).toBe(true);
+    const retaliated: Mover = {
+      ...victim,
+      threat: { attacker: 1, x: THREAT_LEASH_RADIUS + 200, z: 0, ttl: THREAT_MEMORY_DURATION },
+    };
+    const dropped = advanceMover("stump", retaliated, route, 1, 1, null, null, foes);
+    expect(hasThreat(dropped)).toBe(false);
+  });
+});
+
+describe("acquireHunt", () => {
+  // Two live enemies east of a west-side hull; one same-team mate nearby.
+  const teams = [0, 0, 1, 1];
+  const anchor = { x: 0, z: 0 };
+  const foesNear = [
+    { x: 0, z: 0 }, // self (team 0)
+    { x: 100, z: 0 }, // mate (team 0): never hunted
+    { x: 500, z: 0 }, // enemy (team 1): nearest
+    { x: 900, z: 0 }, // enemy (team 1): farther
+  ];
+  const alive = [true, true, true, true];
+
+  function idle(): Mover {
+    return initMover(flatRoute(), 0);
+  }
+
+  it("points an idle hull at the nearest live enemy on the hunt leash", () => {
+    const next = acquireHunt(idle(), 0, teams, foesNear, alive, anchor);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat).toMatchObject({ attacker: 2, x: 500, z: 0, ttl: THREAT_MEMORY_DURATION });
+    // Hunt memories range wider than retaliation ones.
+    expect(next.threat?.leash).toBe(HUNT_LEASH_RADIUS);
+    // Pure: the input mover is untouched.
+    expect(idle().threat).toBeUndefined();
+  });
+
+  it("notices enemies past the retaliation engage gate (wider hunt eyes)", () => {
+    const far = [
+      { x: 0, z: 0 },
+      { x: -5000, z: 0 }, // mate far away
+      { x: THREAT_ENGAGE_RADIUS + 100, z: 0 }, // enemy past retaliation notice…
+      { x: 5000, z: 0 },
+    ];
+    const next = acquireHunt(idle(), 0, teams, far, alive, anchor);
+    // …but inside the hunt engage gate and the hunt leash of the anchor.
+    expect(next.threat?.attacker).toBe(2);
+  });
+
+  it("ignores enemies past the hunt engage gate or the hunt leash", () => {
+    const distant = [
+      { x: 0, z: 0 },
+      { x: 100, z: 0 },
+      { x: HUNT_ENGAGE_RADIUS + 100, z: 0 },
+      { x: 5000, z: 0 },
+    ];
+    expect(hasThreat(acquireHunt(idle(), 0, teams, distant, alive, anchor))).toBe(false);
+    // Inside engage but past the anchor leash: beneath notice.
+    const unleashed = [
+      { x: 0, z: 0 },
+      { x: 100, z: 0 },
+      { x: 500, z: 0 },
+      { x: 5000, z: 0 },
+    ];
+    const farAnchor = { x: -5000, z: 0 };
+    expect(hasThreat(acquireHunt(idle(), 0, teams, unleashed, alive, farAnchor))).toBe(false);
+  });
+
+  it("never hunts its own side, wrecks, itself, or unknown hulls", () => {
+    // Only the mate is close: no acquisition (same team).
+    const mateOnly = [
+      { x: 0, z: 0 },
+      { x: 100, z: 0 },
+      { x: 5000, z: 0 },
+      { x: -5000, z: 0 },
+    ];
+    expect(hasThreat(acquireHunt(idle(), 0, teams, mateOnly, alive, anchor))).toBe(false);
+    // Nearest enemy is a wreck: the farther live enemy takes the memory.
+    const wrecked = [true, true, false, true];
+    const next = acquireHunt(idle(), 0, teams, foesNear, wrecked, anchor);
+    expect(next.threat?.attacker).toBe(3);
+    // The hunter itself is wrecked (belt-and-braces): nothing acquired.
+    expect(hasThreat(acquireHunt(idle(), 0, teams, foesNear, [false, true, true, true], anchor))).toBe(false);
+    // Unknown sides on both ends: nothing acquired.
+    expect(
+      hasThreat(acquireHunt(idle(), 0, [undefined, undefined, undefined, undefined], foesNear, alive, anchor)),
+    ).toBe(false);
+  });
+
+  it("lets player orders win and never stacks on a live memory", () => {
+    const route = flatRoute();
+    const ordered = orderMover(idle(), [{ x: 500, z: 500 }]);
+    expect(acquireHunt(ordered, 0, teams, foesNear, alive, route[0]).threat).toBeUndefined();
+    const holding: Mover = { ...idle(), hold: true };
+    expect(acquireHunt(holding, 0, teams, foesNear, alive, route[0]).threat).toBeUndefined();
+    const busy = acquireHunt(idle(), 0, teams, foesNear, alive, anchor);
+    expect(hasThreat(busy)).toBe(true);
+    // A live memory is never overwritten by the sweep.
+    const again = acquireHunt(busy, 0, teams, foesNear, alive, anchor);
+    expect(again.threat).toEqual(busy.threat);
+  });
+
+  it("rejects invalid callers and positions", () => {
+    const mover = idle();
+    expect(acquireHunt(mover, -1, teams, foesNear, alive, anchor).threat).toBeUndefined();
+    expect(acquireHunt(mover, 9, teams, foesNear, alive, anchor).threat).toBeUndefined();
+    const nanFoes = [{ x: Number.NaN, z: 0 }, ...foesNear.slice(1)];
+    expect(acquireHunt(mover, 0, teams, nanFoes, alive, anchor).threat).toBeUndefined();
   });
 });

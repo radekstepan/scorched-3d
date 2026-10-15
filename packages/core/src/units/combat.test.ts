@@ -20,6 +20,7 @@ import {
   muzzleForward,
   muzzleHeight,
   nextShotDelay,
+  pickHostilePair,
   pickSkirmishPair,
   pointInTree,
   rollTreeStick,
@@ -71,6 +72,57 @@ describe("pickSkirmishPair", () => {
   it("is deterministic for a seeded rng", () => {
     const a = pickSkirmishPair(6, mulberry32(99));
     const b = pickSkirmishPair(6, mulberry32(99));
+    expect(a).toEqual(b);
+  });
+});
+
+describe("pickHostilePair", () => {
+  // 3v3 demo split: west Blue, east Orange.
+  const teams = [0, 0, 0, 1, 1, 1];
+
+  it("returns null with fewer than two units or one empty side", () => {
+    const rng = mulberry32(1);
+    expect(pickHostilePair(0, [], rng)).toBeNull();
+    expect(pickHostilePair(1, [0], rng)).toBeNull();
+    expect(pickHostilePair(3, [0, 0, 0], rng)).toBeNull();
+    expect(pickHostilePair(2, [undefined, undefined], rng)).toBeNull();
+  });
+
+  it("only ever pairs across team lines", () => {
+    const rng = mulberry32(7);
+    for (let n = 0; n < 500; n++) {
+      const pair = pickHostilePair(6, teams, rng)!;
+      expect(pair.attacker).toBeGreaterThanOrEqual(0);
+      expect(pair.attacker).toBeLessThan(6);
+      expect(pair.target).toBeGreaterThanOrEqual(0);
+      expect(pair.target).toBeLessThan(6);
+      expect(pair.target).not.toBe(pair.attacker);
+      expect(teams[pair.target]).not.toBe(teams[pair.attacker]);
+    }
+  });
+
+  it("covers every ordered cross-team pair (no dead slots)", () => {
+    const rng = mulberry32(42);
+    const seen = new Set<string>();
+    for (let n = 0; n < 2000; n++) {
+      const pair = pickHostilePair(4, [0, 0, 1, 1], rng)!;
+      seen.add(`${pair.attacker}>${pair.target}`);
+    }
+    // 2 * 2 * 2 directions = 8 ordered cross-team pairs; all must appear.
+    expect(seen.size).toBe(8);
+  });
+
+  it("skips units with unknown sides", () => {
+    const rng = mulberry32(3);
+    for (let n = 0; n < 200; n++) {
+      const pair = pickHostilePair(4, [0, undefined, 1, undefined], rng)!;
+      expect([pair.attacker, pair.target].sort()).toEqual([0, 2]);
+    }
+  });
+
+  it("is deterministic for a seeded rng", () => {
+    const a = pickHostilePair(6, teams, mulberry32(99));
+    const b = pickHostilePair(6, teams, mulberry32(99));
     expect(a).toEqual(b);
   });
 });

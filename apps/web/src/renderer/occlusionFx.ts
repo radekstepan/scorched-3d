@@ -258,7 +258,7 @@ function cloneSilhouette(
   group.scale.copy(src.scale);
   tagGhost(group);
   for (const child of src.children) {
-    if (child.name === "select-marker" || child.name === "healthbar") continue;
+    if (child.name === "select-marker" || child.name === "healthbar" || child.name === "team-ring") continue;
     if (child.getObjectByName("occlusion-fill")) continue;
     const clone = cloneSilhouette(child, mats, pairs, edgeGeos, fallbackSize);
     if (clone) group.add(clone);
@@ -367,7 +367,7 @@ export class OcclusionFx {
     const size = ghostBoxFor(kind);
     let added = 0;
     for (const child of body.children) {
-      if (child.name === "select-marker") continue;
+      if (child.name === "select-marker" || child.name === "team-ring") continue;
       const clone = cloneSilhouette(child, mats, this.pairs[index]!, this.edgeGeos[index]!, size);
       if (clone) {
         ghost.add(clone);

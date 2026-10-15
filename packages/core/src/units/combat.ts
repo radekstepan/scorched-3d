@@ -127,6 +127,34 @@ export function pickSkirmishPair(unitCount: number, rng: () => number): Skirmish
 }
 
 /**
+ * Pick a random ordered attacker/target pair across team lines: the attacker
+ * and the target must fight for different sides. Returns null when fewer
+ * than two units exist or one side has no units (nothing hostile to shoot).
+ * Uniform over ordered cross-team pairs in roster order — one rng draw, so
+ * live rosters replay deterministically. Wrecks are the caller's filter
+ * (pass only live rosters, or live index lists with their teams).
+ */
+export function pickHostilePair(
+  unitCount: number,
+  teams: readonly (number | undefined)[],
+  rng: () => number,
+): SkirmishPair | null {
+  if (unitCount < 2) return null;
+  const pairs: SkirmishPair[] = [];
+  for (let attacker = 0; attacker < unitCount; attacker++) {
+    const side = teams[attacker];
+    if (side === undefined) continue;
+    for (let target = 0; target < unitCount; target++) {
+      if (target === attacker) continue;
+      if (teams[target] === undefined || teams[target] === side) continue;
+      pairs.push({ attacker, target });
+    }
+  }
+  if (pairs.length === 0) return null;
+  return pairs[Math.floor(rng() * pairs.length)] ?? null;
+}
+
+/**
  * Muzzle velocity + flight for one shot, solved in world space.
  *
  * - Bolts (`solveDirect`): straight constant-velocity flight at the muzzle

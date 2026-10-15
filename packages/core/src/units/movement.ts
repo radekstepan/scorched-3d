@@ -543,8 +543,10 @@ function pursueStep(
   if (Math.hypot(tx - mover.x, tz - mover.z) > THREAT_DISENGAGE_RADIUS) return null;
   // Leash to the post: the threat must sit near the patrol anchor (route
   // waypoint 0, the spawn) or the chase would drag the hull across the map.
+  // The memory carries its own leash — retaliation holds the tight anchor
+  // guard, hunt acquisitions range wider (see `retaliation.ts`).
   const anchor = route.length > 0 ? (route[0] as RoutePoint) : { x: mover.x, z: mover.z };
-  if (Math.hypot(tx - anchor.x, tz - anchor.z) > THREAT_LEASH_RADIUS) return null;
+  if (Math.hypot(tx - anchor.x, tz - anchor.z) > (threat.leash ?? THREAT_LEASH_RADIUS)) return null;
   const memory: ThreatMemory = { attacker: threat.attacker, x: tx, z: tz, ttl };
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });

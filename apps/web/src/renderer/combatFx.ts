@@ -30,6 +30,7 @@ import {
   muzzleHeight,
   muzzleYaw,
   nextShotDelay,
+  pickHostilePair,
   pickSkirmishPair,
   resolveScorchSeed,
   rollTreeStick,
@@ -110,8 +111,8 @@ interface Shot {
   kind: UnitKind;
   /**
    * Roster index that fired the round (and its intended target), threaded
-   * through to the impact splash so victims know *who* to pursue. The
-   * skirmish is free-for-all, so every other hull is a valid threat.
+   * through to the impact splash so victims know *who* to pursue. Fire only
+   * ever crosses team lines, so the attacker is always a valid enemy threat.
    */
   attacker: number;
   target: number;
@@ -1049,10 +1050,12 @@ export class CombatFx {
   /**
    * Who a splashed survivor should blame: the live shooter when the round
    * threaded one through (dead shooters and self-splashes blame nobody —
-   * corpses are not pursued), otherwise the nearest live hull to the victim
-   * inside the engage gate (the white-box fallback for blasts with no
-   * shooter on record; organic fire always knows its shooter). Non-hostile
-   * bursts blame nobody. Null when retaliation should stay quiet.
+   * corpses are not pursued), otherwise the nearest live *enemy* hull to the
+   * victim — the most plausible direction the shot came from — inside the
+   * engage gate so a far-off barrage never drags a patrol across the map on
+   * a guess. Same-team hulls are never blamed: fire only ever comes across
+   * team lines, so a nearby mate is never the shooter. Non-hostile bursts
+   * blame nobody. Null when retaliation should stay quiet.
    */
   private resolveThreat(
     victim: number,
@@ -1070,13 +1073,17 @@ export class CombatFx {
       if (!gun) return null;
       return { attacker: shooter, x: gun.position.x, z: gun.position.z };
     }
-    // Unknown shooter: blame the nearest live hull to the victim — the most
-    // plausible direction the shot came from — inside the engage gate so a
-    // far-off barrage never drags a patrol across the map on a guess.
+    // Unknown shooter: blame the nearest live hull on the *opposing* side —
+    // never a same-team mate parked nearby — inside the engage gate. Legacy
+    // headless groups carry no placement (victim team unknown): any live
+    // hull is blameable, as before teams existed.
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const side = placed?.[victim]?.team;
     let best = -1;
     let bestDist = THREAT_ENGAGE_RADIUS;
     for (let i = 0; i < bodies.length; i++) {
       if (i === victim || this.destroyed[i]) continue;
+      if (side !== undefined && placed?.[i]?.team === side) continue;
       const other = bodies[i];
       if (!other) continue;
       const d = Math.hypot(
@@ -1425,19 +1432,30 @@ export class CombatFx {
   }
 
   /**
-   * Draw an attacker/target pair uniformly from live hulls (wrecks excluded
-   * on both ends). Null when fewer than two hulls are alive — the skirmish
-   * goes quiet instead of shelling wrecks. Consumes rng exactly like the
-   * core pair picker so live rosters replay deterministically.
+   * Draw an attacker/target pair uniformly from live hulls across team lines
+   * (wrecks excluded on both ends, friendlies never draw fire). Null when
+   * fewer than two hulls are alive or one side is wiped — the skirmish goes
+   * quiet instead of shelling wrecks or turning on its own side. Consumes rng
+   * exactly like the core hostile-pair picker so live rosters replay
+   * deterministically.
    */
   private pickLivePair(): { attacker: number; target: number } | null {
     const count = this.units.children.length;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
     const alive: number[] = [];
     for (let i = 0; i < count; i++) {
       if (!this.destroyed[i]) alive.push(i);
     }
     if (alive.length < 2) return null;
-    const pair = pickSkirmishPair(alive.length, this.rng);
+    const teams = alive.map((i) => placed?.[i]?.team);
+    if (teams.every((t) => t === undefined)) {
+      // Legacy headless groups carry no placement (white-box tests): every
+      // other hull is a valid target, as before teams existed.
+      const pair = pickSkirmishPair(alive.length, this.rng);
+      if (!pair) return null;
+      return { attacker: alive[pair.attacker]!, target: alive[pair.target]! };
+    }
+    const pair = pickHostilePair(alive.length, teams, this.rng);
     if (!pair) return null;
     return { attacker: alive[pair.attacker]!, target: alive[pair.target]! };
   }
@@ -1449,8 +1467,9 @@ export class CombatFx {
    * muzzle down the turret line. Returns true when a shot left (or the
    * roster/caps made firing impossible, to keep the ambient schedule); false
    * defers while the attacker is still traversing. Wrecks neither fire nor
-   * draw fire: pairs are drawn from live hulls only, and fewer than two
-   * live hulls means silence (still true, to keep the schedule idle).
+   * draw fire and friendlies never draw fire: pairs are drawn from live hulls
+   * across team lines only, and fewer than two live enemies means silence
+   * (still true, to keep the schedule idle).
    */
   private tryFire(): boolean {
     const count = this.units.children.length;

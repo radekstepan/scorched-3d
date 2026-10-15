@@ -6,12 +6,14 @@ import {
   legLift,
   legSwing,
   settleToward,
+  TEAM_DEFS,
   UNIT_DEFS,
   seatHull,
   unitAnchor,
   WHEEL_RADIUS,
   wheelSpinFor,
   type PlacedUnit,
+  type TeamId,
   type TNTMap,
   type UnitKind,
 } from "@scorched-3d/core";
@@ -178,6 +180,52 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     tip.position.set(0, 30, 6);
     turret.add(tip);
   }
+}
+
+/** Team ground-ring radii (inner/outer), world units: outside the hull
+ * footprint, inside the selection halo, so team identity and selection read
+ * as concentric signals instead of overlapping. */
+export const TEAM_RING_INNER = 24;
+export const TEAM_RING_OUTER = 28;
+/** Team rings sit just above the dirt, under scorch decals + selection. */
+export const TEAM_RING_LIFT = 1.0;
+
+/** Team color of a roster side (falls back to white for unknown sides). */
+export function teamRingColor(team: TeamId): number {
+  return TEAM_DEFS[team]?.color ?? 0xffffff;
+}
+
+/**
+ * Build one team ground ring: a flat team-colored band under the hull that
+ * carries side identity in 3D without tinting the hull itself (the no-tint
+ * policy from the selection task: hulls keep their normal paint including
+ * damage charring). The mesh carries `userData.noHighlight` so damage
+ * charring never touches it, and the name `team-ring` so the occlusion
+ * ghost (which mirrors hull silhouettes, not markers) skips it like the
+ * selection marker. Owned by the body group so it rides motion and
+ * exaggeration re-snaps for free.
+ */
+export function buildTeamRing(team: TeamId): THREE.Mesh {
+  const geo = new THREE.RingGeometry(TEAM_RING_INNER, TEAM_RING_OUTER, 48);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshBasicMaterial({
+    color: teamRingColor(team),
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(geo, mat);
+  ring.name = "team-ring";
+  ring.position.y = TEAM_RING_LIFT;
+  ring.renderOrder = 1;
+  ring.userData.noHighlight = true;
+  return ring;
+}
+
+/** Team ground ring of a unit body, or null (plain test groups). */
+export function getTeamRing(body: THREE.Group): THREE.Mesh | null {
+  const ring = body.getObjectByName("team-ring");
+  return (ring as THREE.Mesh | undefined) ?? null;
 }
 
 /** Turret/torso subgroup of a unit body, or null when absent. */
@@ -405,6 +453,8 @@ export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {
   for (const unit of map.units) {
     const body = new THREE.Group();
     buildBody(unit.kind, body);
+    // Team ground ring: side identity without hull tint (see buildTeamRing).
+    body.add(buildTeamRing(unit.team ?? 0));
     // YXZ so hull pitch/roll pose in the hull frame after yawing.
     body.rotation.order = "YXZ";
     body.rotation.y = unit.rotation;

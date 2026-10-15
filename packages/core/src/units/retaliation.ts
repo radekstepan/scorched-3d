@@ -59,6 +59,14 @@ export interface ThreatMemory {
   z: number;
   /** Seconds of memory remaining; pursuit ends at 0 without a re-hit. */
   ttl: number;
+  /**
+   * Leash for this pursuit, world units from the patrol anchor. Absent reads
+   * as `THREAT_LEASH_RADIUS` (retaliation: hits only ever pull a hull a
+   * short way off its loop). Hunt acquisitions set the wider
+   * `HUNT_LEASH_RADIUS` so a hull that *sees* the enemy may chase it down —
+   * the drive (`pursueStep`) honors whichever leash the memory carries.
+   */
+  leash?: number;
 }
 
 /**
@@ -84,6 +92,24 @@ export const THREAT_DISENGAGE_RADIUS = 1250;
  * anchor (route waypoint 0). Keeps retaliation local — no map-wide chases.
  */
 export const THREAT_LEASH_RADIUS = 650;
+/**
+ * Hunt engage gate: an idle/patrolling hull *notices* a live enemy inside
+ * this distance and starts a pursuit (see `acquireHunt`). Deliberately wider
+ * than the retaliation engage gate — being shot is salient at 900, but a
+ * visible enemy column is worth answering at 1100 — yet still inside the
+ * shared disengage bound, so the hysteresis gap (engage 1100 < disengage
+ * 1250) keeps a hull on the boundary from flickering between hunt and
+ * patrol every tick.
+ */
+export const HUNT_ENGAGE_RADIUS = 1100;
+/**
+ * Hunt leash: a hunt pursuit may range this far from the patrol anchor —
+ * roughly a map half-width, so mid-map meetings stay pursuable while a hull
+ * never abandons its side of the field to chase a contact home. Carried on
+ * the threat memory (`ThreatMemory.leash`); retaliation memories keep the
+ * tighter `THREAT_LEASH_RADIUS`.
+ */
+export const HUNT_LEASH_RADIUS = 1400;
 /** Floor on the weapons-range stand-off (scouts still close to brawling range). */
 export const THREAT_MIN_STANDOFF = 150;
 /** Cap on the weapons-range stand-off (artillery holds at shell distance). */
@@ -199,4 +225,64 @@ export function clearThreat<M extends { threat?: ThreatMemory }>(mover: M): M {
   if (mover.threat === undefined) return mover;
   const { threat: _dropped, ...rest } = mover;
   return { ...rest } as M;
+}
+
+/**
+ * Hunt acquisition: point an idle/patrolling hull at the nearest live enemy
+ * it can see, reusing the threat/pursuit pipeline retaliation drives through
+ * (stand-off hold, disengage give-up, memory expiry, frozen patrol leg — see
+ * `pursueStep`). The memory carries the wider hunt leash, so a hull that
+ * notices the enemy may chase it down instead of holding its loop.
+ *
+ * Pure: no rng, no clocks. The caller (renderer `UnitMovement`, which knows
+ * the roster teams and which hulls are wrecks) sweeps idle hulls through
+ * this; the drive, the give-ups, and the expiry all live in `movement.ts`.
+ *
+ * - Ordered/holding movers, movers already carrying a live memory, wrecks,
+ *   and out-of-range callers refuse: only a free hull acquires.
+ * - Only live enemies (`alive[i]`, opposite `teams[i]`) count — a hull never
+ *   hunts its own side, a wreck, itself, or an unknown index.
+ * - The nearest such enemy inside `HUNT_ENGAGE_RADIUS` of the victim *and*
+ *   inside `HUNT_LEASH_RADIUS` of `anchor` takes the memory; anything farther
+ *   is beneath notice and the patrol continues.
+ */
+export function acquireHunt<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
+  mover: M,
+  self: number,
+  teams: readonly (number | undefined)[],
+  foes: readonly { x: number; z: number }[],
+  alive: readonly boolean[],
+  anchor?: ThreatAnchor | null,
+): M {
+  if (!Number.isInteger(self) || self < 0 || self >= foes.length) return mover;
+  if (alive[self] === false) return mover;
+  if (mover.hold) return mover;
+  const order = mover.order as { at?: number; points?: readonly unknown[] } | undefined;
+  if (order && (order.at ?? 0) >= 0 && (order.at ?? 0) < (order.points?.length ?? 0)) return mover;
+  if (mover.threat && mover.threat.ttl > 0) return mover;
+  const side = teams[self];
+  if (side === undefined) return mover;
+  const me = foes[self];
+  if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) return mover;
+  let best = -1;
+  let bestDist = HUNT_ENGAGE_RADIUS;
+  for (let i = 0; i < foes.length; i++) {
+    if (i === self) continue;
+    if (alive[i] === false) continue;
+    if (teams[i] === undefined || teams[i] === side) continue;
+    const foe = foes[i];
+    if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
+    const d = Math.hypot(foe.x - me.x, foe.z - me.z);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  if (best < 0) return mover;
+  const target = foes[best]!;
+  if (anchor && Math.hypot(target.x - anchor.x, target.z - anchor.z) > HUNT_LEASH_RADIUS) return mover;
+  return {
+    ...mover,
+    threat: { attacker: best, x: target.x, z: target.z, ttl: THREAT_MEMORY_DURATION, leash: HUNT_LEASH_RADIUS },
+  };
 }

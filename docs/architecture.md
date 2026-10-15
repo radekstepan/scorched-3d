@@ -15,23 +15,23 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 
 | File | Responsibility |
 | --- | --- |
-| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with unit markers, unit legend, probe readout. |
+| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers, team + unit legend, probe readout. |
 | `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, hover picking. |
-| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, and exaggeration re-snapping. |
+| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, team ground rings, and exaggeration re-snapping. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
 | `packages/core/src/branding.ts` | Product identity: `APP_NAME`, `APP_VERSION`, tagline, description. |
-| `packages/core/src/units/place.ts` | Seeded roster placement on dry, gentle, separated ground. |
+| `packages/core/src/units/place.ts` | Seeded roster placement on dry, gentle, separated ground, mustered as even Blue (west) / Orange (east) team halves on opposite map sides. |
 | `packages/core/src/units/movement.ts` | Patrol routes + forward-drive hull physics with steep-slope clamp/skip, lateral separation steering, and an ordered-hull spacing floor. |
-| `packages/core/src/units/retaliation.ts` | Retaliation AI: per-hull threat memory (attacker + last-known position + countdown) with engage/disengage hysteresis, a patrol-anchor leash, and per-kind weapons-range stand-off; idle hulls pursue through the movement drive while ordered/holding hulls refuse. |
+| `packages/core/src/units/retaliation.ts` | Retaliation AI: per-hull threat memory (attacker + last-known position + countdown) with engage/disengage hysteresis, a patrol-anchor leash, and per-kind weapons-range stand-off; idle hulls pursue through the movement drive while ordered/holding hulls refuse. Hunt acquisition points idle hulls at nearby live enemies on a wider leash through the same pipeline. |
 | `packages/core/src/units/terrain.ts` | Bilinear seating, hull pitch/roll, and step blocking for movers. |
 | `packages/core/src/units/pathfinding.ts` | Grid A* move orders with smoothing + formation fan-out, incl. walkable snapped formation targets. |
 | `packages/core/src/units/facing.ts` | Hull turn rates and traverse-limited turret clamping. |
-| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission). |
+| `packages/core/src/units/combat.ts` | Ambient-skirmish weapon profiles and ballistic projectile math (muzzle velocity + gravity solver, range admission), plus cross-team pair picking. |
 | `packages/core/src/units/destruction.ts` | Blast scorch + graduated collateral damage (tree burn states, rock levels, spread). |
 | `apps/web/src/renderer/features.ts` | Tree/rock instanced posing per damage state, re-snap preserving. |
 | `apps/web/src/renderer/fireFx.ts` | Transient instanced flame/smoke views over the damage field. |
-| `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers, plus the retaliation entry point (`threatenUnit`) fed by combat's threat hook. |
+| `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers, plus the retaliation entry point (`threatenUnit`) fed by combat's threat hook and the per-tick hunt sweep (`sweepHunt`) that points idle hulls at live enemies. |
 | `apps/web/src/renderer/selection.ts` | Click/box picking helpers for RTS selection. |
 | `apps/web/src/renderer/selectionFx.ts` | Selection visuals: white/cyan double ring + chevron beacon, contrast policy, ring/beacon-only highlight (hull paint preserved), minimap dot style. |
 | `apps/web/src/renderer/occlusionFx.ts` | Occlusion x-ray: sampled camera→hull taps vs live heightfield + standing-tree volumes; blue silhouette ghost (selection cyan: true hull/turret outline + slight transparent fill, pose-mirrored) for hidden units, husks included, hull paint untouched. |

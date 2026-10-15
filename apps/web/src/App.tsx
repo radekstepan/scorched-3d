@@ -3,6 +3,8 @@ import {
   APP_NAME,
   CELL_PIXELS,
   PRESET_META,
+  TEAM_DEFS,
+  TEAM_IDS,
   TILE_PIXELS,
   UNIT_DEFS,
   UNIT_KINDS,
@@ -136,6 +138,10 @@ export default function App() {
               const isSel = selected.includes(i);
               // Wrecks dim to grey and can never carry a selection glow.
               const wrecked = p.alive === false;
+              // Team identity rings the kind-colored dot: Blue west, Orange
+              // east (same colors as the 3D ground rings + Units box chips).
+              const team = map.units[i]?.team;
+              const teamColor = team === undefined ? undefined : `#${TEAM_DEFS[team].color.toString(16).padStart(6, "0")}`;
               return (
                 <span
                   key={i}
@@ -147,7 +153,7 @@ export default function App() {
                     height: wrecked ? 4 : 5,
                     background: wrecked ? "#57534e" : color,
                     opacity: wrecked ? 0.55 : 1,
-                    outline: !wrecked && isSel ? MINIMAP_SELECTED_OUTLINE : undefined,
+                    outline: !wrecked && isSel ? MINIMAP_SELECTED_OUTLINE : teamColor ? `2px solid ${teamColor}` : undefined,
                     boxShadow: !wrecked && isSel ? MINIMAP_SELECTED_GLOW : undefined,
                   }}
                 />
@@ -223,6 +229,31 @@ export default function App() {
         <div className="hud-panel mt-3 p-3">
           <Label>Units</Label>
           <div className="mt-2 space-y-1.5">
+            {TEAM_IDS.map((t) => {
+              const def = TEAM_DEFS[t];
+              let roster = 0;
+              let alive = 0;
+              map.units.forEach((u, i) => {
+                if ((u.team ?? 0) !== t) return;
+                roster += 1;
+                // Before the first live broadcast every hull reads alive.
+                if (liveUnits[i]?.alive !== false) alive += 1;
+              });
+              return (
+                <div key={t} className="flex items-center gap-2 text-[11px]">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full border border-black/60"
+                    style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
+                  />
+                  <span className="text-slate-200">Team {def.name}</span>
+                  <span className="ml-auto font-mono text-[10px] text-slate-400">
+                    {alive}/{roster} alive
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 space-y-1.5">
             {UNIT_KINDS.map((k) => {
               const def = UNIT_DEFS[k];
               const count = map.units.filter((u) => u.kind === k).length;
@@ -241,12 +272,13 @@ export default function App() {
             })}
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-            Dark-brown patches
+            Blue holds the west, Orange the east — team rings circle every
+            hull in 3D and ring its minimap dot. Dark-brown patches
             are blast scorch — old impact scars, not mud. Selected units carry
             a white/cyan ring + beacon; hulls keep their normal paint —
             selection never tints the hull. The Waypoints overlay traces the
             line each unit will actually drive — slate for patrols, amber for
-            ordered moves — plus a travelling marker.
+            ordered moves, rose for hunts and retaliation pursuits — plus a travelling marker.
             {selected.length > 0 ? (
               <span className="text-amber-200">
                 {" "}

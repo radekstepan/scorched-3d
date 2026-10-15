@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import {
+  acquireHunt,
   advanceMovers,
+  clearThreat,
   findWorldPath,
   formationTargets,
   hasOrder,
@@ -195,6 +197,48 @@ export class UnitMovement {
   }
 
   /**
+   * Roster side of a unit (undefined when the group carries no placement —
+   * headless test groups hunt nothing). For driven-path prediction and the
+   * hunt sweep below.
+   */
+  teamAt(index: number): number | undefined {
+    const placed = (this.units.userData.units as PlacedUnit[] | undefined) ?? [];
+    return placed[index]?.team;
+  }
+
+  /**
+   * Hunt sweep: every live idle/patrolling hull without a live memory checks
+   * for the nearest live enemy (core `acquireHunt`) and starts a pursuit on
+   * the wider hunt leash — so the two sides actively close instead of only
+   * answering fire. Memories pointing at wrecks clear first (survivors stop
+   * guarding corpses and may acquire a live enemy the same tick). Ordered,
+   * holding, stunned, threatened, and wrecked hulls are untouched —
+   * `acquireHunt` refuses them itself — and the sweep costs one O(n) scan
+   * per hull on a 6-roster, before the drive step so hunts steer same-tick.
+   */
+  sweepHunt(): void {
+    if (this.movers.length === 0) return;
+    const teams = this.movers.map((_, i) => this.teamAt(i));
+    if (teams.every((t) => t === undefined)) return;
+    // Pre-tick roster snapshot (same discipline as spacing/separation): the
+    // drive below resolves live attackers against these positions.
+    const foes = this.movers.map((m) => ({ x: m.x, z: m.z }));
+    const alive = this.movers.map((_, i) => !this.destroyed[i]);
+    for (let i = 0; i < this.movers.length; i++) {
+      let mover = this.movers[i]!;
+      const attacker = mover.threat?.attacker;
+      if (
+        mover.threat &&
+        (attacker === undefined || attacker < 0 || attacker >= this.movers.length || this.destroyed[attacker])
+      ) {
+        mover = clearThreat(mover);
+      }
+      const anchor = this.routes[i]?.[0] ?? null;
+      this.movers[i] = acquireHunt(mover, i, teams, foes, alive, anchor);
+    }
+  }
+
+  /**
    * Issue a move order to one unit: A* from its live position to the target
    * (straight drive when no heightfield was provided), replacing any patrol
    * leg or previous order. Repathing just calls this again.
@@ -233,6 +277,9 @@ export class UnitMovement {
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
     this.elapsed += dt;
+    // Hunt first: idle hulls notice live enemies (and drop memories of dead
+    // attackers) before the drive step, so acquisitions steer same-tick.
+    this.sweepHunt();
     const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush);
     // Wrecks never move: freeze their movers at the pre-tick state (core
     // separation may have shoved them). Live hulls still spacing-avoid the

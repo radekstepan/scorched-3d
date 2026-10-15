@@ -69,4 +69,11 @@ describe("Units panel roster without patrol status text", () => {
     expect(source).toContain("selected.includes");
     expect(source).toContain("MINIMAP_SELECTED_OUTLINE");
   });
+
+  it("shows both team sides with colors in the Units box and minimap", () => {
+    expect(source).toContain("TEAM_IDS.map");
+    expect(source).toContain("Team {def.name}");
+    expect(source).toContain("alive");
+    expect(source).toContain("TEAM_DEFS[team].color");
+  });
 });
