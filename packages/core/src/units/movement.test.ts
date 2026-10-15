@@ -22,13 +22,14 @@ import {
   spacingScale,
   STOP_RADIUS,
   worldFromCell,
+  type CrushContext,
   type Mover,
   type RoutePoint,
 } from "./movement.js";
-import { addScorchMark } from "./destruction.js";
+import { addScorchMark, createDamageField, type DamageField } from "./destruction.js";
 import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
-import { trunkBlockedAt } from "./terrain.js";
+import { CRUSH_DRAG, TREE_DRAG, trunkBlockedAt } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera"] as const;
@@ -563,25 +564,74 @@ describe("rough-terrain drag", () => {
     expect(hasOrder(mover)).toBe(false);
   });
 
-  it("holds at the tree line instead of clipping trunks", () => {
-    // A solid tree belt is a wall of keepouts: a straight order into it
-    // holds at the first trunk line (like a steep wall) instead of driving
-    // through the wood. Pathfound orders route around instead (see below).
+  it("crushes through the tree belt slowly, felling trees, and arrives", () => {
+    // A solid tree belt is no longer a wall of keepouts: a straight order
+    // into it crushes a lane through the wood at a crawl instead of holding
+    // at the first trunk line. Pathfound orders still route around when they
+    // can (see below); the crush is for lanes that must go through.
     const field = woodedField();
     const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
-    let mover: Mover = { x: worldX(field, 2), z, hull: Math.PI / 2, leg: 0 };
-    mover = orderMover(mover, [{ x: worldX(field, 37), z }]);
-    const firstTrunkX = worldX(field, 5);
-    for (let n = 0; n < 1200; n++) {
-      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
-      expect(trunkBlockedAt(field, mover.x, mover.z, "flash")).toBe(false);
+    // Crush points: the lane row (z=11) in fid order. Adjacent rows still
+    // slow the hull through canopy proximity, but only lane trees fall.
+    const rowTrees: { x: number; z: number }[] = [];
+    for (let x = 5; x < field.width - 5; x++) rowTrees.push({ x: worldX(field, x), z });
+    const run = (damage: DamageField, ticks: number): { mover: Mover; felled: number[] } => {
+      const felled: number[] = [];
+      const crush: CrushContext = {
+        field: damage,
+        points: rowTrees,
+        onCrush: (f) => felled.push(...f),
+      };
+      let mover: Mover = { x: worldX(field, 2), z, hull: Math.PI / 2, leg: 0 };
+      mover = orderMover(mover, [{ x: worldX(field, 37), z }]);
+      for (let n = 0; n < ticks; n++) {
+        mover = advanceMover("flash", mover, [], 1 / 60, 1, field, crush);
+      }
+      return { mover, felled };
+    };
+    // Full drive: arrives through the belt, felling the lane behind it.
+    const damage = createDamageField(rowTrees.length, 0);
+    const full = run(damage, 7200);
+    expect(hasOrder(full.mover)).toBe(false);
+    expect(full.mover.x).toBeGreaterThan(worldX(field, 37) - ARRIVE_RADIUS - 1);
+    expect(full.felled.length).toBeGreaterThan(0);
+    for (const fid of full.felled) expect(damage.trees[fid]).toBe("toppled");
+    // Fresh lanes labour: over fixed ticks the first pass (crushing at
+    // CRUSH_DRAG under canopy drag) covers less ground than a second pass
+    // over its own fallen trunks — which still trails open ground, where
+    // even the canopy proximity drag is absent.
+    const fresh = createDamageField(rowTrees.length, 0);
+    const first = run(fresh, 600);
+    const second = run(fresh, 600);
+    // `run` always starts at the same X: compare covered distance instead.
+    const startX = worldX(field, 2);
+    expect(first.mover.x - startX).toBeGreaterThan(0);
+    expect(second.mover.x - startX).toBeGreaterThan(first.mover.x - startX);
+    // And both trail the same order on open ground (same-size field, so
+    // world coordinates match exactly).
+    let openMover: Mover = { x: startX, z, hull: Math.PI / 2, leg: 0 };
+    openMover = orderMover(openMover, [{ x: worldX(field, 37), z }]);
+    const open: SeatField = {
+      width: field.width,
+      height: field.height,
+      heights: new Uint8Array(field.width * field.height).fill(100),
+      seaLevel: 0,
+    };
+    for (let n = 0; n < 600; n++) {
+      openMover = advanceMover("flash", openMover, [], 1 / 60, 1, open);
     }
-    // Never entered the belt: still west of the first trunk line, order live.
-    expect(mover.x).toBeLessThan(firstTrunkX);
-    expect(hasOrder(mover)).toBe(true);
+    expect(openMover.x - startX).toBeGreaterThan(second.mover.x - startX);
+    // Crushing reads much slower than brushing canopy: the fresh pass crawls
+    // at CRUSH_DRAG under the TREE_DRAG proximity it also pays.
+    expect(CRUSH_DRAG * TREE_DRAG).toBeLessThan(TREE_DRAG);
   });
 
-  it("routes pathfound orders around tree belts and arrives without clipping", () => {
+  it("routes pathfound orders around tree belts, crushing only grazes", () => {
+    // Smoothing still steers legs around standing trunks when it can — but
+    // the hulls no longer slide around wood they graze while cornering, so
+    // a detour may fell a tree or two on its arcs where the old clamp would
+    // have slid. A detour stays a detour (not a plough): far fewer falls
+    // than driving the lane straight through.
     const field = woodedField();
     const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
     const from = { x: worldX(field, 2), z };
@@ -589,18 +639,33 @@ describe("rough-terrain drag", () => {
     const path = findWorldPath(field, from, to);
     // A real detour, not a straight drive through the belt.
     expect(path.length).toBeGreaterThan(1);
+    const points: { x: number; z: number }[] = [];
+    for (let cz = 8; cz <= 15; cz++) {
+      for (let cx = 5; cx < field.width - 5; cx++) {
+        points.push({
+          x: (cx - (field.width - 1) / 2) * CELL_PIXELS,
+          z: (cz - (field.height - 1) / 2) * CELL_PIXELS,
+        });
+      }
+    }
+    const damage = createDamageField(points.length, 0);
+    const felled: number[] = [];
+    const crush: CrushContext = { field: damage, points, onCrush: (f) => felled.push(...f) };
     let mover: Mover = { x: from.x, z: from.z, hull: Math.PI / 2, leg: 0 };
     mover = orderMover(mover, path);
     for (let n = 0; n < 7200; n++) {
-      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
-      expect(trunkBlockedAt(field, mover.x, mover.z, "flash")).toBe(false);
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field, crush);
     }
     expect(hasOrder(mover)).toBe(false);
+    // Grazes only: a straight lane plough fells the whole row (~30), the
+    // detour only clips corner arcs.
+    expect(felled.length).toBeLessThan(10);
   });
 
-  it("eases a spawn parked on a trunk out to open ground", () => {
+  it("crushes out a spawn parked on a trunk instead of grinding", () => {
     // An isolated trunk under the spawn (relaxed placement permits it):
-    // the trunk push-out eases the hull clear instead of grinding in place.
+    // the hull simply drives out, felling the trunk beneath it — no
+    // push-out ease needed, since wood never pins.
     const w = 32;
     const h = 32;
     const features = new Uint16Array(w * h).fill(0xffff);
@@ -611,17 +676,24 @@ describe("rough-terrain drag", () => {
     expect(trunkBlockedAt(field, x, z, "stump")).toBe(true);
     const kinds = ["stump"] as const;
     const routes: RoutePoint[][] = [[{ x, z }, { x, z: z + 400 }]];
-    let movers: Mover[] = [{ x, z, hull: 0, leg: 1 }];
-    for (let n = 0; n < 600; n++) {
-      movers = advanceMovers([...kinds], movers, routes, 1 / 60, field);
-    }
-    // Eased clear (not snapped in one tick): outside every trunk keepout.
-    expect(trunkBlockedAt(field, movers[0]!.x, movers[0]!.z, "stump")).toBe(false);
-    // Deterministic: the same shove replays exactly.
-    let replay: Mover[] = [{ x, z, hull: 0, leg: 1 }];
-    for (let n = 0; n < 600; n++) {
-      replay = advanceMovers([...kinds], replay, routes, 1 / 60, field);
-    }
+    const drive = (damage: DamageField, felled: number[]): Mover[] => {
+      const crush: CrushContext = { field: damage, points: [{ x, z }], onCrush: (f) => felled.push(...f) };
+      let movers: Mover[] = [{ x, z, hull: 0, leg: 1 }];
+      for (let n = 0; n < 600; n++) {
+        movers = advanceMovers([...kinds], movers, routes, 1 / 60, field, crush);
+      }
+      return movers;
+    };
+    const damage = createDamageField(1, 0);
+    const felled: number[] = [];
+    const movers = drive(damage, felled);
+    // Felled the spawn tree on the way out and drove south down the route.
+    expect(felled).toEqual([0]);
+    expect(damage.trees[0]).toBe("toppled");
+    expect(movers[0]!.z).toBeGreaterThan(z);
+    // Deterministic: the same crush replays exactly.
+    const replayDamage = createDamageField(1, 0);
+    const replay = drive(replayDamage, []);
     expect(replay[0]).toEqual(movers[0]);
   });
 

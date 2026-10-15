@@ -8,6 +8,7 @@ import {
   HULL_TILT_SLEW,
   MAX_DRIVE_GRADE,
   MAX_HULL_TILT,
+  CRUSH_DRAG,
   ROCK_DRAG,
   ROUGH_SLOPE_FLOOR,
   TREE_DRAG,
@@ -23,6 +24,7 @@ import {
   slewTilt,
   stepBlocked,
   terrainSpeedScale,
+  treesCrushedByStep,
   trunkBlockedAt,
   trunkKeepoutFor,
   type SeatField,
@@ -344,17 +346,19 @@ describe("tree-trunk collision", () => {
     expect(trunkBlockedAt(flatField(), trunk.x, trunk.z, "stump")).toBe(false);
   });
 
-  it("refuses steps into trunks but lets escapes out", () => {
+  it("drives through trunks instead of refusing (crush, not block)", () => {
     const field = trunkField();
     const trunk = trunkWorld(field, 16, 16);
     const west = { x: trunk.x - 40, z: trunk.z };
     const east = { x: trunk.x + 40, z: trunk.z };
-    // Straight through the trunk: refused, whatever the kind.
+    // Straight through the trunk: free — the hull crushes it (see the crush
+    // tests below and movement.test.ts), whatever the kind.
     expect(segmentClipsTrunk(field, west.x, west.z, east.x, east.z, "flash")).toBe(true);
-    expect(stepBlocked(field, west.x, west.z, east.x, east.z, "flash")).toBe(true);
-    // Landing inside the keepout: refused.
+    expect(stepBlocked(field, west.x, west.z, east.x, east.z, "flash")).toBe(false);
+    // Landing inside the keepout: free too.
     expect(segmentClipsTrunk(field, west.x, west.z, trunk.x, trunk.z, "flash")).toBe(true);
-    // Skirting outside the keepout: free.
+    expect(stepBlocked(field, west.x, west.z, trunk.x, trunk.z, "flash")).toBe(false);
+    // Skirting outside the keepout: free, as before.
     const keepout = trunkKeepoutFor("flash");
     expect(
       segmentClipsTrunk(field, west.x, west.z - keepout - 2, east.x, east.z - keepout - 2, "flash"),
@@ -366,8 +370,10 @@ describe("tree-trunk collision", () => {
     // farther out) — this is how spawns on trunks drive free.
     expect(segmentClipsTrunk(field, trunk.x, trunk.z, trunk.x + 5, trunk.z, "flash")).toBe(false);
     expect(stepBlocked(field, trunk.x, trunk.z, trunk.x + 5, trunk.z, "flash")).toBe(false);
-    // Milling around inside (ending nearer) stays refused.
+    // Milling around inside (ending nearer) still clips the trunk circle —
+    // the drive no longer consults it, but the lean/avoid helpers do.
     expect(segmentClipsTrunk(field, trunk.x + 5, trunk.z, trunk.x + 2, trunk.z, "flash")).toBe(true);
+    expect(stepBlocked(field, trunk.x + 5, trunk.z, trunk.x + 2, trunk.z, "flash")).toBe(false);
     // Feature-less fields never clip, keeping terrain-less parity.
     expect(segmentClipsTrunk(flatField(), west.x, west.z, east.x, east.z, "flash")).toBe(false);
   });
@@ -434,5 +440,80 @@ describe("slewTilt", () => {
     let tilt = -MAX_HULL_TILT;
     for (let n = 0; n < 30; n++) tilt = slewTilt(tilt, MAX_HULL_TILT, HULL_TILT_SLEW / 60);
     expect(tilt).toBeCloseTo(MAX_HULL_TILT, 9);
+  });
+});
+
+describe("hull crush contact (which standing trees a step touches)", () => {
+  /** Two standing trees 64 world units apart on the mid row. */
+  function twoTrees(): { points: { x: number; z: number }[]; states: ("intact")[] } {
+    const w = 32;
+    const h = 32;
+    const at = (cellX: number, cellZ: number): { x: number; z: number } => ({
+      x: (cellX - (w - 1) / 2) * CELL_PIXELS,
+      z: (cellZ - (h - 1) / 2) * CELL_PIXELS,
+    });
+    return { points: [at(14, 16), at(18, 16)], states: ["intact", "intact"] };
+  }
+
+  it("crawls much slower than canopy brush while crushing", () => {
+    // Ordering pin: crushing a fresh lane (0.25) labours far below the
+    // canopy-brush proximity drag (0.6) — and both below open ground.
+    expect(CRUSH_DRAG).toBe(0.25);
+    expect(CRUSH_DRAG).toBeLessThan(TREE_DRAG);
+    expect(TREE_DRAG).toBeLessThan(1);
+  });
+
+  it("flags the tree a step drives over, in ascending fid order", () => {
+    const { points, states } = twoTrees();
+    const a = points[0]!;
+    // Straight over the first tree only (64u lane, keepout ~12): one hit.
+    expect(treesCrushedByStep(points, states, a.x - 40, a.z, a.x + 20, a.z, "flash")).toEqual([0]);
+    // A lane through both trunks clips both keepouts.
+    const b = points[1]!;
+    expect(treesCrushedByStep(points, states, a.x - 40, a.z, b.x + 40, b.z, "flash")).toEqual([0, 1]);
+    // A parallel lane two keepouts north touches nothing.
+    const keepout = trunkKeepoutFor("flash");
+    expect(
+      treesCrushedByStep(points, states, a.x - 40, a.z - keepout - 4, a.x + 40, a.z - keepout - 4, "flash"),
+    ).toEqual([]);
+    // Degenerate (zero-length) steps still crush the tree under the hull —
+    // this is how a spawn parked on a trunk fells it getting out.
+    expect(treesCrushedByStep(points, states, a.x, a.z, a.x, a.z, "flash")).toEqual([0]);
+  });
+
+  it("sizes contact per kind and skips felled or gone trees", () => {
+    const { points } = twoTrees();
+    const a = points[0]!;
+    // Commander (flank 7 + trunk 4 = 11) vs stump (10 + 4 = 14): a lane at
+    // 12.5u clips for the wide hull only.
+    const lane = 12.5;
+    expect(treesCrushedByStep(points, ["intact"], a.x - 40, a.z + lane, a.x + 40, a.z + lane, "stump")).toEqual([
+      0,
+    ]);
+    expect(
+      treesCrushedByStep(points, ["intact"], a.x - 40, a.z + lane, a.x + 40, a.z + lane, "commander"),
+    ).toEqual([]);
+    // Felled and gone trees are already flat: never re-counted, so crushed
+    // lanes stay crushed and later passes ride free of crush drag.
+    for (const state of ["toppled", "stump", "snag", "gone"] as const) {
+      expect(treesCrushedByStep(points, [state], a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([]);
+    }
+    // Burning trees still stand: crushing one puts its fire out (crushTree).
+    expect(treesCrushedByStep(points, ["burning"], a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([
+      0,
+    ]);
+    // Deterministic: replays agree exactly.
+    const lane2 = treesCrushedByStep(points, ["intact", "intact"], a.x - 40, a.z, a.x + 200, a.z, "flash");
+    expect(lane2).toEqual([0, 1]);
+    expect(treesCrushedByStep(points, ["intact", "intact"], a.x - 40, a.z, a.x + 200, a.z, "flash")).toEqual(
+      lane2,
+    );
+  });
+
+  it("counts every point as standing without states (drag estimate)", () => {
+    const { points } = twoTrees();
+    const a = points[0]!;
+    expect(treesCrushedByStep(points, undefined, a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([0]);
+    expect(treesCrushedByStep([], [], a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([]);
   });
 });

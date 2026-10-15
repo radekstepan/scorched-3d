@@ -4,11 +4,14 @@ import {
   applyBlastToRocks,
   applyBlastToTrees,
   createDamageField,
+  FALLEN_DECAY_DURATION,
+  FALLEN_SINK_DEPTH,
   type TNTMap,
 } from "@scorched-3d/core";
 import {
   buildRocks,
   buildTrees,
+  decaySink,
   placeFeatures,
   writeRockPose,
   writeTreePose,
@@ -131,5 +134,74 @@ describe("feature damage posing", () => {
     const c = new THREE.Color();
     rocks.getColorAt(0, c);
     expect(c.r).toBeLessThan(0.6);
+  });
+});
+
+describe("fallen-tree decay posing", () => {
+  it("sinks toppled trunks below their fell seat, never standing wood", () => {
+    const map = makeMap();
+    const trees = buildTrees(map, 1);
+    const dummy = new THREE.Object3D();
+    // Fresh fall rides at grade; a half-decayed fall rides 3 units lower.
+    writeTreePose(trees, dummy, 0, 100, "toppled", 0);
+    const fresh = trunkPose(trees, 0).pos.y;
+    writeTreePose(trees, dummy, 0, 100, "toppled", 3);
+    expect(trunkPose(trees, 0).pos.y).toBeCloseTo(fresh - 3, 9);
+    // Standing and burning wood ignore the sink.
+    writeTreePose(trees, dummy, 0, 100, "intact", 0);
+    const standing = trunkPose(trees, 0).pos.y;
+    writeTreePose(trees, dummy, 0, 100, "intact", 3);
+    expect(trunkPose(trees, 0).pos.y).toBeCloseTo(standing, 9);
+    writeTreePose(trees, dummy, 0, 100, "burning", 0);
+    const ember = trunkPose(trees, 0).pos.y;
+    writeTreePose(trees, dummy, 0, 100, "burning", 3);
+    expect(trunkPose(trees, 0).pos.y).toBeCloseTo(ember, 9);
+  });
+
+  it("hides gone trees entirely (trunk and crown zeroed)", () => {
+    const map = makeMap();
+    const trees = buildTrees(map, 1);
+    const dummy = new THREE.Object3D();
+    const zeroed = (mesh: THREE.InstancedMesh, index: number): boolean => {
+      const m = new THREE.Matrix4();
+      mesh.getMatrixAt(index, m);
+      return m.elements[0] === 0 && m.elements[5] === 0 && m.elements[10] === 0;
+    };
+    // fid 0 is round (canopy child 1), fid 2 is the pine (cone child 2).
+    writeTreePose(trees, dummy, 0, 100, "gone");
+    expect(zeroed(trees.children[0] as THREE.InstancedMesh, 0)).toBe(true);
+    expect(zeroed(trees.children[1] as THREE.InstancedMesh, 0)).toBe(true);
+    writeTreePose(trees, dummy, 2, 100, "gone");
+    expect(zeroed(trees.children[0] as THREE.InstancedMesh, 2)).toBe(true);
+    expect(zeroed(trees.children[2] as THREE.InstancedMesh, 0)).toBe(true);
+  });
+
+  it("paces the sink from the core fell clock and re-seats decay on snaps", () => {
+    // decaySink is the shared view helper: grade for standing wood, the
+    // core sink curve for fallen wood.
+    expect(decaySink("intact", 100)).toBe(0);
+    expect(decaySink("burning", 100)).toBe(0);
+    expect(decaySink("gone", 100)).toBe(0);
+    expect(decaySink("toppled", 0)).toBe(0);
+    expect(decaySink("stump", FALLEN_DECAY_DURATION / 2)).toBeCloseTo(FALLEN_SINK_DEPTH / 2, 9);
+    expect(decaySink("snag", FALLEN_DECAY_DURATION)).toBe(FALLEN_SINK_DEPTH);
+    // A re-snap (exaggeration change) keeps falls sunk and gone hidden —
+    // decay is field state, never pose state.
+    const map = makeMap();
+    const trees = buildTrees(map, 1);
+    const rocks = buildRocks(map, 1);
+    const field = createDamageField(3, 2);
+    field.trees[0] = "toppled";
+    field.treeAge[0] = FALLEN_DECAY_DURATION / 2;
+    field.trees[1] = "gone";
+    placeFeatures(trees, rocks, map, 2, field);
+    const sunk = trunkPose(trees, 0).pos.y;
+    // Fell seat at 2× exaggeration is 200 + 4, sunk by half the depth (3).
+    expect(sunk).toBeCloseTo(200 + 4 - FALLEN_SINK_DEPTH / 2, 9);
+    const m = new THREE.Matrix4();
+    (trees.children[0] as THREE.InstancedMesh).getMatrixAt(1, m);
+    expect(m.elements[0]).toBe(0);
+    expect(m.elements[5]).toBe(0);
+    expect(m.elements[10]).toBe(0);
   });
 });

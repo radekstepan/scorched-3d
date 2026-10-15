@@ -38,6 +38,7 @@ import { FireFx } from "./fireFx";
 import {
   buildRocks,
   buildTrees,
+  decaySink,
   placeFeatures,
   rockPositions,
   treePositions,
@@ -234,13 +235,26 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       (trees.userData.all as THREE.Vector3[]).length,
       (rocks.userData.positions as THREE.Vector3[]).length,
     );
+    // Fallen (terminal, non-gone) tree fids, re-posed every tick so the
+    // decay sink reads as continuous settling instead of a pop at `gone`.
+    // Entries arrive from blast flattens, burn resolutions, and hull crushes
+    // below; `gone` transitions remove them.
+    const fallen = new Set<number>();
     const allTrees = treePositions(trees);
     const rockPts = rockPositions(rocks);
     const fire = new FireFx(scene);
     const featureDummy = new THREE.Object3D();
     const poseTree = (fid: number): void => {
       const p = allTrees[fid]!;
-      writeTreePose(trees, featureDummy, fid, groundY(p.x, p.z), damage.trees[fid] ?? "intact");
+      const state = damage.trees[fid] ?? "intact";
+      writeTreePose(
+        trees,
+        featureDummy,
+        fid,
+        groundY(p.x, p.z),
+        state,
+        decaySink(state, damage.treeAge[fid] ?? 0),
+      );
     };
     const poseRock = (i: number): void => {
       const p = rockPts[i]!;
@@ -253,7 +267,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const blastFeatures = (x: number, z: number, radius: number): void => {
       const treeRes = applyBlastToTrees(damage, allTrees, x, z, radius, Math.random);
       const rockChanged = applyBlastToRocks(damage, rockPts, x, z, radius);
-      for (const fid of treeRes.flattened) poseTree(fid);
+      for (const fid of treeRes.flattened) {
+        poseTree(fid);
+        fallen.add(fid);
+      }
       for (const fid of treeRes.ignited) {
         poseTree(fid);
         glowFire(fid);
@@ -273,12 +290,23 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets
     // (external hulls) so units fire on the move. Recoil anchors follow the
-    // hulls so the kick restore never snaps a driving unit backward.
+    // hulls so the kick restore never snaps a driving unit backward. Hulls
+    // crush through standing trees at a crawl (felling them into the
+    // decaying `fallen` set) instead of pinning on wood.
     const movement = new UnitMovement(units, planRoutes(map, map.units, map.seed), {
       groundY,
       seat,
       onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
-    }, map);
+    }, map, {
+      field: damage,
+      points: allTrees,
+      onCrush: (fids) => {
+        for (const fid of fids) {
+          poseTree(fid);
+          fallen.add(fid);
+        }
+      },
+    });
     combat.setExternalHull(true);
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
@@ -634,7 +662,17 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         glowFire(fid);
       }
       for (const fid of dmgEv.enteredSmoulder) poseTree(fid);
-      for (const r of dmgEv.resolved) poseTree(r.index);
+      for (const r of dmgEv.resolved) {
+        poseTree(r.index);
+        fallen.add(r.index);
+      }
+      for (const fid of dmgEv.decayed) {
+        poseTree(fid);
+        fallen.delete(fid);
+      }
+      // Fallen-tree decay sink (husk pattern): every fallen trunk re-seats a
+      // little lower each tick until `gone` hides it.
+      for (const fid of fallen) poseTree(fid);
       fire.update(damage, allTrees, groundY, t);
 
       // Selection pulse: advance the shared clock and mutate only visible

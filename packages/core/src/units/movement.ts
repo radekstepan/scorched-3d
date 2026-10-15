@@ -2,13 +2,13 @@ import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
 import {
-  pushOutOfTrunks,
+  CRUSH_DRAG,
   stepBlocked,
   terrainSpeedScale,
-  terrainStepBlocked,
-  TRUNK_PUSH_SPEED,
+  treesCrushedByStep,
   type SeatField,
 } from "./terrain.js";
+import { crushTree, type BlastPoint, type DamageField } from "./destruction.js";
 import type { UnitKind } from "./types.js";
 import type { UnitField } from "./place.js";
 
@@ -39,11 +39,14 @@ import type { UnitField } from "./place.js";
  *   (both read scale 0) shove apart along their pair axes instead of
  *   deadlocking, the way retail re-requests paths for blocked movers rather
  *   than parking them forever.
- * - Standing tree trunks block like narrow walls: the drive clamp refuses
- *   steps entering a trunk keepout (hull flank + trunk radius), endpoint
- *   snaps and formation seats prefer trunk-free cells, smoothing refuses
- *   legs grazing trunks, and a push-out eases hulls off trunks they spawn
- *   on — while blast-felled stumps keep blocking (the wood is still there).
+ * - Standing tree trunks crush under the tracks: the drive clamp never
+ *   refuses wood — a step touching standing trees fells them (`crushTree`,
+ *   reported through the crush context so the renderer re-poses the fall)
+ *   at a `CRUSH_DRAG` crawl, so forest lanes cost speed instead of pinning
+ *   hulls. Endpoint snaps and formation seats still prefer trunk-free cells
+ *   and smoothing still refuses legs grazing trunks, so orders detour around
+ *   woods when they can and plough through only when they must — while
+ *   fallen trunks keep their pose, sink, and decay away like husks.
  * - `internal/content/compile_unit.go` unit-record fields (`MaxVelocity`,
  *   `TurnRate`) become per-kind `MOVE_SPEED` plus the shared hull turn-rate
  *   caps, instead of fixed-point yard-map stamping.
@@ -161,6 +164,20 @@ export interface Mover {
 export interface MoveOrder {
   points: RoutePoint[];
   at: number;
+}
+
+/**
+ * Hull-crush wiring for forest drives: the caller-owned graduated
+ * `DamageField` (the same one blasts and fire tick) plus its fid-ordered
+ * tree positions. Driven steps fell the standing trees they touch at a
+ * `CRUSH_DRAG` crawl, and `onCrush` reports the newly felled fids so the
+ * renderer can re-pose the fall. Absent, drives never fell — terrain-less
+ * history stays byte-identical.
+ */
+export interface CrushContext {
+  field: DamageField;
+  points: readonly BlastPoint[];
+  onCrush?: (felled: number[]) => void;
 }
 
 /** World-space X/Z of an attribute-grid cell center. */
@@ -320,7 +337,9 @@ export function spacingScale(
  * `terrain` is provided, steps into unwalkable/too-steep ground are refused:
  * the hull holds position and keeps turning (retail's blocked-mover
  * behavior) instead of clipping into the hillside; a patrolling hull that
- * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint. Pure:
+ * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint. Wood
+ * never pins: with a `crush` context a step touching standing trees fells
+ * them at a `CRUSH_DRAG` crawl instead of holding. Pure:
  * returns a new mover. Terrain-less stepping is byte-identical to before.
  */
 export function advanceMover(
@@ -330,6 +349,7 @@ export function advanceMover(
   dt: number,
   spacing = 1,
   terrain?: SeatField | null,
+  crush?: CrushContext | null,
 ): Mover {
   if (!(dt > 0)) return mover;
   const order = mover.order;
@@ -343,7 +363,7 @@ export function advanceMover(
       if (at >= order.points.length) return { ...mover, order: undefined, hold: true };
       target = order.points[at]!;
     }
-    return driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }).mover;
+    return driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }, crush).mover;
   }
   if (mover.hold) return mover;
   if (route.length < 2) return mover;
@@ -355,35 +375,12 @@ export function advanceMover(
     leg = (leg + 1) % route.length;
     target = route[leg]!;
   }
-  const driven = driveToward(kind, mover, target, dt, spacing, terrain);
+  const driven = driveToward(kind, mover, target, dt, spacing, terrain, undefined, crush);
   if (driven.skipped) {
     return { ...driven.mover, leg: (leg + 1) % route.length, stuck: 0 };
   }
   return { ...driven.mover, leg };
 }
-
-/**
- * Deflected drive bearings tried in order when a step is refused by wood
- * alone: slide around the trunk instead of grinding on it. Walls
- * (water/steep) never reach here — they hold, as before. Selection is
- * two-stage (see `driveToward`): the ideal step (hull assumed turned) picks
- * the bearing, the capped turn then swings toward it over ticks, and the
- * hull drives once the lagged step opens. Candidates must be evaluated
- * ideally because a turn-lagged endpoint stays within a degree of the
- * blocked heading and would reject every deflection. Deterministic: fixed
- * candidate order, first free ideal wins. Forward hemisphere only — a
- * blocked hull slides around wood, never retreats from its goal.
- */
-const TRUNK_SLIDE_DELTAS = [
-  Math.PI / 12,
-  -Math.PI / 12,
-  Math.PI / 6,
-  -Math.PI / 6,
-  Math.PI / 4,
-  -Math.PI / 4,
-  Math.PI / 3,
-  -Math.PI / 3,
-];
 
 /** Turn the hull toward `target` and drive forward along it. */
 function driveToward(
@@ -394,6 +391,7 @@ function driveToward(
   spacing: number,
   terrain?: SeatField | null,
   order?: MoveOrder,
+  crush?: CrushContext | null,
 ): { mover: Mover; skipped: boolean } {
   const desired = yawToTarget(mover, target);
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
@@ -406,10 +404,17 @@ function driveToward(
     // step (flat open ground scales by exactly 1). Probed to the full-stride
     // candidate so the drag reads the ground the hull would actually cross;
     // the hull still refuses unwalkable steps below, this only slows allowed
-    // ones.
+    // ones. A step touching standing wood crawls further at CRUSH_DRAG —
+    // ploughing a fresh lane reads much slower than brushing canopy.
     const stride = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * grip * dt;
     const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(hull) * stride, mover.z + Math.cos(hull) * stride) : 1;
-    const step = stride * rough;
+    const probeX = mover.x + Math.sin(hull) * stride * rough;
+    const probeZ = mover.z + Math.cos(hull) * stride * rough;
+    const crushing =
+      crush != null
+        ? treesCrushedByStep(crush.points, crush.field.trees, mover.x, mover.z, probeX, probeZ, kind)
+        : [];
+    const step = stride * rough * (crushing.length > 0 ? CRUSH_DRAG : 1);
     return { hull, nx: mover.x + Math.sin(hull) * step, nz: mover.z + Math.cos(hull) * step };
   };
   const baseFor = (hull: number): Pick<Mover, "hull" | "leg"> & Partial<Mover> => ({
@@ -420,6 +425,26 @@ function driveToward(
   });
   const direct = endpoint(desired);
   if (!terrain || !stepBlocked(terrain, mover.x, mover.z, direct.nx, direct.nz, kind)) {
+    // Fell the standing trees the taken step touches (re-tested on the
+    // crush-shortened stride, so only wood actually reached falls), and
+    // report the fresh falls for the renderer to re-pose. Felled lanes stay
+    // felled, so later passes skip both the fell and the crawl.
+    if (crush != null) {
+      const touched = treesCrushedByStep(
+        crush.points,
+        crush.field.trees,
+        mover.x,
+        mover.z,
+        direct.nx,
+        direct.nz,
+        kind,
+      );
+      if (touched.length > 0) {
+        const felled: number[] = [];
+        for (const fid of touched) if (crushTree(crush.field, fid)) felled.push(fid);
+        if (felled.length > 0) crush.onCrush?.(felled);
+      }
+    }
     // A successful step clears accumulated blocked time — but keep the key
     // absent (not zero) when it was never set, so terrain-less history and
     // old snapshots compare equal.
@@ -428,39 +453,9 @@ function driveToward(
     }
     return { mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull), stuck: 0 }, skipped: false };
   }
-  if (!terrainStepBlocked(terrain, mover.x, mover.z, direct.nx, direct.nz)) {
-    // Wood alone blocks the step: pick a slide bearing whose ideal step
-    // (hull assumed already turned, grip 1) clears the wood, turn toward it
-    // this tick, and drive once the capped turn arrives. Slides still count
-    // as pinned time, so a patrol circling wood it can never clear skips its
-    // leg on schedule instead of orbiting forever; orders ignore the counter
-    // and keep working around.
-    const speed = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * dt;
-    for (const delta of TRUNK_SLIDE_DELTAS) {
-      const want = desired + delta;
-      const probeX = mover.x + Math.sin(want) * speed;
-      const probeZ = mover.z + Math.cos(want) * speed;
-      const rough = terrainSpeedScale(terrain, mover.x, mover.z, probeX, probeZ);
-      const ix = mover.x + Math.sin(want) * speed * rough;
-      const iz = mover.z + Math.cos(want) * speed * rough;
-      if (stepBlocked(terrain, mover.x, mover.z, ix, iz, kind)) continue;
-      const cand = endpoint(want);
-      if (!stepBlocked(terrain, mover.x, mover.z, cand.nx, cand.nz, kind)) {
-        return {
-          mover: { x: cand.nx, z: cand.nz, ...baseFor(cand.hull), stuck: (mover.stuck ?? 0) + dt },
-          skipped: false,
-        };
-      }
-      const hull = stepAngle(mover.hull, want, rate * dt);
-      const stuck = (mover.stuck ?? 0) + dt;
-      const base = baseFor(hull);
-      if (!order && stuck >= BLOCKED_SKIP_AFTER) return { mover: { ...mover, ...base }, skipped: true };
-      return { mover: { ...mover, ...base, stuck }, skipped: false };
-    }
-  }
-  // Pinned: turn in place, never enter the slope — or the trunk. Patrol
-  // legs (no live order) skip ahead once patience runs out; orders hold
-  // their ground.
+  // Pinned: turn in place, never enter the slope. Patrol legs (no live
+  // order) skip ahead once patience runs out; orders hold their ground.
+  // Wood never pins — crush steps above always drive — so only walls wait.
   const stuck = (mover.stuck ?? 0) + dt;
   const base = baseFor(direct.hull);
   if (!order && stuck >= BLOCKED_SKIP_AFTER) return { mover: { ...mover, ...base }, skipped: true };
@@ -474,6 +469,7 @@ export function advanceMovers(
   routes: readonly RoutePoint[][],
   dt: number,
   terrain?: SeatField | null,
+  crush?: CrushContext | null,
 ): Mover[] {
   if (!(dt > 0) || movers.length === 0) {
     // No time passes: keep the old step exactly (same refs, no separation —
@@ -486,7 +482,7 @@ export function advanceMovers(
     return hasOrder(m) ? Math.max(scale, ORDER_SPACING_FLOOR) : scale;
   });
   const driven = movers.map((m, i) =>
-    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain),
+    advanceMover(kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush),
   );
   return resolveSeparation(driven, kinds, dt, terrain);
 }
@@ -569,44 +565,5 @@ function resolveSeparation(
     }
     return mover;
   });
-  return resolveTrunks(unstacked, kinds, dt, terrain);
-}
-
-/**
- * Trunk push-out: ease any hull parked inside a standing trunk's keepout
- * toward open ground (`pushOutOfTrunks`), so a spawn on a trunk — or a
- * shove that landed on one — exits instead of grinding. The ease is gated
- * by `stepBlocked` with axis-slide fallback like the unit separation
- * above, so the exit never clips into water, steep ground, or a second
- * trunk. Pure: returns new movers. Feature-less fields are untouched.
- */
-function resolveTrunks(
-  movers: Mover[],
-  kinds: readonly UnitKind[],
-  dt: number,
-  terrain?: SeatField | null,
-): Mover[] {
-  if (!terrain?.features) return movers;
-  const step = TRUNK_PUSH_SPEED * dt;
-  return movers.map((mover, i) => {
-    const kind = kinds[i] ?? "flash";
-    const exit = pushOutOfTrunks(terrain, mover.x, mover.z, kind);
-    const dx = exit.x - mover.x;
-    const dz = exit.z - mover.z;
-    const d = Math.hypot(dx, dz);
-    if (!(d > 0)) return mover;
-    const ease = Math.min(d, step);
-    const nx = mover.x + (dx / d) * ease;
-    const nz = mover.z + (dz / d) * ease;
-    if (!stepBlocked(terrain, mover.x, mover.z, nx, nz, kind)) {
-      return { ...mover, x: nx, z: nz };
-    }
-    if (!stepBlocked(terrain, mover.x, mover.z, nx, mover.z, kind)) {
-      return { ...mover, x: nx };
-    }
-    if (!stepBlocked(terrain, mover.x, mover.z, mover.x, nz, kind)) {
-      return { ...mover, z: nz };
-    }
-    return mover;
-  });
+  return unstacked;
 }

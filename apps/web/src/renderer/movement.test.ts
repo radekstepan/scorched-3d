@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
   FORMATION_MIN_SEPARATION,
+  createDamageField,
   isWalkable,
   pathWorldToCell,
   sampleHeightBilinear,
   seatHull,
-  trunkBlockedAt,
   yawToTarget,
   type RoutePoint,
   type TNTMap,
@@ -347,12 +347,56 @@ describe("terrain seating", () => {
     movement.dispose();
   });
 
-  it("routes ordered hulls around standing trunks instead of through them", () => {
-    // Integration over the core trunk pipeline (endpoint snap + smoothed
-    // keepout legs + drive clamp + slide): a stump ordered across a solid
-    // tree belt detours around it and arrives without ever entering a trunk
-    // keepout, and an exaggeration re-snap keeps its X/Z (re-seats sit the
-    // body, never teleport it).
+  it("crushes patrol lanes through tree belts instead of pinning on trunks", () => {
+    // Patrol legs cut straight across whatever the waypoints straddle: with
+    // a crush context the hull ploughs a lane through the belt at a crawl,
+    // felling the trees it touches (reported via onCrush for re-posing) and
+    // crossing instead of holding at the tree line — and an exaggeration
+    // re-snap keeps its X/Z (re-seats sit the body, never teleport it).
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    for (let z = 8; z <= 15; z++) {
+      for (let x = 5; x < w - 5; x++) features[z * w + x] = 0;
+    }
+    const field = { width: w, height: h, heights, seaLevel: 0, features };
+    const ex = { v: 1 };
+    const units = rampGroup();
+    (units.children[0] as THREE.Group).position.set(-280, 100, -8);
+    const routes: RoutePoint[][] = [[{ x: -280, z: -8 }, { x: 280, z: -8 }]];
+    // Crush points: the lane row (world z=-8 is row 11) in fid order.
+    const lane: { x: number; z: number }[] = [];
+    for (let cx = 5; cx < w - 5; cx++) lane.push({ x: (cx - (w - 1) / 2) * 16, z: -8 });
+    const damage = createDamageField(lane.length, 0);
+    const felled: number[] = [];
+    const movement = new UnitMovement(units, routes, rampEnv(field, ex), field, {
+      field: damage,
+      points: lane,
+      onCrush: (f) => felled.push(...f),
+    });
+    let maxX = -Infinity;
+    for (let n = 0; n < 7200; n++) {
+      movement.update(1 / 60);
+      maxX = Math.max(maxX, movement.positions()[0]!.x);
+    }
+    // Crossed the belt lane (east edge is world x=232) instead of pinning
+    // at the tree line, felling wood behind it.
+    expect(maxX).toBeGreaterThan(232);
+    expect(felled.length).toBeGreaterThan(0);
+    for (const fid of felled) expect(damage.trees[fid]).toBe("toppled");
+    const parked = (units.children[0] as THREE.Group).position.clone();
+    movement.resnap();
+    expect((units.children[0] as THREE.Group).position.x).toBeCloseTo(parked.x, 9);
+    expect((units.children[0] as THREE.Group).position.z).toBeCloseTo(parked.z, 9);
+    movement.dispose();
+  });
+
+  it("still routes ordered hulls around tree belts to arrive", () => {
+    // Pathfinding still prefers open ground (endpoint snap + smoothed
+    // keepout legs): an ordered stump detours around the belt and arrives.
+    // Corner arcs may graze a trunk on the way — wood never pins, so the
+    // order completes either way.
     const w = 40;
     const h = 24;
     const heights = new Uint8Array(w * h).fill(100);
@@ -367,11 +411,7 @@ describe("terrain seating", () => {
     const routes: RoutePoint[][] = [[{ x: -280, z: -8 }, { x: -280, z: -8 }]];
     const movement = new UnitMovement(units, routes, rampEnv(field, ex), field);
     movement.orderUnit(0, { x: 280, z: -8 });
-    for (let n = 0; n < 7200; n++) {
-      movement.update(1 / 60);
-      const p = movement.positions()[0]!;
-      expect(trunkBlockedAt(field, p.x, p.z, "stump")).toBe(false);
-    }
+    for (let n = 0; n < 7200; n++) movement.update(1 / 60);
     expect(movement.hasOrder(0)).toBe(false);
     const parked = (units.children[0] as THREE.Group).position.clone();
     movement.resnap();

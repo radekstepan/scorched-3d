@@ -9,6 +9,7 @@ import {
   orderMover,
   slewTilt,
   snappedFormationTargets,
+  type CrushContext,
   type HullSeat,
   type Mover,
   type PlacedUnit,
@@ -55,6 +56,7 @@ export class UnitMovement {
   private movers: Mover[];
   private env: MovementEnv;
   private field: SeatField | null;
+  private crush: CrushContext | null;
   private disposed = false;
   /**
    * Wreck flags by unit index: a destroyed hull holds position forever
@@ -70,11 +72,13 @@ export class UnitMovement {
     routes: RoutePoint[][],
     env: MovementEnv,
     field?: SeatField | null,
+    crush?: CrushContext | null,
   ) {
     this.units = units;
     this.routes = routes;
     this.env = env;
     this.field = field ?? null;
+    this.crush = crush ?? null;
     const placed = (units.userData.units as PlacedUnit[] | undefined) ?? [];
     this.kinds = units.children.map((_, i) => placed[i]?.kind ?? "flash");
     // Seed patrol state from live bodies (spawn == route waypoint 0, so the
@@ -161,7 +165,7 @@ export class UnitMovement {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
-    const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field);
+    const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush);
     // Wrecks never move: freeze their movers at the pre-tick state (core
     // separation may have shoved them). Live hulls still spacing-avoid the
     // wreck positions, so nobody drives through a wreck.

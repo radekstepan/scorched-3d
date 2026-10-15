@@ -1,5 +1,6 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import type { UnitField } from "./place.js";
+import type { BlastPoint, TreeDamage } from "./destruction.js";
 import {
   isTreeCell,
   isWalkable,
@@ -93,6 +94,13 @@ export const ROUGH_SLOPE_FLOOR = 0.45;
 export const TREE_DRAG = 0.6;
 /** Speed fraction while picking through rocks or metal deposits. */
 export const ROCK_DRAG = 0.5;
+/**
+ * Speed fraction while a step crushes standing wood (see
+ * `treesCrushedByStep`): far slower than the `TREE_DRAG` canopy brush, so
+ * ploughing a fresh lane through forest reads as labouring — while a second
+ * pass over the already-fallen trunks rides the lighter proximity drag.
+ */
+export const CRUSH_DRAG = 0.25;
 
 /** Seated pose for one hull: surface height plus hull-frame tilt. */
 export interface HullSeat {
@@ -245,11 +253,13 @@ export function terrainStepBlocked(
 }
 
 /**
- * Full drive gate: unwalkable/too-steep ground (see `terrainStepBlocked`)
- * plus standing-trunk keepouts (see `segmentClipsTrunk`). A blocked mover
- * holds position and keeps turning toward its target (retail's
- * blocked-mover behavior) instead of clipping into the slope — or through
- * the trunk.
+ * Full drive gate: unwalkable/too-steep ground (see `terrainStepBlocked`).
+ * Standing trunks do NOT block: hulls crush through forest (felling the
+ * trees they touch — see `treesCrushedByStep` — at `CRUSH_DRAG` crawl)
+ * instead of grinding on wood. A blocked mover holds position and keeps
+ * turning toward its target (retail's blocked-mover behavior) instead of
+ * clipping into the slope. The `kind` parameter is retained for call-site
+ * compatibility only; keepout sizing now lives with the crush test.
  */
 export function stepBlocked(
   field: SeatField,
@@ -257,10 +267,42 @@ export function stepBlocked(
   fromZ: number,
   toX: number,
   toZ: number,
-  kind?: UnitKind,
+  _kind?: UnitKind,
 ): boolean {
-  if (terrainStepBlocked(field, fromX, fromZ, toX, toZ)) return true;
-  return segmentClipsTrunk(field, fromX, fromZ, toX, toZ, kind);
+  return terrainStepBlocked(field, fromX, fromZ, toX, toZ);
+}
+
+/**
+ * Standing-tree fids a drive step crushes: intact/burning trees (indexed
+ * like the caller's `DamageField` — e.g. the renderer's fid-ordered tree
+ * positions) whose trunk keepout the step's segment enters. Felled
+ * (`toppled`/`stump`/`snag`) and decayed (`gone`) trees are already flat and
+ * never re-counted, so a crushed lane stays crushed and later passes ride
+ * free of crush drag. Without `states` every point counts as standing (pure
+ * terrain drag estimate). Deterministic ascending fid order; pure, shared by
+ * the drive drag and the fell pass so both agree on which trees a step
+ * touches.
+ */
+export function treesCrushedByStep(
+  points: readonly BlastPoint[],
+  states: readonly TreeDamage[] | undefined,
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+  kind?: UnitKind,
+): number[] {
+  const keepout = trunkKeepoutFor(kind);
+  const r2 = keepout * keepout;
+  const crushed: number[] = [];
+  const n = Math.min(points.length, states?.length ?? points.length);
+  for (let i = 0; i < n; i++) {
+    const state = states?.[i];
+    if (state !== undefined && state !== "intact" && state !== "burning") continue;
+    const p = points[i]!;
+    if (segmentPointDistSq(fromX, fromZ, toX, toZ, p.x, p.z) < r2) crushed.push(i);
+  }
+  return crushed;
 }
 
 /** Hull body radius for trunk keepout: the flank half-width it turns with. */

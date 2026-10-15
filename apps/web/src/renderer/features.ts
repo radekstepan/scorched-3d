@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import {
   CELL_PIXELS,
+  fallenDecay,
+  fallenSink,
   FEATURE_EMPTY,
   type DamageField,
   type RockDamage,
@@ -140,6 +142,17 @@ export function rockPositions(rocks: THREE.InstancedMesh): THREE.Vector3[] {
   return rocks.userData.positions as THREE.Vector3[];
 }
 
+/**
+ * Decay sink for a tree state: fallen (terminal, non-gone) trees ride below
+ * their fell seat by the core pacing for their fell age; everything else
+ * poses at grade. Shared by re-snaps and the per-tick sink pass so both
+ * agree.
+ */
+export function decaySink(state: TreeDamage, fellAge: number): number {
+  if (state !== "toppled" && state !== "stump" && state !== "snag") return 0;
+  return fallenSink(fallenDecay(fellAge));
+}
+
 /** Re-seat every feature after an exaggeration change; damage survives. */
 export function placeFeatures(
   trees: THREE.Group,
@@ -155,7 +168,8 @@ export function placeFeatures(
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
     const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
-    writeTreePose(trees, dummy, fid, y, field?.trees[fid] ?? "intact");
+    const state = field?.trees[fid] ?? "intact";
+    writeTreePose(trees, dummy, fid, y, state, decaySink(state, field?.treeAge[fid] ?? 0));
   }
 
   const pts = rockPositions(rocks);
@@ -180,7 +194,10 @@ function hideCrown(mesh: THREE.InstancedMesh, dummy: THREE.Object3D, index: numb
 /**
  * Pose one tree for a damage state. Feature id `fid` indexes round trees
  * first, then pines — matching the trunk order in `buildTrees`. Shared by
- * blast damage, fire ticks, and exaggeration re-snaps so damage survives.
+ * blast damage, fire ticks, crush falls, decay sinks, and exaggeration
+ * re-snaps so damage survives. `sink` lowers fallen (terminal, non-gone)
+ * trees toward the ground as they decay (husk pattern); `gone` hides the
+ * instance entirely.
  */
 export function writeTreePose(
   trees: THREE.Group,
@@ -188,11 +205,15 @@ export function writeTreePose(
   fid: number,
   y: number,
   damage: TreeDamage = "intact",
+  sink = 0,
 ): void {
   const { round, pines } = trees.userData.positions as { round: THREE.Vector3[]; pines: THREE.Vector3[] };
   const trunks = trees.children[0] as THREE.InstancedMesh;
   const canopies = trees.children[1] as THREE.InstancedMesh;
   const cones = trees.children[2] as THREE.InstancedMesh;
+  // Fallen wood rides below its fell seat while decaying; standing and
+  // burning wood never sinks.
+  const ty = damage === "toppled" || damage === "stump" || damage === "snag" ? y - sink : y;
   if (fid < round.length) {
     const p = round[fid]!;
     const i = fid;
@@ -243,13 +264,13 @@ export function writeTreePose(
         break;
       case "toppled": {
         // Knocked on its side: trunk lies along +X, crown sprawls past it.
-        dummy.position.set(p.x, y + 4, p.z);
+        dummy.position.set(p.x, ty + 4, p.z);
         dummy.scale.setScalar(s);
         dummy.rotation.set(0, 0, 1.35);
         dummy.updateMatrix();
         trunks.setMatrixAt(i, dummy.matrix);
         tint(trunks, i, 0.22, 0.17, 0.12);
-        dummy.position.set(p.x + 13 * s, y + 4, p.z);
+        dummy.position.set(p.x + 13 * s, ty + 4, p.z);
         dummy.scale.setScalar(cs * 0.8);
         dummy.rotation.set(0, 0, 1.35);
         dummy.updateMatrix();
@@ -258,7 +279,7 @@ export function writeTreePose(
         break;
       }
       case "stump":
-        dummy.position.set(p.x, y + 3, p.z);
+        dummy.position.set(p.x, ty + 3, p.z);
         dummy.scale.set(s, 0.3, s);
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
@@ -268,12 +289,24 @@ export function writeTreePose(
         break;
       case "snag":
         // Charred standing trunk, crown burnt away.
-        dummy.position.set(p.x, y + 7, p.z);
+        dummy.position.set(p.x, ty + 7, p.z);
         dummy.scale.set(s, 0.75, s);
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         trunks.setMatrixAt(i, dummy.matrix);
         tint(trunks, i, 0.18, 0.14, 0.11);
+        hideCrown(canopies, dummy, i, y, p.x, p.z);
+        break;
+      case "gone":
+        // Decayed away: trunk and crown both hidden (zeroed matrices), like
+        // a finished husk — the fid slot is retained, only the instance
+        // vanishes.
+        dummy.position.set(p.x, y, p.z);
+        dummy.scale.setScalar(0);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        trunks.setMatrixAt(i, dummy.matrix);
+        tint(trunks, i, 1, 1, 1);
         hideCrown(canopies, dummy, i, y, p.x, p.z);
         break;
     }
@@ -322,13 +355,13 @@ export function writeTreePose(
         tint(cones, k, 0.14, 0.13, 0.11);
         break;
       case "toppled":
-        dummy.position.set(p.x, y + 4, p.z);
+        dummy.position.set(p.x, ty + 4, p.z);
         dummy.scale.set(0.7, 1, 0.7);
         dummy.rotation.set(0, 0, 1.35);
         dummy.updateMatrix();
         trunks.setMatrixAt(round.length + k, dummy.matrix);
         tint(trunks, round.length + k, 0.22, 0.17, 0.12);
-        dummy.position.set(p.x + 13, y + 4, p.z);
+        dummy.position.set(p.x + 13, ty + 4, p.z);
         dummy.scale.setScalar(cs * 0.8);
         dummy.rotation.set(0, 0, 1.35);
         dummy.updateMatrix();
@@ -336,7 +369,7 @@ export function writeTreePose(
         tint(cones, k, 0.12, 0.15, 0.12);
         break;
       case "stump":
-        dummy.position.set(p.x, y + 3, p.z);
+        dummy.position.set(p.x, ty + 3, p.z);
         dummy.scale.set(0.7, 0.3, 0.7);
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
@@ -345,12 +378,22 @@ export function writeTreePose(
         hideCrown(cones, dummy, k, y, p.x, p.z);
         break;
       case "snag":
-        dummy.position.set(p.x, y + 7, p.z);
+        dummy.position.set(p.x, ty + 7, p.z);
         dummy.scale.set(0.7, 0.75, 0.7);
         dummy.rotation.set(0, 0, 0);
         dummy.updateMatrix();
         trunks.setMatrixAt(round.length + k, dummy.matrix);
         tint(trunks, round.length + k, 0.18, 0.14, 0.11);
+        hideCrown(cones, dummy, k, y, p.x, p.z);
+        break;
+      case "gone":
+        // Decayed away: trunk and cone both hidden (zeroed matrices).
+        dummy.position.set(p.x, y, p.z);
+        dummy.scale.setScalar(0);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        trunks.setMatrixAt(round.length + k, dummy.matrix);
+        tint(trunks, round.length + k, 1, 1, 1);
         hideCrown(cones, dummy, k, y, p.x, p.z);
         break;
     }

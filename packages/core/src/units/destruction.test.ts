@@ -11,9 +11,15 @@ import {
   craterDepthForIntensity,
   craterFalloff,
   createDamageField,
+  crushTree,
+  FALLEN_DECAY_DURATION,
+  FALLEN_SINK_DEPTH,
+  fallenDecay,
+  fallenSink,
   FIRE_SPREAD_RADIUS,
   igniteTree,
   indicesInBlast,
+  isFallenGone,
   isTerminalTree,
   MAX_CRATER_DEPTH,
   MAX_CRATER_TOTAL,
@@ -370,5 +376,125 @@ describe("graduated collateral damage", () => {
     // Terminal trees stay terminal through long idle ticks (no resurrection).
     tickDamage(field, [{ x: 0, z: 0 }, { x: 9000, z: 0 }], 60, mulberry32(3));
     expect(isTerminalTree(field.trees[0]!)).toBe(true);
+  });
+});
+
+describe("hull crush (units fell trees by driving over them)", () => {
+  it("flattens intact and burning trees to toppled, restarting the fell clock", () => {
+    const field = createDamageField(3, 0);
+    field.treeAge[0] = 4.5;
+    expect(igniteTree(field, 1)).toBe(true);
+    expect(crushTree(field, 0)).toBe(true);
+    expect(field.trees[0]).toBe("toppled");
+    expect(field.treeAge[0]).toBe(0);
+    // Bulldozing a burning tree puts its fire out (no more flame/smoke).
+    expect(crushTree(field, 1)).toBe(true);
+    expect(field.trees[1]).toBe("toppled");
+    expect(field.treeAge[1]).toBe(0);
+    // Untouched trees stay intact.
+    expect(field.trees[2]).toBe("intact");
+  });
+
+  it("never re-touches terminal, gone, or out-of-range trees", () => {
+    const field = createDamageField(2, 0);
+    field.trees[0] = "stump";
+    field.trees[1] = "gone";
+    expect(crushTree(field, 0)).toBe(false);
+    expect(crushTree(field, 1)).toBe(false);
+    expect(field.trees[0]).toBe("stump");
+    expect(field.trees[1]).toBe("gone");
+    expect(crushTree(field, -1)).toBe(false);
+    expect(crushTree(field, 2)).toBe(false);
+  });
+});
+
+describe("fallen-tree decay (felled trees sink and vanish like husks)", () => {
+  it("paces decay 0 → 1 over the duration, clamped at both ends", () => {
+    expect(FALLEN_DECAY_DURATION).toBe(45);
+    expect(fallenDecay(-3)).toBe(0);
+    expect(fallenDecay(0)).toBe(0);
+    expect(fallenDecay(FALLEN_DECAY_DURATION / 2)).toBeCloseTo(0.5, 12);
+    expect(fallenDecay(FALLEN_DECAY_DURATION)).toBe(1);
+    expect(fallenDecay(FALLEN_DECAY_DURATION * 3)).toBe(1);
+    expect(isFallenGone(FALLEN_DECAY_DURATION - 0.1)).toBe(false);
+    expect(isFallenGone(FALLEN_DECAY_DURATION)).toBe(true);
+  });
+
+  it("sinks linearly to the full depth, clamped", () => {
+    expect(FALLEN_SINK_DEPTH).toBe(6);
+    expect(fallenSink(0)).toBe(0);
+    expect(fallenSink(0.5)).toBeCloseTo(FALLEN_SINK_DEPTH / 2, 12);
+    expect(fallenSink(1)).toBe(FALLEN_SINK_DEPTH);
+    expect(fallenSink(-1)).toBe(0);
+    expect(fallenSink(2)).toBe(FALLEN_SINK_DEPTH);
+  });
+
+  it("ages every fallen state to gone with a decay event, however felled", () => {
+    const field = createDamageField(4, 0);
+    field.trees[0] = "toppled";
+    field.trees[1] = "stump";
+    field.trees[2] = "snag";
+    // Half the decay: still fallen, no events.
+    let ev = tickDamage(
+      field,
+      [
+        { x: 0, z: 0 },
+        { x: 5000, z: 0 },
+        { x: 10000, z: 0 },
+        { x: 15000, z: 0 },
+      ],
+      FALLEN_DECAY_DURATION / 2,
+      mulberry32(5),
+    );
+    expect(ev.decayed).toEqual([]);
+    for (const i of [0, 1, 2]) expect(isTerminalTree(field.trees[i]!)).toBe(true);
+    // Past the decay: gone, hidden by the renderer, never resurrected.
+    ev = tickDamage(
+      field,
+      [
+        { x: 0, z: 0 },
+        { x: 5000, z: 0 },
+        { x: 10000, z: 0 },
+        { x: 15000, z: 0 },
+      ],
+      FALLEN_DECAY_DURATION / 2 + 0.1,
+      mulberry32(5),
+    );
+    expect(ev.decayed).toEqual([0, 1, 2]);
+    for (const i of [0, 1, 2]) {
+      expect(field.trees[i]).toBe("gone");
+      expect(isTerminalTree(field.trees[i]!)).toBe(true);
+    }
+    // Gone trees never decay again, burn, or ignite.
+    ev = tickDamage(
+      field,
+      [
+        { x: 0, z: 0 },
+        { x: 5000, z: 0 },
+        { x: 10000, z: 0 },
+        { x: 15000, z: 0 },
+      ],
+      FALLEN_DECAY_DURATION * 2,
+      mulberry32(5),
+    );
+    expect(ev.decayed).toEqual([]);
+    expect(field.trees[3]).toBe("intact");
+    expect(igniteTree(field, 0)).toBe(false);
+  });
+
+  it("decays crushed trees on the same clock as blast-felled ones", () => {
+    const field = createDamageField(2, 0);
+    applyBlastToTrees(field, [{ x: 0, z: 0 }], 0, 0, 100, () => 0);
+    expect(field.trees[0]).toBe("toppled");
+    expect(crushTree(field, 1)).toBe(true);
+    const pts = [
+      { x: 0, z: 0 },
+      { x: 9000, z: 0 },
+    ];
+    tickDamage(field, pts, FALLEN_DECAY_DURATION - 1, mulberry32(7));
+    expect(field.trees[0]).not.toBe("gone");
+    expect(field.trees[1]).not.toBe("gone");
+    const ev = tickDamage(field, pts, 1.5, mulberry32(7));
+    expect(ev.decayed).toEqual([0, 1]);
   });
 });

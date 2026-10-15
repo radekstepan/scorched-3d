@@ -65,8 +65,10 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
  *
  * Tree pipeline: intact → burning (flame + smoke, timed) → smouldering
  * (smoke only, charred crown, timed) → terminal: toppled (knocked on its
- * side), stump (blast-shorn), or snag (charred standing trunk). Terminal
- * states persist for the session like scorch marks. A blast flattens trees
+ * side), stump (blast-shorn), or snag (charred standing trunk). Fallen trees
+ * then slowly decay like husks — sinking over FALLEN_DECAY_DURATION into
+ * `gone` (hidden instance) — whether blast-flattened, burnt out, or
+ * hull-crushed. A blast flattens trees
  * near its core (topple/stump/snag immediately) and ignites the fringe;
  * fringe fires can spread a short distance to intact neighbours before they
  * burn out, so damage reads as a graduated burn scar, not a binary hole.
@@ -80,8 +82,8 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
  * the field itself is never cleared by clearTransients — only by regen.
  */
 
-/** Tree damage state; terminal states (toppled/stump/snag) persist. */
-export type TreeDamage = "intact" | "burning" | "smouldering" | "toppled" | "stump" | "snag";
+/** Tree damage state; terminal states (toppled/stump/snag/gone) persist. */
+export type TreeDamage = "intact" | "burning" | "smouldering" | "toppled" | "stump" | "snag" | "gone";
 
 /** Rock damage level: intact → chipped → cracked/displaced → buried. */
 export type RockDamage = 0 | 1 | 2 | 3;
@@ -129,7 +131,7 @@ export function burningCount(field: DamageField): number {
 
 /** Terminal tree states persist: never transitioned by ticks or blasts. */
 export function isTerminalTree(state: TreeDamage): boolean {
-  return state === "toppled" || state === "stump" || state === "snag";
+  return state === "toppled" || state === "stump" || state === "snag" || state === "gone";
 }
 
 /** Roll a terminal successor: blast-flattened or burnt-out. */
@@ -138,6 +140,60 @@ export function resolveTerminal(rng: () => number): "toppled" | "stump" | "snag"
   if (r < 0.4) return "toppled";
   if (r < 0.75) return "stump";
   return "snag";
+}
+
+/**
+ * Hull crush: a unit driving over a standing tree knocks it flat instead of
+ * stopping (see `treesCrushedByStep` in `terrain.ts`). Intact and burning
+ * trees both fall to `toppled` — bulldozing a burning tree puts its fire out
+ * — with the fell clock (`treeAge`) restarted so the decay below measures
+ * from the crush. Terminal trees (including `gone`) are never re-touched.
+ * Returns true when the tree fell.
+ */
+export function crushTree(field: DamageField, index: number): boolean {
+  if (index < 0 || index >= field.trees.length) return false;
+  const state = field.trees[index]!;
+  if (state !== "intact" && state !== "burning") return false;
+  field.trees[index] = "toppled";
+  field.treeAge[index] = 0;
+  return true;
+}
+
+/**
+ * Fallen-tree decay (husk-decay parallel: retail wrecks persist as
+ * reclaimable corpse features; this demo has no economy, so both husks and
+ * fallen trees instead sink and vanish, leaving only the scorch scar).
+ * Framework-free like the rest of this module: the renderer owns the
+ * sinking/hiding while every threshold lives here so vitest can cover the
+ * pacing without WebGL. All state derives from `treeAge` at the terminal
+ * state — seconds since the fell — so replays and exaggeration re-snaps
+ * cannot disturb it.
+ */
+
+/** Seconds from the fell until a fallen tree finishes decaying. */
+export const FALLEN_DECAY_DURATION = 45;
+/** World units a fallen tree sinks below its fell seat when fully decayed. */
+export const FALLEN_SINK_DEPTH = 6;
+
+/**
+ * Fallen-tree decay fraction 0 (fresh fall) .. 1 (fully gone) for
+ * `ageSeconds` since the fell. Clamped, so negative clocks read fresh and
+ * over-long clocks read gone.
+ */
+export function fallenDecay(ageSeconds: number): number {
+  if (!(ageSeconds > 0)) return 0;
+  return Math.min(ageSeconds / FALLEN_DECAY_DURATION, 1);
+}
+
+/** World units to lower a fallen tree at `decay` 0..1 (linear sink). */
+export function fallenSink(decay: number): number {
+  const clamped = Math.min(Math.max(decay, 0), 1);
+  return clamped * FALLEN_SINK_DEPTH;
+}
+
+/** True once the fallen tree has finished decaying and may be hidden. */
+export function isFallenGone(ageSeconds: number): boolean {
+  return ageSeconds >= FALLEN_DECAY_DURATION;
 }
 
 /**
@@ -241,6 +297,8 @@ export interface DamageEvents {
   enteredSmoulder: number[];
   /** Smouldering → terminal resolutions. */
   resolved: { index: number; terminal: "toppled" | "stump" | "snag" }[];
+  /** Terminal → gone decays (fallen trees finished sinking away). */
+  decayed: number[];
 }
 
 /**
@@ -248,7 +306,10 @@ export interface DamageEvents {
  * smoulder; smouldering trees resolve to a rolled terminal state; burning
  * trees older than SPREAD_MIN_AGE may ignite intact neighbours inside
  * FIRE_SPREAD_RADIUS at SPREAD_RATE per pair per second (cap-aware, so
- * spread never exceeds the flame budget). Mutates `field` in place.
+ * spread never exceeds the flame budget). Fallen (terminal, non-gone) trees
+ * age from their fell toward `gone`, decaying into the ground like husks —
+ * whether blast-flattened, burnt out, or hull-crushed. Mutates `field` in
+ * place.
  */
 export function tickDamage(
   field: DamageField,
@@ -256,7 +317,7 @@ export function tickDamage(
   dt: number,
   rng: () => number,
 ): DamageEvents {
-  const events: DamageEvents = { ignited: [], enteredSmoulder: [], resolved: [] };
+  const events: DamageEvents = { ignited: [], enteredSmoulder: [], resolved: [], decayed: [] };
   if (!(dt > 0)) return events;
   for (let i = 0; i < field.trees.length; i++) {
     const state = field.trees[i]!;
@@ -274,6 +335,13 @@ export function tickDamage(
         field.trees[i] = terminal;
         field.treeAge[i] = 0;
         events.resolved.push({ index: i, terminal });
+      }
+    } else if (state === "toppled" || state === "stump" || state === "snag") {
+      field.treeAge[i] = field.treeAge[i]! + dt;
+      if (field.treeAge[i]! >= FALLEN_DECAY_DURATION) {
+        field.trees[i] = "gone";
+        field.treeAge[i] = 0;
+        events.decayed.push(i);
       }
     }
   }
