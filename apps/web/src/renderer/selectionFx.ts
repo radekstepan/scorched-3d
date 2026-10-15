@@ -16,9 +16,11 @@ import { scorchDisplayRGB } from "@scorched-3d/core";
  * The replacement is a white-halo + cyan-core double ground ring (white reads
  * on every dark ground, cyan is hue-opposite to ember orange so it survives
  * fire glow and is blue/orange-separable for most color-vision deficiency),
- * a slow pulse + spinning/bobbing chevron beacon above the hull (visible at
- * glancing angles and through smoke), and depth-test-off compositing above
- * the scorch layer. The hull itself is never tinted: it keeps its normal
+ * a static chevron beacon above the hull (visible at glancing angles and
+ * through smoke), and depth-test-off compositing above
+ * the scorch layer. The beacon and rings are intentionally static — no
+ * pulse, spin, or bob — so selection reads as a calm outline rather than a
+ * flashing signal. The hull itself is never tinted: it keeps its normal
  * paint, including progressive damage charring, so a highlighted unit never
  * runs blue — selection reads from the ring + beacon (+ minimap dot) alone.
  * Shared geometries/materials
@@ -33,9 +35,9 @@ import { scorchDisplayRGB } from "@scorched-3d/core";
 export const SELECTION_OUTER = 0xffffff;
 /** Inner core: cyan is hue-opposite to ember orange / amber fire. */
 export const SELECTION_CORE = 0x22d3ee;
-/** Ring pulse frequency, Hz. */
+/** Ring pulse frequency, Hz (legacy: selection is now static, see below). */
 export const SELECTION_PULSE_HZ = 1.5;
-/** Pulse amplitude as a fraction of ring size. */
+/** Pulse amplitude as a fraction of ring size (legacy: static markers ignore it). */
 export const SELECTION_PULSE_AMP = 0.07;
 /** Selection compositing order: above scorch decals (`SCORCH_RENDER_ORDER`). */
 export const SELECTION_RENDER_ORDER = 10;
@@ -43,10 +45,12 @@ export const SELECTION_RENDER_ORDER = 10;
 export const SCORCH_RENDER_ORDER = 2;
 /** Chevron rest height above the body origin (clears the commander antenna). */
 export const SELECTION_CHEVRON_HEIGHT = 52;
-/** Chevron bob amplitude. */
+/** Chevron bob amplitude (legacy: static markers hold the rest height). */
 export const SELECTION_CHEVRON_BOB = 4;
-/** Chevron spin rate, rad/s. */
+/** Chevron spin rate, rad/s (legacy: static markers hold a fixed yaw). */
 export const SELECTION_CHEVRON_SPIN = 2.2;
+/** Fixed chevron yaw for static markers (matches the build pose). */
+export const SELECTION_CHEVRON_YAW = Math.PI / 4;
 
 /** Ember-orange reference (ignition glow / explosion light family). */
 export const EMBER_ORANGE = 0xff7a22;
@@ -201,7 +205,7 @@ export function disposeSelectionAssets(): void {
 
 /**
  * Build one selection marker: white outer halo + cyan core ground rings and
- * a spinning/bobbing chevron beacon above the hull. Starts hidden; the body
+ * a static chevron beacon above the hull. Starts hidden; the body
  * group owns it so it rides patrol/order motion and exaggeration re-snaps
  * for free. Marker meshes carry `userData.noHighlight` so damage charring
  * (`applyUnitDamageTint`) never touches them.
@@ -233,22 +237,25 @@ export function buildSelectionMarker(): THREE.Group {
 }
 
 /**
- * Advance one marker to time `t` seconds. Hidden unless selected; visible
- * markers pulse (ring scale), bob, and spin the chevron. Mutation-only, no
- * allocations — safe to call every frame for the (small) selection.
+ * Pose one marker. Markers are static by design (no pulse/spin/bob): visible
+ * markers hold unit ring scale and the chevron rest height + fixed yaw, so
+ * selection reads as a calm outline. The `t` argument is kept so existing
+ * call sites keep compiling; it is ignored. Mutation-only, no
+ * allocations. `selectionPulseScale` / `selectionBeaconBob` stay exported
+ * as documented legacy math (pinned by tests) but are no longer consumed.
  */
 export function updateSelectionMarker(marker: THREE.Group, t: number, selected: boolean): void {
+  void t;
   marker.visible = selected;
   if (!selected) return;
-  const s = selectionPulseScale(t);
   const outer = marker.getObjectByName("select-outer");
   const core = marker.getObjectByName("select-core");
   const chev = marker.getObjectByName("select-chevron");
-  if (outer) outer.scale.set(s, 1, s);
-  if (core) core.scale.set(s, 1, s);
+  if (outer) outer.scale.set(1, 1, 1);
+  if (core) core.scale.set(1, 1, 1);
   if (chev) {
-    chev.position.y = SELECTION_CHEVRON_HEIGHT + selectionBeaconBob(t);
-    chev.rotation.y = (SELECTION_CHEVRON_SPIN * t) % (Math.PI * 2);
+    chev.position.y = SELECTION_CHEVRON_HEIGHT;
+    chev.rotation.y = SELECTION_CHEVRON_YAW;
   }
 }
 

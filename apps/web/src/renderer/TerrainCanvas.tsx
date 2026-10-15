@@ -412,33 +412,33 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     );
 
     // RTS selection: a white-halo + cyan-core double ground ring plus a
-    // spinning/bobbing chevron beacon above the hull (see selectionFx for
+    // static chevron beacon above the hull (see selectionFx for
     // the contrast policy: the old amber ring was hue-camouflaged among
     // amber fire on ember-brown scorch, went edge-on at glancing angles, and
-    // hid under smoke/toppled trunks). The hull itself is never tinted — it
+    // hid under smoke/toppled trunks). The markers are intentionally static
+    // (no pulse/spin/bob). The hull itself is never tinted — it
     // keeps its normal paint including damage charring, so a highlighted
     // unit never runs blue; the ring + beacon (+ minimap dot) carry the
     // signal alone. The
     // marker is a child of the body group so it rides motion and
     // exaggeration re-snaps for free; rings/beacon ignore depth and composite
     // above the scorch layer. Shared geometries/materials, one set per
-    // canvas — the tick only mutates transforms of visible markers.
-    const markers: THREE.Group[] = [];
+    // canvas.
     units.children.forEach((child) => {
       const marker = buildSelectionMarker();
+      updateSelectionMarker(marker, 0, false);
       child.add(marker);
-      markers.push(marker);
     });
     let selection: number[] = [];
-    let selTime = 0;
     const applySelection = (next: number[]): void => {
       // Wrecks are never selectable (belt-and-braces: picks already filter
-      // them, but kills can land mid-gesture).
+      // them, but kills can land mid-gesture). Markers are static: pose once
+      // here, no per-tick animation.
       selection = next.filter((i) => !combat.isDestroyedAt(i));
       const vis = markerVisibility(units.children.length, selection);
       units.children.forEach((child, i) => {
         const marker = child.getObjectByName("select-marker");
-        if (marker) marker.visible = vis[i] ?? false;
+        if (marker) updateSelectionMarker(marker as THREE.Group, 0, vis[i] ?? false);
       });
       selectionRef.current?.([...selection]);
     };
@@ -817,13 +817,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       for (const fid of fallen) poseTree(fid);
       fire.update(damage, allTrees, groundY, t);
 
-      // Selection pulse: advance the shared clock and mutate only visible
-      // markers (ring scale, chevron bob/spin — no allocations).
-      selTime += dt;
-      for (const i of selection) {
-        const marker = markers[i];
-        if (marker) updateSelectionMarker(marker, selTime, true);
-      }
+      // Selection markers are static (posed in applySelection) — nothing to
+      // animate per tick.
 
       // Order-ping decay (0.8 s expanding rings) and the ~4 Hz live-position
       // broadcast that feeds the minimap overlay.

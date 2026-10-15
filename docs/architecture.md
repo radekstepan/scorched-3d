@@ -34,7 +34,8 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `apps/web/src/renderer/fireFx.ts` | Transient instanced flame/smoke views over the damage field. |
 | `apps/web/src/renderer/movement.ts` | Thin patrol/order driver: poses bodies from core movers, plus the retaliation entry point (`threatenUnit`) fed by combat's threat hook and the per-tick hunt sweep (`sweepHunt`) that points idle hulls at live enemies. |
 | `apps/web/src/renderer/selection.ts` | Click/box picking helpers for RTS selection. |
-| `apps/web/src/renderer/selectionFx.ts` | Selection visuals: white/cyan double ring + chevron beacon, contrast policy, ring/beacon-only highlight (hull paint preserved), minimap dot style. |
+| `apps/web/src/renderer/selectionFx.ts` | Selection visuals: static white/cyan double ring + chevron beacon (no pulse/spin/bob), contrast policy, ring/beacon-only highlight (hull paint preserved), minimap dot style. |
+| `apps/web/src/renderer/selectionIcons.ts` | Selection tray: pre-rendered memoized per-kind icons + (kind, team) grouping with team-color top borders. |
 | `apps/web/src/renderer/occlusionFx.ts` | Occlusion x-ray: sampled camera→hull taps vs live heightfield + standing-tree volumes; blue silhouette ghost (selection cyan: true hull/turret outline + slight transparent fill, pose-mirrored) for hidden units, husks included, hull paint untouched. |
 | `packages/core/src/terrain/types.ts` | Typed map model: presets, tiles, features, view options, placed units. |
 | `packages/core/src/terrain/generate.ts` | Seeded heightfield sampling, feature stamping, tile painting, minimap, unit placement. |

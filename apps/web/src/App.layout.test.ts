@@ -76,4 +76,22 @@ describe("Units panel roster without patrol status text", () => {
     expect(source).toContain("alive");
     expect(source).toContain("TEAM_DEFS[team].color");
   });
+
+  it("shows a bottom selection tray with pre-rendered icons, counts, and team top borders", () => {
+    expect(source).toContain("selectedGroups");
+    expect(source).toContain("groupSelection(map.units, selected)");
+    expect(source).toContain("getUnitIconDataUrl(g.kind)");
+    expect(source).toContain("selectionGroupColor(g.team)");
+    expect(source).toContain("borderTop");
+    expect(source).toContain("×{g.count}");
+    expect(source).toContain("bottom-12");
+  });
+
+  it("keeps selection markers static (no pulse/spin/bob in the canvas tick)", () => {
+    const canvas = readFileSync(join(here, "renderer", "TerrainCanvas.tsx"), "utf8");
+    expect(canvas).not.toContain("selTime");
+    expect(canvas).toContain("static");
+    const fx = readFileSync(join(here, "renderer", "selectionFx.ts"), "utf8");
+    expect(fx).toContain("SELECTION_CHEVRON_YAW");
+  });
 });

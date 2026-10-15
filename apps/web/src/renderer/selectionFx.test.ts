@@ -7,6 +7,7 @@ import {
   MINIMAP_SELECTED_OUTLINE,
   SCORCH_RENDER_ORDER,
   SELECTION_CHEVRON_HEIGHT,
+  SELECTION_CHEVRON_YAW,
   SELECTION_CORE,
   SELECTION_OUTER,
   SELECTION_PULSE_AMP,
@@ -124,7 +125,7 @@ describe("marker layering policy (composites over scorch/smoke/fire)", () => {
   });
 });
 
-describe("pulse / beacon motion", () => {
+describe("pulse math (legacy: markers no longer consume it)", () => {
   it("pulse is deterministic, bounded, and completes a period", () => {
     const period = 1 / SELECTION_PULSE_HZ;
     expect(selectionPulseScale(0.37)).toBe(selectionPulseScale(0.37));
@@ -135,21 +136,30 @@ describe("pulse / beacon motion", () => {
       expect(s).toBeGreaterThanOrEqual(1 - SELECTION_PULSE_AMP - 1e-9);
       expect(s).toBeLessThanOrEqual(1 + SELECTION_PULSE_AMP + 1e-9);
     }
+    // Beacon bob stays exported + deterministic even though markers hold
+    // the rest height now.
+    expect(selectionBeaconBob(0.5)).toBe(selectionBeaconBob(0.5));
   });
 
-  it("updateSelectionMarker toggles visibility and mutates in place", () => {
+  it("updateSelectionMarker is static: unit scale, rest height, fixed yaw at any t", () => {
     const marker = buildSelectionMarker();
     try {
       updateSelectionMarker(marker, 1.25, true);
       expect(marker.visible).toBe(true);
       const outer = marker.getObjectByName("select-outer")!;
-      expect(outer.scale.x).toBeCloseTo(selectionPulseScale(1.25), 10);
+      expect(outer.scale.x).toBe(1);
+      expect(outer.scale.z).toBe(1);
       const chev = marker.getObjectByName("select-chevron")!;
-      expect(chev.position.y).toBeCloseTo(
-        SELECTION_CHEVRON_HEIGHT + selectionBeaconBob(1.25),
-        10,
-      );
-      updateSelectionMarker(marker, 2.5, false);
+      expect(chev.position.y).toBe(SELECTION_CHEVRON_HEIGHT);
+      expect(chev.rotation.y).toBeCloseTo(SELECTION_CHEVRON_YAW, 10);
+      // No motion over time: a later tick poses identically.
+      const before = { y: chev.position.y, ry: chev.rotation.y, sx: outer.scale.x };
+      updateSelectionMarker(marker, 2.5, true);
+      expect(marker.visible).toBe(true);
+      expect(chev.position.y).toBe(before.y);
+      expect(chev.rotation.y).toBe(before.ry);
+      expect(outer.scale.x).toBe(before.sx);
+      updateSelectionMarker(marker, 3.75, false);
       expect(marker.visible).toBe(false);
       // Same objects, no per-frame allocation: child count never grows.
       expect(marker.children.length).toBe(3);

@@ -19,6 +19,11 @@ import {
   MINIMAP_SELECTED_GLOW,
   MINIMAP_SELECTED_OUTLINE,
 } from "./renderer/selectionFx";
+import {
+  getUnitIconDataUrl,
+  groupSelection,
+  selectionGroupColor,
+} from "./renderer/selectionIcons";
 import { cn } from "./utils/cn";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
@@ -59,6 +64,11 @@ export default function App() {
   const worldD = map.height * CELL_PIXELS;
 
   const patch = (partial: Partial<ViewOptions>) => setOptions((o) => ({ ...o, ...partial }));
+  // Bottom selection tray: one box per (kind, team) group with a
+  // pre-rendered icon (memoized data URL, rendered once per kind and reused
+  // for every box) and a count badge. The top border carries the team color
+  // from the same TEAM_DEFS source as the Units-box chips.
+  const selectedGroups = useMemo(() => groupSelection(map.units, selected), [map.units, selected]);
   const meta = PRESET_META[preset];
   const tileW = map.width / 2;
   const tileH = map.height / 2;
@@ -275,7 +285,7 @@ export default function App() {
             Blue holds the west, Orange the east — team rings circle every
             hull in 3D and ring its minimap dot. Dark-brown patches
             are blast scorch — old impact scars, not mud. Selected units carry
-            a white/cyan ring + beacon; hulls keep their normal paint —
+            a static white/cyan ring + beacon; hulls keep their normal paint —
             selection never tints the hull. The Waypoints overlay traces the
             line each unit will actually drive — slate for patrols, amber for
             ordered moves, rose for hunts and retaliation pursuits — plus a travelling marker.
@@ -297,6 +307,29 @@ export default function App() {
           SCROLL zoom · RMB pan · WASD pan
         </p>
       </footer>
+
+      {selectedGroups.length > 0 && (
+        <div className="pointer-events-auto absolute bottom-12 left-1/2 z-10 flex -translate-x-1/2 gap-2">
+          {selectedGroups.map((g) => (
+            <div
+              key={`${g.kind}-${g.team}`}
+              className="hud-panel relative w-[68px] p-1.5"
+              title={`${UNIT_DEFS[g.kind].name} · Team ${TEAM_DEFS[g.team]?.name ?? g.team} ×${g.count}`}
+              style={{ borderTop: `3px solid ${selectionGroupColor(g.team)}` }}
+            >
+              <img
+                src={getUnitIconDataUrl(g.kind)}
+                alt={UNIT_DEFS[g.kind].name}
+                className="h-11 w-11 rounded-sm"
+                draggable={false}
+              />
+              <span className="absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">
+                ×{g.count}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
