@@ -51,7 +51,7 @@ export default function App() {
     pixelFilter: true,
     showWaypoints: false,
     showHealth: true,
-    panSpeed: 1,
+    panSpeed: 3,
     zoomSpeed: 2,
   });
 

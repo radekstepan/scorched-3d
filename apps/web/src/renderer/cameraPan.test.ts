@@ -160,8 +160,8 @@ describe("shouldIgnoreKeyEvent", () => {
 });
 
 describe("camera speed sliders", () => {
-  it("exposes a sane 0.2x–3x slider range around the defaults (pan 1x, zoom 2x)", () => {
-    expect(DEFAULT_PAN_SPEED).toBe(1);
+  it("exposes a sane 0.2x–3x slider range around the defaults (pan 3x, zoom 2x)", () => {
+    expect(DEFAULT_PAN_SPEED).toBe(3);
     expect(DEFAULT_ZOOM_SPEED).toBe(2);
     expect(PAN_SPEED_MIN).toBe(0.2);
     expect(PAN_SPEED_MAX).toBe(3);
@@ -170,7 +170,7 @@ describe("camera speed sliders", () => {
   });
 
   it("clamps pan speed into range", () => {
-    expect(clampPanSpeed(1)).toBe(1);
+    expect(clampPanSpeed(3)).toBe(3);
     expect(clampPanSpeed(0.2)).toBe(0.2);
     expect(clampPanSpeed(3)).toBe(3);
     expect(clampPanSpeed(-5)).toBe(PAN_SPEED_MIN);
@@ -197,6 +197,15 @@ describe("camera speed sliders", () => {
     expect(base).toBeCloseTo(1000 * PAN_SPEED_FACTOR * 0.016, 10);
     expect(panStepDistance(1000, 0.016, 2)).toBeCloseTo(base * 2, 10);
     expect(panStepDistance(1000, 0.016, 0.5)).toBeCloseTo(base * 0.5, 10);
+  });
+
+  it("ships a 3x default pan step versus the old 1x feel", () => {
+    // The default multiplier tripled (1 → 3); the base factor is untouched
+    // so the whole gain comes from the default sitting at the slider max.
+    expect(DEFAULT_PAN_SPEED).toBe(3);
+    expect(PAN_SPEED_FACTOR).toBe(1.2);
+    const oldFeel = panStepDistance(1000, 0.016, 1);
+    expect(panStepDistance(1000, 0.016, DEFAULT_PAN_SPEED)).toBeCloseTo(oldFeel * 3, 10);
   });
 
   it("clamps out-of-range speeds before stepping", () => {

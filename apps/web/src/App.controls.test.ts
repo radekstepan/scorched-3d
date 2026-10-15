@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// The View panel hosts Pan/Zoom speed sliders (0.2x–3x; pan defaults 1x,
+// The View panel hosts Pan/Zoom speed sliders (0.2x–3x; pan defaults 3x,
 // zoom defaults 2x) that scale keyboard + right-drag panning and
 // scroll-wheel zoom. These tests pin the App ↔ TerrainCanvas wiring at the
 // source level (the canvas needs WebGL, so live-control assertions live in
@@ -14,8 +14,8 @@ const appSource = readFileSync(join(here, "App.tsx"), "utf8");
 const canvasSource = readFileSync(join(here, "renderer", "TerrainCanvas.tsx"), "utf8");
 
 describe("camera speed sliders in the View menu", () => {
-  it("defaults pan to 1x and zoom to 2x in the View options state", () => {
-    expect(appSource).toMatch(/panSpeed:\s*1/);
+  it("defaults pan to 3x and zoom to 2x in the View options state", () => {
+    expect(appSource).toMatch(/panSpeed:\s*3/);
     expect(appSource).toMatch(/zoomSpeed:\s*2/);
   });
 

@@ -21,8 +21,8 @@ export interface PanInput {
 /** World units the target travels per second, relative to camera distance. */
 export const PAN_SPEED_FACTOR = 1.2;
 
-/** Default orbit multipliers (pan 1 = stock feel; zoom ships at 2x). */
-export const DEFAULT_PAN_SPEED = 1;
+/** Default orbit multipliers (pan ships at 3x; zoom ships at 2x). */
+export const DEFAULT_PAN_SPEED = 3;
 export const DEFAULT_ZOOM_SPEED = 2;
 
 /** Slider bounds for the View-menu pan/zoom speed controls. */
