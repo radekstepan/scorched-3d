@@ -8,6 +8,7 @@ import {
   ARRIVE_RADIUS,
   BLOCKED_SKIP_AFTER,
   cellFromWorld,
+  groupSpeedCap,
   hasOrder,
   initMover,
   MOVE_SPEED,
@@ -1045,6 +1046,68 @@ describe("predictDrivenPath", () => {
     const route = flatRoute();
     const mover = orderMover({ x: 10, z: 20, hull: 1.2, leg: 0 }, [{ x: 300, z: 300 }]);
     expect(predictDrivenPath("hammer", mover, route)).toEqual(predictDrivenPath("hammer", mover, route));
+  });
+});
+
+describe("group cohesion", () => {
+  it("caps at the slowest member's base speed", () => {
+    expect(groupSpeedCap(["peewee", "flash", "hammer"])).toBe(MOVE_SPEED.hammer);
+    expect(groupSpeedCap(["flash", "flash"])).toBe(MOVE_SPEED.flash);
+    expect(groupSpeedCap(["peewee"])).toBe(MOVE_SPEED.peewee);
+    expect(groupSpeedCap([])).toBeUndefined();
+  });
+
+  it("leaves single orders uncapped and byte-identical", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 0 };
+    const single = orderMover(mover, [{ x: 0, z: 400 }]);
+    expect(single.order?.groupSpeed).toBeUndefined();
+    expect("groupSpeed" in (single.order ?? {})).toBe(false);
+    const next = advanceMover("peewee", single, [], 1);
+    expect(next.z).toBeCloseTo(MOVE_SPEED.peewee, 6);
+  });
+
+  it("slows a capped fast hull to the group's pace", () => {
+    const cap = groupSpeedCap(["peewee", "hammer"])!;
+    const fast = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }], cap);
+    const slow = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }], cap);
+    expect(fast.order?.groupSpeed).toBe(MOVE_SPEED.hammer);
+    const fastNext = advanceMover("peewee", fast, [], 1);
+    const slowNext = advanceMover("hammer", slow, [], 1);
+    // Both drive at the hammer's pace now.
+    expect(fastNext.z).toBeCloseTo(MOVE_SPEED.hammer, 6);
+    expect(slowNext.z).toBeCloseTo(MOVE_SPEED.hammer, 6);
+    // The cap never speeds a slow hull past its own base.
+    const over = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }], 999);
+    expect(advanceMover("hammer", over, [], 1).z).toBeCloseTo(MOVE_SPEED.hammer, 6);
+  });
+
+  it("keeps a mixed group together instead of letting the fast hull cut ahead", () => {
+    const field = openField();
+    const kinds = ["peewee", "hammer"] as const;
+    const cap = groupSpeedCap([...kinds])!;
+    const drive = (grouped: boolean): number => {
+      let movers: Mover[] = [
+        orderMover({ x: -100, z: 0, hull: 0, leg: 0 }, [{ x: -100, z: 400 }], grouped ? cap : undefined),
+        orderMover({ x: 100, z: 0, hull: 0, leg: 0 }, [{ x: 100, z: 400 }], grouped ? cap : undefined),
+      ];
+      const routes: RoutePoint[][] = [[], []];
+      for (let n = 0; n < 120; n++) {
+        movers = advanceMovers([...kinds], movers, routes, 1 / 60, field);
+      }
+      return Math.abs(movers[0]!.z - movers[1]!.z);
+    };
+    // Lanes 200 apart: no spacing/separation contact, pure drive speeds.
+    expect(drive(false)).toBeGreaterThan(80);
+    expect(drive(true)).toBeLessThan(5);
+  });
+
+  it("predicts the capped path slower for a fast hull", () => {
+    const cap = groupSpeedCap(["peewee", "hammer"])!;
+    const free = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }]);
+    const capped = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [{ x: 0, z: 400 }], cap);
+    const freePath = predictDrivenPath("peewee", free, []);
+    const cappedPath = predictDrivenPath("peewee", capped, [], null);
+    expect(cappedPath.length).toBeGreaterThan(freePath.length);
   });
 });
 

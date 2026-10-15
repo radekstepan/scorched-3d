@@ -6,6 +6,7 @@ import {
   clearThreat,
   findWorldPath,
   formationTargets,
+  groupSpeedCap,
   hasOrder,
   hasThreat,
   HULL_TILT_SLEW,
@@ -136,7 +137,13 @@ export class UnitMovement {
     if (!mover) return null;
     return {
       ...mover,
-      order: mover.order ? { at: mover.order.at, points: mover.order.points } : undefined,
+      order: mover.order
+        ? {
+            at: mover.order.at,
+            points: mover.order.points,
+            ...(mover.order.groupSpeed !== undefined ? { groupSpeed: mover.order.groupSpeed } : {}),
+          }
+        : undefined,
       threat: mover.threat ? { ...mover.threat } : undefined,
     };
   }
@@ -426,13 +433,13 @@ export class UnitMovement {
    * (straight drive when no heightfield was provided), replacing any patrol
    * leg or previous order. Repathing just calls this again.
    */
-  orderUnit(index: number, target: { x: number; z: number }): boolean {
+  orderUnit(index: number, target: { x: number; z: number }, groupSpeed?: number): boolean {
     const mover = this.movers[index];
     if (!mover || this.destroyed[index]) return false;
     const path = this.field
       ? findWorldPath(this.field, { x: mover.x, z: mover.z }, target)
       : [{ x: target.x, z: target.z }];
-    this.movers[index] = orderMover(mover, path);
+    this.movers[index] = orderMover(mover, path, groupSpeed);
     return true;
   }
 
@@ -450,9 +457,13 @@ export class UnitMovement {
     const slots = this.field
       ? snappedFormationTargets(this.field, target, live.length)
       : formationTargets(target, live.length);
+    // Group cohesion: cap every member at the slowest live member's base
+    // speed so faster hulls hold formation instead of cutting ahead. Single
+    // orders (`orderUnit` without a cap) are unaffected.
+    const cap = groupSpeedCap(live.map((index) => this.kinds[index] ?? "flash"));
     let issued = 0;
     live.forEach((index, i) => {
-      if (this.orderUnit(index, slots[i] ?? target)) issued++;
+      if (this.orderUnit(index, slots[i] ?? target, cap)) issued++;
     });
     return issued;
   }

@@ -206,6 +206,21 @@ describe("UnitMovement", () => {
     movement.dispose();
   });
 
+  it("stamps group orders with the slowest member's pace, singles stay uncapped", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // flash (72) + hammer (34): the group cap is the hammer's pace.
+    expect(movement.orderGroup([0, 1], { x: 300, z: 300 })).toBe(2);
+    expect(movement.moverState(0)!.order?.groupSpeed).toBe(34);
+    expect(movement.moverState(1)!.order?.groupSpeed).toBe(34);
+    movement.dispose();
+    const solo = makeGroup();
+    const single = new UnitMovement(solo, routes(), { groundY: () => 100 });
+    expect(single.orderUnit(0, { x: 300, z: 300 })).toBe(true);
+    expect(single.moverState(0)!.order?.groupSpeed).toBeUndefined();
+    single.dispose();
+  });
+
   it("snaps group goals onto walkable, separated ground so arrivals never stack", () => {
     // Shore field: land west, water east — the click sits over water, so raw
     // per-unit snaps could collapse onto one shore cell and park the pair

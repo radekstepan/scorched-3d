@@ -221,6 +221,28 @@ export interface Mover {
 export interface MoveOrder {
   points: RoutePoint[];
   at: number;
+  /**
+   * Group-move speed cap, world units per second: the slowest member's base
+   * speed for orders issued together via `orderGroup`. Faster members drive
+   * at the cap instead of cutting ahead, so the column arrives together.
+   * Absent (single orders, patrol, pursuit) the kind drives at full speed.
+   */
+  groupSpeed?: number;
+}
+
+/**
+ * Group-move cohesion cap: the slowest member's base `MOVE_SPEED`, so a
+ * mixed column moves at the pace of its slowest hull. Single-kind groups
+ * cap at their own speed (no-op); empty rosters read as no cap.
+ */
+export function groupSpeedCap(kinds: readonly UnitKind[]): number | undefined {
+  if (kinds.length === 0) return undefined;
+  let slowest = Infinity;
+  for (const kind of kinds) {
+    const speed = MOVE_SPEED[kind] ?? 32;
+    if (speed < slowest) slowest = speed;
+  }
+  return Number.isFinite(slowest) ? slowest : undefined;
 }
 
 /**
@@ -333,12 +355,19 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * given world-space waypoints in order, clearing any hold. An empty path
  * holds the unit in place instead of stranding it on a degenerate order.
  * Player orders win over retaliation: any live threat memory is cleared, so
- * an ordered hull never peels off to pursue.
+ * an ordered hull never peels off to pursue. Pass `groupSpeed` (see
+ * `groupSpeedCap`) for orders issued together as a group: faster members
+ * cap at the slowest member's pace instead of cutting ahead; single orders
+ * omit it and drive at full kind speed.
  */
-export function orderMover(mover: Mover, points: RoutePoint[]): Mover {
+export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
   const calm = clearThreat(mover);
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
-  return { ...calm, order: { points: points.map((p) => ({ ...p })), at: 0 }, hold: false };
+  const order: MoveOrder =
+    groupSpeed !== undefined && Number.isFinite(groupSpeed) && groupSpeed > 0
+      ? { points: points.map((p) => ({ ...p })), at: 0, groupSpeed }
+      : { points: points.map((p) => ({ ...p })), at: 0 };
+  return { ...calm, order, hold: false };
 }
 
 /** Hold in place: drop any order and stop patrolling until ordered again. */
@@ -652,7 +681,14 @@ function driveToward(
     // the hull still refuses unwalkable steps below, this only slows allowed
     // ones. A step touching standing wood crawls further at CRUSH_DRAG —
     // ploughing a fresh lane reads much slower than brushing canopy.
-    const stride = (MOVE_SPEED[kind] ?? 32) * Math.max(spacing, 0) * grip * dt;
+    // Group cohesion: orders issued together cap faster members at the
+    // slowest member's base speed, so the column moves as a group. Single
+    // orders carry no cap and drive at full kind speed. The cap only ever
+    // slows (never speeds a slow hull past its own base).
+    const base = MOVE_SPEED[kind] ?? 32;
+    const cap = order?.groupSpeed;
+    const top = cap !== undefined && Number.isFinite(cap) && cap > 0 ? Math.min(base, cap) : base;
+    const stride = top * Math.max(spacing, 0) * grip * dt;
     const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(hull) * stride, mover.z + Math.cos(hull) * stride) : 1;
     const probeX = mover.x + Math.sin(hull) * stride * rough;
     const probeZ = mover.z + Math.cos(hull) * stride * rough;
@@ -807,7 +843,13 @@ export function predictDrivenPath(
   // The order points are shared read-only: `advanceMover` never mutates them.
   let sim: Mover = {
     ...mover,
-    order: mover.order ? { at: mover.order.at, points: mover.order.points } : undefined,
+    order: mover.order
+      ? {
+          at: mover.order.at,
+          points: mover.order.points,
+          ...(mover.order.groupSpeed !== undefined ? { groupSpeed: mover.order.groupSpeed } : {}),
+        }
+      : undefined,
   };
   const pts: RoutePoint[] = [{ x: sim.x, z: sim.z }];
   let looped = false;
