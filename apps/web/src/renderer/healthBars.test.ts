@@ -5,11 +5,15 @@ import {
   HEALTH_FULL_COLOR,
   HEALTH_LOW_COLOR,
   HEALTH_MID_COLOR,
+  HQ_HEALTH_BAR_LIFT,
+  HQ_HEALTH_BAR_WIDTH,
   HealthBars,
   healthColorFor,
   healthFraction,
   type HealthSource,
+  type HqHealthSource,
 } from "./healthBars";
+import { buildHq } from "./hq";
 
 function source(
   damage: number[] = [],
@@ -36,6 +40,20 @@ function makeBars(count: number): { scene: THREE.Scene; bars: HealthBars; camera
   const bars = new HealthBars(scene, count);
   const camera = new THREE.PerspectiveCamera();
   return { scene, bars, camera };
+}
+
+function hqSource(damage: number[] = [], destroyed: boolean[] = []): HqHealthSource {
+  return {
+    damageAt: (i: number) => damage[i] ?? 0,
+    isDestroyedAt: (i: number) => destroyed[i] ?? false,
+  };
+}
+
+function hqBodies(): THREE.Group[] {
+  return [buildHq(0), buildHq(1)].map((g, i) => {
+    g.position.set(i === 0 ? -1000 : 1000, 40, 0);
+    return g;
+  });
 }
 
 describe("health helpers", () => {
@@ -142,5 +160,79 @@ describe("HealthBars", () => {
     expect(bars.count).toBe(1);
     bars.dispose();
     expect(scene.getObjectByName("healthbars")).toBeUndefined();
+  });
+});
+
+describe("HQ health bars", () => {
+  it("shows a full bar above every live HQ (both teams)", () => {
+    const { bars, camera } = makeBars(0);
+    bars.setHqCount(2);
+    expect(bars.hqCount).toBe(2);
+    bars.updateHq(hqSource([0, 0]), hqBodies(), camera);
+    expect(bars.isHqShown(0)).toBe(true);
+    expect(bars.isHqShown(1)).toBe(true);
+    expect(bars.hqFraction(0)).toBeCloseTo(1, 6);
+    expect(bars.hqFraction(1)).toBeCloseTo(1, 6);
+    bars.dispose();
+  });
+
+  it("seats HQ bars above the works, wider than unit bars, billboarded", () => {
+    const { bars, camera } = makeBars(1);
+    bars.setHqCount(1);
+    camera.quaternion.setFromEuler(new THREE.Euler(0.3, 0.7, 0));
+    const [works] = hqBodies();
+    bars.updateHq(hqSource([0]), [works!], camera);
+    const hqBar = bars.group.children.filter((c) => c.name === "hq-healthbar")[0]!;
+    expect(hqBar.position.x).toBe(works!.position.x);
+    expect(hqBar.position.y).toBe(works!.position.y + HQ_HEALTH_BAR_LIFT);
+    expect(hqBar.position.z).toBe(works!.position.z);
+    expect(hqBar.quaternion.equals(camera.quaternion)).toBe(true);
+    const bg = hqBar.getObjectByName("healthbar-bg") as THREE.Mesh;
+    expect((bg.geometry as THREE.PlaneGeometry).parameters.width).toBeCloseTo(HQ_HEALTH_BAR_WIDTH, 9);
+    bars.dispose();
+  });
+
+  it("drains and recolors the HQ fill as damage accumulates", () => {
+    const { bars, camera } = makeBars(0);
+    bars.setHqCount(1);
+    const hqBar = bars.group.children.filter((c) => c.name === "hq-healthbar")[0]!;
+    const mat = hqBar.getObjectByName("healthbar-fill") as THREE.Mesh;
+    const fillMat = mat.material as THREE.MeshBasicMaterial;
+    bars.updateHq(hqSource([0.8]), hqBodies().slice(0, 1), camera);
+    expect(bars.hqFraction(0)).toBeCloseTo(0.2, 6);
+    expect(fillMat.color.getHex()).toBe(HEALTH_LOW_COLOR);
+    bars.updateHq(hqSource([0.5]), hqBodies().slice(0, 1), camera);
+    expect(fillMat.color.getHex()).toBe(HEALTH_MID_COLOR);
+    bars.updateHq(hqSource([0]), hqBodies().slice(0, 1), camera);
+    expect(fillMat.color.getHex()).toBe(HEALTH_FULL_COLOR);
+    bars.dispose();
+  });
+
+  it("hides wrecked HQ bars and every HQ bar while toggled off", () => {
+    const { bars, camera } = makeBars(0);
+    bars.setHqCount(2);
+    bars.updateHq(hqSource([0.2, 0.2], [false, true]), hqBodies(), camera);
+    expect(bars.isHqShown(0)).toBe(true);
+    expect(bars.isHqShown(1)).toBe(false);
+    expect(bars.hqFraction(1)).toBe(0);
+    bars.setVisible(false);
+    bars.updateHq(hqSource([0, 0]), hqBodies(), camera);
+    expect(bars.isHqShown(0)).toBe(false);
+    expect(bars.group.visible).toBe(false);
+    bars.setVisible(true);
+    bars.updateHq(hqSource([0, 0]), hqBodies(), camera);
+    expect(bars.isHqShown(0)).toBe(true);
+    bars.dispose();
+  });
+
+  it("resizes the HQ roster and hides bars past it", () => {
+    const { bars, camera } = makeBars(0);
+    bars.setHqCount(2);
+    bars.updateHq(hqSource([0]), hqBodies().slice(0, 1), camera);
+    expect(bars.isHqShown(0)).toBe(true);
+    expect(bars.isHqShown(1)).toBe(false);
+    bars.setHqCount(1);
+    expect(bars.hqCount).toBe(1);
+    bars.dispose();
   });
 });

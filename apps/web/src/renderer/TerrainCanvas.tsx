@@ -512,6 +512,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live CombatFx damage, re-seated every tick from the body origins.
     const health = new HealthBars(scene, units.children.length);
     health.setVisible(optsRef.current.showHealth);
+    // HQ forts share the same toggle: one wider bar per live works above
+    // the roofline, reading live HqFx damage (wrecks show nothing).
+    health.setHqCount(hq?.count ?? 0);
     // Occlusion x-ray: a blue silhouette ghost (selection cyan: true hull
     // outline + slight transparent fill) for any unit hidden behind the
     // heightfield or a live canopy from this camera, so occluded hulls stay
@@ -925,6 +928,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       waypoints.update(movement, units.children.length, t);
       health.setVisible(opt.showHealth);
       health.update(combat, units.children, camera);
+      if (hq) {
+        health.updateHq(
+          hq,
+          Array.from({ length: hq.count }, (_, i) => hq.groupAt(i)),
+          camera,
+        );
+      }
       occlusion.update(camera.position, units.children, { groundY, stands: getStands() }, combat);
       combat.update(dt);
       // Feed live damage into the movement drive so idle hulls weigh remaining

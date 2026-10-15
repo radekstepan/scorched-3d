@@ -144,6 +144,11 @@ export class HqFx {
     return group ? doorLiftOf(group) : 0;
   }
 
+  /** Scene group of an HQ (health-bar anchoring), or null past the roster. */
+  groupAt(index: number): THREE.Group | null {
+    return this.groups[index] ?? null;
+  }
+
   /** Hall-mouth world position where an HQ's reinforcements appear. */
   exitAt(index: number): { x: number; z: number } {
     return hqExitWorld(this.anchors[index] ?? { x: 0, z: 0 }, this.facings[index] ?? 1);

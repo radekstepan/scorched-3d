@@ -28,3 +28,14 @@ describe("health bars on by default", () => {
     expect(canvasSource).toContain("showHealth");
   });
 });
+
+describe("hq health shares the toggle", () => {
+  it("sizes the HQ bar roster next to the unit roster", () => {
+    expect(canvasSource).toContain("health.setHqCount(");
+  });
+
+  it("ticks live HQ damage into bars behind the same flag", () => {
+    expect(canvasSource).toContain("health.updateHq(");
+    expect(canvasSource).toContain("groupAt(");
+  });
+});

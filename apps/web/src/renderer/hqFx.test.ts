@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { HQ_MAX_SPAWNS, HQ_SPAWN_CYCLE, HQ_SPAWN_INTERVAL } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
+import { HealthBars } from "./healthBars";
 import { foundationDepthOf, HQ_DOOR_TRAVEL, HQ_FOUNDATION_MARGIN } from "./hq";
 
 function anchors() {
@@ -128,6 +129,37 @@ describe("HqFx", () => {
     hq.resnap();
     expect(foundationDepthOf(groups[0]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
     expect(foundationDepthOf(groups[1]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
+    hq.dispose();
+  });
+
+  it("exposes groups for the shared health toggle and feeds live damage", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    // Anchors for bar seating (null past the roster); both forts present.
+    expect(hq.groupAt(0)).not.toBeNull();
+    expect(hq.groupAt(1)).not.toBeNull();
+    expect(hq.groupAt(0)).not.toBe(hq.groupAt(1));
+    expect(hq.groupAt(2)).toBeNull();
+    // HqFx satisfies the bar source structurally: pristine forts draw full
+    // bars, shelled forts drain, wrecked forts hide.
+    const bars = new HealthBars(scene, 0);
+    const camera = new THREE.PerspectiveCamera();
+    bars.setHqCount(hq.count);
+    const groups = Array.from({ length: hq.count }, (_, i) => hq.groupAt(i));
+    bars.updateHq(hq, groups, camera);
+    expect(bars.isHqShown(0)).toBe(true);
+    expect(bars.isHqShown(1)).toBe(true);
+    expect(bars.hqFraction(0)).toBeCloseTo(1, 6);
+    hq.splash(-1000, 0, "hammer", null);
+    bars.updateHq(hq, groups, camera);
+    expect(bars.hqFraction(0)).toBeLessThan(1);
+    expect(bars.isHqShown(0)).toBe(true);
+    for (let n = 0; n < 40; n++) hq.splash(-1000, 0, "hammer", null);
+    expect(hq.isDestroyedAt(0)).toBe(true);
+    bars.updateHq(hq, groups, camera);
+    expect(bars.isHqShown(0)).toBe(false);
+    expect(bars.isHqShown(1)).toBe(true);
+    bars.dispose();
     hq.dispose();
   });
 });
