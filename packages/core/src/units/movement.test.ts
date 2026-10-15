@@ -26,8 +26,9 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import { addScorchMark } from "./destruction.js";
-import { isWalkable } from "./pathfinding.js";
+import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
+import { trunkBlockedAt } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera"] as const;
@@ -540,27 +541,103 @@ describe("rough-terrain drag", () => {
     expect(drive(rampField(), ticks)).toBe(gentle);
   });
 
-  it("pushes through tree belts slower, but still arrives", () => {
-    const field = woodedField();
-    // Lane through the middle of the tree belt (cell row 11).
+  it("pushes around single trees slower, but still arrives", () => {
+    // One isolated trunk on the lane: the order routes around it instead of
+    // through it, arriving without ever entering the keepout.
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[11 * w + 18] = 0;
+    const field: SeatField = { width: w, height: h, heights, seaLevel: 0, features };
     const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
-    const drive = (belts: SeatField, ticks: number): Mover => {
-      let mover: Mover = { x: worldX(field, 10), z, hull: Math.PI / 2, leg: 0 };
-      mover = orderMover(mover, [{ x: worldX(field, 30), z }]);
-      for (let n = 0; n < ticks; n++) {
-        mover = advanceMover("flash", mover, [], 1 / 60, 1, belts);
+    const from = { x: worldX(field, 10), z };
+    const to = { x: worldX(field, 26), z };
+    const path = findWorldPath(field, from, to);
+    let mover: Mover = { x: from.x, z: from.z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, path);
+    for (let n = 0; n < 3600; n++) {
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
+      expect(trunkBlockedAt(field, mover.x, mover.z, "flash")).toBe(false);
+    }
+    expect(hasOrder(mover)).toBe(false);
+  });
+
+  it("holds at the tree line instead of clipping trunks", () => {
+    // A solid tree belt is a wall of keepouts: a straight order into it
+    // holds at the first trunk line (like a steep wall) instead of driving
+    // through the wood. Pathfound orders route around instead (see below).
+    const field = woodedField();
+    const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
+    let mover: Mover = { x: worldX(field, 2), z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, [{ x: worldX(field, 37), z }]);
+    const firstTrunkX = worldX(field, 5);
+    for (let n = 0; n < 1200; n++) {
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
+      expect(trunkBlockedAt(field, mover.x, mover.z, "flash")).toBe(false);
+    }
+    // Never entered the belt: still west of the first trunk line, order live.
+    expect(mover.x).toBeLessThan(firstTrunkX);
+    expect(hasOrder(mover)).toBe(true);
+  });
+
+  it("routes pathfound orders around tree belts and arrives without clipping", () => {
+    const field = woodedField();
+    const z = (11 - (field.height - 1) / 2) * CELL_PIXELS;
+    const from = { x: worldX(field, 2), z };
+    const to = { x: worldX(field, 37), z };
+    const path = findWorldPath(field, from, to);
+    // A real detour, not a straight drive through the belt.
+    expect(path.length).toBeGreaterThan(1);
+    let mover: Mover = { x: from.x, z: from.z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, path);
+    for (let n = 0; n < 7200; n++) {
+      mover = advanceMover("flash", mover, [], 1 / 60, 1, field);
+      expect(trunkBlockedAt(field, mover.x, mover.z, "flash")).toBe(false);
+    }
+    expect(hasOrder(mover)).toBe(false);
+  });
+
+  it("eases a spawn parked on a trunk out to open ground", () => {
+    // An isolated trunk under the spawn (relaxed placement permits it):
+    // the trunk push-out eases the hull clear instead of grinding in place.
+    const w = 32;
+    const h = 32;
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[16 * w + 16] = 0;
+    const field: SeatField = { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0, features };
+    const x = (16 - (w - 1) / 2) * CELL_PIXELS;
+    const z = (16 - (h - 1) / 2) * CELL_PIXELS;
+    expect(trunkBlockedAt(field, x, z, "stump")).toBe(true);
+    const kinds = ["stump"] as const;
+    const routes: RoutePoint[][] = [[{ x, z }, { x, z: z + 400 }]];
+    let movers: Mover[] = [{ x, z, hull: 0, leg: 1 }];
+    for (let n = 0; n < 600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, 1 / 60, field);
+    }
+    // Eased clear (not snapped in one tick): outside every trunk keepout.
+    expect(trunkBlockedAt(field, movers[0]!.x, movers[0]!.z, "stump")).toBe(false);
+    // Deterministic: the same shove replays exactly.
+    let replay: Mover[] = [{ x, z, hull: 0, leg: 1 }];
+    for (let n = 0; n < 600; n++) {
+      replay = advanceMovers([...kinds], replay, routes, 1 / 60, field);
+    }
+    expect(replay[0]).toEqual(movers[0]);
+  });
+
+  it("keeps patrol waypoints off standing trunks on real maps", () => {
+    for (const preset of PRESETS) {
+      for (const seed of SEEDS) {
+        const map = generateMap(preset, seed);
+        const routes = planRoutes(map, map.units, seed);
+        for (const route of routes) {
+          route.forEach((wp, i) => {
+            if (i === 0) return; // waypoint 0 is the spawn, exempt by design
+            const { cellX, cellZ } = cellFromWorld(map, wp.x, wp.z);
+            expect(map.features[cellZ * map.width + cellX]).toBeGreaterThan(2);
+          });
+        }
       }
-      return mover;
-    };
-    // Same lane with the belts cleared runs faster than through them
-    // (300 ticks: neither run has arrived yet, so positions compare pace).
-    const cleared: SeatField = { ...field, features: undefined };
-    const through = drive(field, 300);
-    const around = drive(cleared, 300);
-    expect(through.x).toBeLessThan(around.x);
-    expect(drive(field, 300).x).toBe(through.x);
-    // Rough slows but never traps: the order completes through the belts.
-    const arrived = drive(field, 3600);
-    expect(hasOrder(arrived)).toBe(false);
+    }
   });
 });

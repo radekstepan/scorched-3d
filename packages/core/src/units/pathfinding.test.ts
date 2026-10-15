@@ -22,6 +22,7 @@ import {
   isRockCell,
   isTreeCell,
   isWalkable,
+  legClipsTrunk,
   legCrossesObstruction,
   nearestWalkable,
   octileHeuristic,
@@ -604,5 +605,90 @@ describe("rough-terrain costs", () => {
     // Same shape on open ground still collapses to its endpoints.
     expect(legCrossesObstruction(flatGrid(), around[0]!, around[3]!)).toBe(false);
     expect(smoothCellPath(flatGrid(), around)).toEqual([around[0], around[3]]);
+  });
+});
+
+describe("trunk keepout in pathing", () => {
+  /** Open 12×12 grid with one standing tree at (5, 5). */
+  function loneTreeGrid(): PathGrid {
+    const w = 12;
+    const h = 12;
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[5 * w + 5] = 0;
+    return { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0, features };
+  }
+
+  function toWorld(grid: PathGrid, x: number, z: number): { x: number; z: number } {
+    return { x: (x - (grid.width - 1) / 2) * 16, z: (z - (grid.height - 1) / 2) * 16 };
+  }
+
+  it("flags legs grazing a trunk even when no tree cell is sampled", () => {
+    const grid = loneTreeGrid();
+    // Corner graze past (5,5): the half-cell samples land on (3,6), (4,5),
+    // (5,4), (6,3) — never the tree cell — yet the hull would pass ~11
+    // world units from the trunk, inside the keepout.
+    const a = { cellX: 3, cellZ: 6 };
+    const b = { cellX: 6, cellZ: 3 };
+    expect(hasLineOfSight(grid, a, b)).toBe(true);
+    expect(legCrossesObstruction(grid, a, b)).toBe(false);
+    expect(legClipsTrunk(grid, a, b)).toBe(true);
+    // Legs well clear of the trunk stay clean, as do feature-less grids.
+    expect(legClipsTrunk(grid, { cellX: 0, cellZ: 0 }, { cellX: 0, cellZ: 11 })).toBe(false);
+    expect(legClipsTrunk(flatGrid(), a, b)).toBe(false);
+    // Arriving on the trunk itself counts as clipping.
+    expect(legClipsTrunk(grid, { cellX: 2, cellZ: 5 }, { cellX: 5, cellZ: 5 })).toBe(true);
+  });
+
+  it("refuses trunk-grazing shortcuts when smoothing", () => {
+    const grid = loneTreeGrid();
+    const cells = [
+      { cellX: 3, cellZ: 6 },
+      { cellX: 4, cellZ: 5 },
+      { cellX: 6, cellZ: 3 },
+    ];
+    // The direct shortcut grazes the trunk, so the middle waypoint stays.
+    expect(smoothCellPath(grid, cells)).toEqual(cells);
+    // Same shape on open ground collapses to its endpoints.
+    expect(smoothCellPath(flatGrid(), cells)).toEqual([cells[0], cells[2]]);
+  });
+
+  it("snaps order endpoints off trunks, staying walkable in dense woods", () => {
+    const grid = loneTreeGrid();
+    // The trunk cell itself snaps to the nearest open cell (ring order hits
+    // smaller z first, so (4,4)).
+    const near = nearestWalkable(grid, 5, 5);
+    expect(near).toEqual({ cellX: 4, cellZ: 4 });
+    expect(isWalkable(grid, near.cellX, near.cellZ)).toBe(true);
+    // End-to-end: a goal clicked on the trunk arrives beside it instead.
+    const path = findWorldPath(grid, toWorld(grid, 0, 0), toWorld(grid, 5, 5));
+    expect(path.length).toBeGreaterThan(0);
+    const last = path[path.length - 1]!;
+    const cell = pathWorldToCell(grid, last.x, last.z);
+    expect(isTreeCell(grid, cell.cellX, cell.cellZ)).toBe(false);
+    expect(isWalkable(grid, cell.cellX, cell.cellZ)).toBe(true);
+    // Dense fallback: every cell a tree — the snap stays walkable.
+    const dense: PathGrid = {
+      width: 8,
+      height: 8,
+      heights: new Uint8Array(64).fill(100),
+      seaLevel: 0,
+      features: new Uint16Array(64).fill(0),
+    };
+    const d = nearestWalkable(dense, 4, 4);
+    expect(isWalkable(dense, d.cellX, d.cellZ)).toBe(true);
+    expect(findWorldPath(dense, { x: 0, z: 0 }, { x: 16, z: 16 }).length).toBeGreaterThan(0);
+  });
+
+  it("seats formation goals off trunks when open ground is near", () => {
+    const grid = loneTreeGrid();
+    const center = toWorld(grid, 10, 5);
+    const goals = snappedFormationTargets(grid, center, 3, 8);
+    expect(goals).toHaveLength(3);
+    expect(snappedFormationTargets(grid, center, 3, 8)).toEqual(goals);
+    for (const g of goals) {
+      const cell = pathWorldToCell(grid, g.x, g.z);
+      expect(isWalkable(grid, cell.cellX, cell.cellZ)).toBe(true);
+      expect(isTreeCell(grid, cell.cellX, cell.cellZ)).toBe(false);
+    }
   });
 });

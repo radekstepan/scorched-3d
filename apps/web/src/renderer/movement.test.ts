@@ -6,6 +6,7 @@ import {
   pathWorldToCell,
   sampleHeightBilinear,
   seatHull,
+  trunkBlockedAt,
   yawToTarget,
   type RoutePoint,
   type UnitKind,
@@ -341,6 +342,39 @@ describe("terrain seating", () => {
       const body = units.children[0] as THREE.Group;
       expect(body.position.x).toBeLessThan(cliffX);
     }
+    movement.dispose();
+  });
+
+  it("routes ordered hulls around standing trunks instead of through them", () => {
+    // Integration over the core trunk pipeline (endpoint snap + smoothed
+    // keepout legs + drive clamp + slide): a stump ordered across a solid
+    // tree belt detours around it and arrives without ever entering a trunk
+    // keepout, and an exaggeration re-snap keeps its X/Z (re-seats sit the
+    // body, never teleport it).
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    for (let z = 8; z <= 15; z++) {
+      for (let x = 5; x < w - 5; x++) features[z * w + x] = 0;
+    }
+    const field = { width: w, height: h, heights, seaLevel: 0, features };
+    const ex = { v: 1 };
+    const units = rampGroup();
+    (units.children[0] as THREE.Group).position.set(-280, 100, -8);
+    const routes: RoutePoint[][] = [[{ x: -280, z: -8 }, { x: -280, z: -8 }]];
+    const movement = new UnitMovement(units, routes, rampEnv(field, ex), field);
+    movement.orderUnit(0, { x: 280, z: -8 });
+    for (let n = 0; n < 7200; n++) {
+      movement.update(1 / 60);
+      const p = movement.positions()[0]!;
+      expect(trunkBlockedAt(field, p.x, p.z, "stump")).toBe(false);
+    }
+    expect(movement.hasOrder(0)).toBe(false);
+    const parked = (units.children[0] as THREE.Group).position.clone();
+    movement.resnap();
+    expect((units.children[0] as THREE.Group).position.x).toBeCloseTo(parked.x, 9);
+    expect((units.children[0] as THREE.Group).position.z).toBeCloseTo(parked.z, 9);
     movement.dispose();
   });
 });

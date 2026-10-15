@@ -11,16 +11,23 @@ import {
   ROCK_DRAG,
   ROUGH_SLOPE_FLOOR,
   TREE_DRAG,
+  TRUNK_PUSH_SPEED,
   featureDrag,
   groundHeight,
+  hullBodyRadius,
   hullPitchRoll,
+  pushOutOfTrunks,
   sampleHeightBilinear,
   seatHull,
+  segmentClipsTrunk,
   slewTilt,
   stepBlocked,
   terrainSpeedScale,
+  trunkBlockedAt,
+  trunkKeepoutFor,
   type SeatField,
 } from "./terrain.js";
+import { TRUNK_KEEPOUT, TRUNK_RADIUS } from "./pathfinding.js";
 
 function flatField(w = 32, h = 32, height = 100, sea = 0): SeatField {
   return { width: w, height: h, heights: new Uint8Array(w * h).fill(height), seaLevel: sea };
@@ -291,6 +298,116 @@ describe("terrainSpeedScale", () => {
     // The full step scale carries the feature drag on flat ground.
     expect(terrainSpeedScale(field, open.x, open.z, tree.x, tree.z)).toBe(TREE_DRAG);
     expect(terrainSpeedScale(field, open.x, open.z, rock.x, rock.z)).toBe(ROCK_DRAG);
+  });
+});
+
+describe("tree-trunk collision", () => {
+  /** Flat field with one standing tree at (treeX, treeZ). */
+  function trunkField(treeX = 16, treeZ = 16, w = 32, h = 32): SeatField {
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[treeZ * w + treeX] = 0;
+    return { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0, features };
+  }
+
+  function trunkWorld(field: SeatField, cellX: number, cellZ: number): { x: number; z: number } {
+    return {
+      x: (cellX - (field.width - 1) / 2) * CELL_PIXELS,
+      z: (cellZ - (field.height - 1) / 2) * CELL_PIXELS,
+    };
+  }
+
+  it("sizes keepout per kind: flank half-width plus the trunk radius", () => {
+    expect(TRUNK_RADIUS).toBe(4);
+    expect(TRUNK_KEEPOUT).toBe(14);
+    expect(hullBodyRadius("flash")).toBe(HULL_FOOTPRINT.flash.halfWid);
+    expect(hullBodyRadius("stump")).toBe(HULL_FOOTPRINT.stump.halfWid);
+    expect(trunkKeepoutFor("flash")).toBe(HULL_FOOTPRINT.flash.halfWid + TRUNK_RADIUS);
+    expect(trunkKeepoutFor("stump")).toBe(HULL_FOOTPRINT.stump.halfWid + TRUNK_RADIUS);
+    expect(trunkKeepoutFor("hammer")).toBe(HULL_FOOTPRINT.hammer.halfWid + TRUNK_RADIUS);
+    expect(trunkKeepoutFor("commander")).toBe(HULL_FOOTPRINT.commander.halfWid + TRUNK_RADIUS);
+    // Kind-less queries steer with the widest hull's margin, matching smoothing.
+    expect(trunkKeepoutFor()).toBe(TRUNK_KEEPOUT);
+  });
+
+  it("flags positions inside the keepout, clears the flank outside it", () => {
+    const field = trunkField();
+    const trunk = trunkWorld(field, 16, 16);
+    for (const kind of Object.keys(HULL_FOOTPRINT) as (keyof typeof HULL_FOOTPRINT)[]) {
+      expect(trunkBlockedAt(field, trunk.x, trunk.z, kind)).toBe(true);
+      const keepout = trunkKeepoutFor(kind);
+      expect(trunkBlockedAt(field, trunk.x + keepout - 1, trunk.z, kind)).toBe(true);
+      expect(trunkBlockedAt(field, trunk.x + keepout + 1, trunk.z, kind)).toBe(false);
+    }
+    // Open ground far from any trunk reads clear, as do feature-less fields.
+    const open = trunkWorld(field, 5, 5);
+    expect(trunkBlockedAt(field, open.x, open.z, "stump")).toBe(false);
+    expect(trunkBlockedAt(flatField(), trunk.x, trunk.z, "stump")).toBe(false);
+  });
+
+  it("refuses steps into trunks but lets escapes out", () => {
+    const field = trunkField();
+    const trunk = trunkWorld(field, 16, 16);
+    const west = { x: trunk.x - 40, z: trunk.z };
+    const east = { x: trunk.x + 40, z: trunk.z };
+    // Straight through the trunk: refused, whatever the kind.
+    expect(segmentClipsTrunk(field, west.x, west.z, east.x, east.z, "flash")).toBe(true);
+    expect(stepBlocked(field, west.x, west.z, east.x, east.z, "flash")).toBe(true);
+    // Landing inside the keepout: refused.
+    expect(segmentClipsTrunk(field, west.x, west.z, trunk.x, trunk.z, "flash")).toBe(true);
+    // Skirting outside the keepout: free.
+    const keepout = trunkKeepoutFor("flash");
+    expect(
+      segmentClipsTrunk(field, west.x, west.z - keepout - 2, east.x, east.z - keepout - 2, "flash"),
+    ).toBe(false);
+    expect(stepBlocked(field, west.x, west.z - keepout - 2, east.x, east.z - keepout - 2, "flash")).toBe(
+      false,
+    );
+    // Escape: starting inside and moving away is allowed (still inside, but
+    // farther out) — this is how spawns on trunks drive free.
+    expect(segmentClipsTrunk(field, trunk.x, trunk.z, trunk.x + 5, trunk.z, "flash")).toBe(false);
+    expect(stepBlocked(field, trunk.x, trunk.z, trunk.x + 5, trunk.z, "flash")).toBe(false);
+    // Milling around inside (ending nearer) stays refused.
+    expect(segmentClipsTrunk(field, trunk.x + 5, trunk.z, trunk.x + 2, trunk.z, "flash")).toBe(true);
+    // Feature-less fields never clip, keeping terrain-less parity.
+    expect(segmentClipsTrunk(flatField(), west.x, west.z, east.x, east.z, "flash")).toBe(false);
+  });
+
+  it("pushes spawns out of trunks to clear ground, deterministically", () => {
+    const field = trunkField();
+    const trunk = trunkWorld(field, 16, 16);
+    const exit = pushOutOfTrunks(field, trunk.x, trunk.z, "stump");
+    expect(trunkBlockedAt(field, exit.x, exit.z, "stump")).toBe(false);
+    // Coincident escape runs +X, and replays exactly.
+    expect(exit.x).toBeGreaterThan(trunk.x);
+    expect(exit.z).toBeCloseTo(trunk.z, 9);
+    expect(pushOutOfTrunks(field, trunk.x, trunk.z, "stump")).toEqual(exit);
+    // Clear ground is untouched, as are feature-less fields.
+    const open = trunkWorld(field, 5, 5);
+    expect(pushOutOfTrunks(field, open.x, open.z, "stump")).toEqual(open);
+    expect(pushOutOfTrunks(flatField(), trunk.x, trunk.z, "stump")).toEqual({
+      x: trunk.x,
+      z: trunk.z,
+    });
+    expect(TRUNK_PUSH_SPEED).toBeGreaterThan(0);
+  });
+
+  it("exits overlapping keepouts in dense stands instead of ping-ponging", () => {
+    // Two adjacent trees: keepouts overlap, so the midpoint sits inside both.
+    const w = 32;
+    const h = 32;
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[16 * w + 15] = 0;
+    features[16 * w + 16] = 1;
+    const field: SeatField = { width: w, height: h, heights: new Uint8Array(w * h).fill(100), seaLevel: 0, features };
+    const a = trunkWorld(field, 15, 16);
+    const b = trunkWorld(field, 16, 16);
+    const mid = { x: (a.x + b.x) / 2, z: a.z };
+    expect(trunkBlockedAt(field, mid.x, mid.z, "stump")).toBe(true);
+    const exit = pushOutOfTrunks(field, mid.x, mid.z, "stump");
+    expect(pushOutOfTrunks(field, mid.x, mid.z, "stump")).toEqual(exit);
+    // Marches along one escape heading: the exit sits on the mid line, clear
+    // of both trunks (the stand is sparse enough to have an edge nearby).
+    expect(exit.z).toBeCloseTo(mid.z, 9);
   });
 });
 

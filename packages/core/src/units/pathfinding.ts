@@ -9,12 +9,14 @@ import type { UnitField } from "./place.js";
  * (above `seaLevel + PATH_DRY_LIFT`) with a gentle slope (at most
  * `PATH_MAX_SLOPE`). Water and steep cells are blocked. Search is
  * 8-directional with corner-cut prevention (a diagonal step needs both
- * orthogonal neighbours walkable), octile-heuristic costs weighted by a
+ * orthogonal neighbours walkable and trunk-free, so hulls never squeeze
+ * past a standing trunk's corner), octile-heuristic costs weighted by a
  * per-cell rough-terrain traverse cost (slope tiers plus tree/rock words), and a fully
  * deterministic tie-break (f, then h, then cell order), so the same order on
  * the same map always returns the same path. Raw A* routes are then
  * string-pulled (line-of-sight shortcuts that refuse legs crossing
- * tree/rock interiors) because the hulls steer at any
+ * tree/rock interiors, plus legs passing within trunk keepout of any
+ * standing tree) because the hulls steer at any
  * heading while the search only turns in eighths.
  *
  * Nanolathe parallels (adapted — retail runs fixed-point yard-map stamping
@@ -77,6 +79,21 @@ export const PATH_DRY_LIFT = 4;
 export const PATH_MAX_SLOPE = 15;
 /** Default spacing between formation fan slots, in world units. */
 export const PATH_FORMATION_SPACING = 56;
+/** World radius of a standing tree trunk, in world units.
+ *
+ * Matches the instanced trunk geometry (`features.ts` base radius 3.2,
+ * scaled up to ~1.17 for round trees): anything inside reads as a hull
+ * driving through wood. Canopy overhang is deliberately excluded — hulls
+ * may pass under branches, but never through the trunk itself. */
+export const TRUNK_RADIUS = 4;
+/**
+ * Generic trunk keepout in world units: the widest hull half-width
+ * (stump, 10 — see `HULL_FOOTPRINT` in `terrain.ts`) plus `TRUNK_RADIUS`.
+ * Smoothing has no per-kind context, so every leg steers with the widest
+ * hull's margin; drive steps refine it per kind. Stays under two cell
+ * widths (32), so neighbourhood probes stay 3×3.
+ */
+export const TRUNK_KEEPOUT = 14;
 /** Snap radius when seating an order endpoint onto walkable ground, cells. */
 export const PATH_SNAP_RADIUS = 12;
 /**
@@ -154,18 +171,27 @@ export function isWalkable(grid: PathGrid, x: number, z: number): boolean {
 
 /**
  * Nearest walkable cell to (x, z) within `radius` (breadth-first rings, so
- * the closest cell wins; ties break toward smaller z, then smaller x). Falls
- * back to the clamped input when nothing walkable is in range.
+ * the closest cell wins; ties break toward smaller z, then smaller x).
+ * Prefers cells without a standing trunk: hulls seat their centers on the
+ * goal, so snapping onto a tree cell would park the hull inside the trunk
+ * it just routed around. Falls back to any walkable cell when the whole
+ * neighbourhood is woods (dense stands stay reachable, drive refusals then
+ * hold at the trunk line instead of clipping), and to the clamped input
+ * when nothing walkable is in range.
  */
 export function nearestWalkable(grid: PathGrid, x: number, z: number, radius = PATH_SNAP_RADIUS): PathCell {
   const cx = Math.min(Math.max(Math.round(x), 0), grid.width - 1);
   const cz = Math.min(Math.max(Math.round(z), 0), grid.height - 1);
-  if (isWalkable(grid, cx, cz)) return { cellX: cx, cellZ: cz };
-  for (let r = 1; r <= Math.max(radius, 0); r++) {
-    for (let dz = -r; dz <= r; dz++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        if (isWalkable(grid, cx + dx, cz + dz)) return { cellX: cx + dx, cellZ: cz + dz };
+  if (isWalkable(grid, cx, cz) && !isTreeCell(grid, cx, cz)) return { cellX: cx, cellZ: cz };
+  for (const wantOpen of [true, false]) {
+    for (let r = 0; r <= Math.max(radius, 0); r++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          if (!isWalkable(grid, cx + dx, cz + dz)) continue;
+          if (wantOpen && isTreeCell(grid, cx + dx, cz + dz)) continue;
+          return { cellX: cx + dx, cellZ: cz + dz };
+        }
       }
     }
   }
@@ -281,6 +307,12 @@ export function findCellPath(grid: PathGrid, start: PathCell, goal: PathCell): P
       if (!isWalkable(grid, nx, nz)) continue;
       // No corner cutting: a diagonal step needs both orthogonal sides open.
       if (d.diag && (!isWalkable(grid, cx + d.dx, cz) || !isWalkable(grid, cx, cz + d.dz))) continue;
+      // No trunk squeezing either: a diagonal step past a standing trunk
+      // grazes its keepout (~11 world units at the corner) even when both
+      // orthogonal sides are walkable, so hulls would clip the wood the
+      // search threaded. Orthogonal neighbours of a diagonal stay ≥16 away
+      // and clear the widest keepout.
+      if (d.diag && (isTreeCell(grid, cx + d.dx, cz) || isTreeCell(grid, cx, cz + d.dz))) continue;
       const ni = idx(grid, nx, nz);
       if ((closed[ni] ?? 0) === 1) continue;
       // Rough-terrain weighting: the stride pays the destination cell's
@@ -348,12 +380,91 @@ export function legCrossesObstruction(grid: PathGrid, a: PathCell, b: PathCell):
 }
 
 /**
+ * Squared distance from world point (px, pz) to the world segment a→b.
+ * Shared by the path leg check here and the drive clamp in `terrain.ts`.
+ */
+export function segmentPointDistSq(
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number,
+  px: number,
+  pz: number,
+): number {
+  const dx = bx - ax;
+  const dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  if (!(len2 > 0)) {
+    const ox = px - ax;
+    const oz = pz - az;
+    return ox * ox + oz * oz;
+  }
+  const t = Math.min(Math.max(((px - ax) * dx + (pz - az) * dz) / len2, 0), 1);
+  const ox = px - (ax + dx * t);
+  const oz = pz - (az + dz * t);
+  return ox * ox + oz * oz;
+}
+
+/**
+ * True when the straight leg a→b passes within trunk keepout of any
+ * standing tree. Complements `legCrossesObstruction` (which only sees whole
+ * cell interiors): a leg skirting the corner of a tree cell never samples
+ * the tree cell itself, yet a hull driving it would still clip the trunk —
+ * the keepout circles reach past the cell edge. Candidates are gathered
+ * from a 5×5 neighbourhood around each half-cell sample (endpoints
+ * included, unlike the obstruction check — arriving *on* a trunk counts as
+ * clipping it), then tested exactly against the segment, so long legs stay
+ * linear in their length instead of scanning the whole bounding area.
+ * Deterministic: boolean result, no order dependence.
+ */
+export function legClipsTrunk(
+  grid: PathGrid,
+  a: PathCell,
+  b: PathCell,
+  keepout = TRUNK_KEEPOUT,
+): boolean {
+  if (!grid.features || !(keepout > 0)) return false;
+  const ax = (a.cellX - (grid.width - 1) / 2) * CELL_PIXELS;
+  const az = (a.cellZ - (grid.height - 1) / 2) * CELL_PIXELS;
+  const bx = (b.cellX - (grid.width - 1) / 2) * CELL_PIXELS;
+  const bz = (b.cellZ - (grid.height - 1) / 2) * CELL_PIXELS;
+  const dx = b.cellX - a.cellX;
+  const dz = b.cellZ - a.cellZ;
+  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) * 2));
+  const r2 = keepout * keepout;
+  const seen = new Set<number>();
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    const cx0 = Math.round(a.cellX + dx * t);
+    const cz0 = Math.round(a.cellZ + dz * t);
+    for (let oz = -2; oz <= 2; oz++) {
+      for (let ox = -2; ox <= 2; ox++) {
+        const cx = cx0 + ox;
+        const cz = cz0 + oz;
+        if (!inBounds(grid, cx, cz)) continue;
+        const id = cz * grid.width + cx;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!isTreeCell(grid, cx, cz)) continue;
+        const tx = (cx - (grid.width - 1) / 2) * CELL_PIXELS;
+        const tz = (cz - (grid.height - 1) / 2) * CELL_PIXELS;
+        if (segmentPointDistSq(ax, az, bx, bz, tx, tz) < r2) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Greedy string-pulling: from each kept waypoint, jump to the farthest
  * later waypoint with line of sight. Collapses open-ground zigzags to
  * straight legs while keeping the water/steep detours A* paid for — and,
  * new, the wood/rock detours: a shortcut crossing a tree/rock interior is
  * refused so smoothing never pulls a route back through the rough the
- * cost tiers walked around.
+ * cost tiers walked around. Trunk keepout applies on top (`legClipsTrunk`):
+ * even a leg through open cells is refused when it would skirt within a
+ * trunk's keepout circle, so smoothed legs never graze the wood they
+ * route around.
  */
 export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
   if (cells.length < 3) return [...cells];
@@ -364,7 +475,8 @@ export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
     for (let k = cells.length - 1; k > anchor + 1; k--) {
       if (
         hasLineOfSight(grid, cells[anchor]!, cells[k]!) &&
-        !legCrossesObstruction(grid, cells[anchor]!, cells[k]!)
+        !legCrossesObstruction(grid, cells[anchor]!, cells[k]!) &&
+        !legClipsTrunk(grid, cells[anchor]!, cells[k]!)
       ) {
         jump = k;
         break;
@@ -397,10 +509,13 @@ export function pathWorldToCell(
 }
 
 /**
- * End-to-end move-order path: snap both endpoints onto walkable ground, run
- * A*, string-pull, and convert to world waypoints. Falls back to the (snapped)
- * goal alone — a straight drive — when no route exists, so an order always
- * does something predictable instead of stranding the unit.
+ * End-to-end move-order path: snap both endpoints onto walkable ground
+ * (off trunks — see `nearestWalkable`), run A*, string-pull, and convert
+ * to world waypoints. Intermediate waypoints sitting on trunk cells are
+ * nudged onto open ground and the legs re-pulled once, so a hull never
+ * drives into the trunk its own waypoint sits on. Falls back to the
+ * (snapped) goal alone — a straight drive — when no route exists, so an
+ * order always does something predictable instead of stranding the unit.
  */
 export function findWorldPath(
   grid: PathGrid,
@@ -413,7 +528,16 @@ export function findWorldPath(
   const goal = nearestWalkable(grid, goalCell.cellX, goalCell.cellZ);
   const cells = findCellPath(grid, start, goal);
   if (!cells) return [pathCellToWorld(grid, goal)];
-  return smoothCellPath(grid, cells).map((c) => pathCellToWorld(grid, c));
+  const smoothed = smoothCellPath(grid, cells);
+  const seated = smoothed.map((c, i) =>
+    i > 0 && i < smoothed.length - 1 && isTreeCell(grid, c.cellX, c.cellZ)
+      ? nearestWalkable(grid, c.cellX, c.cellZ, 2)
+      : c,
+  );
+  const deduped = seated.filter(
+    (c, i) => i === 0 || c.cellX !== seated[i - 1]!.cellX || c.cellZ !== seated[i - 1]!.cellZ,
+  );
+  return smoothCellPath(grid, deduped).map((c) => pathCellToWorld(grid, c));
 }
 
 /**
@@ -499,15 +623,20 @@ function firstSeparatedCell(
   accepted: readonly PathPoint[],
   radius = PATH_SNAP_RADIUS,
 ): PathCell | null {
-  for (let r = 1; r <= Math.max(radius, 0); r++) {
-    for (let dz = -r; dz <= r; dz++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        const cell = { cellX: around.cellX + dx, cellZ: around.cellZ + dz };
-        if (!inBounds(grid, cell.cellX, cell.cellZ) || !isWalkable(grid, cell.cellX, cell.cellZ)) {
-          continue;
+  // Two passes like `nearestWalkable`: trunk-free cells first so arrivals
+  // never seat on a trunk, then any walkable cell (dense-woods fallback).
+  for (const wantOpen of [true, false]) {
+    for (let r = 1; r <= Math.max(radius, 0); r++) {
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          const cell = { cellX: around.cellX + dx, cellZ: around.cellZ + dz };
+          if (!inBounds(grid, cell.cellX, cell.cellZ) || !isWalkable(grid, cell.cellX, cell.cellZ)) {
+            continue;
+          }
+          if (wantOpen && isTreeCell(grid, cell.cellX, cell.cellZ)) continue;
+          if (farEnough(pathCellToWorld(grid, cell), accepted)) return cell;
         }
-        if (farEnough(pathCellToWorld(grid, cell), accepted)) return cell;
       }
     }
   }

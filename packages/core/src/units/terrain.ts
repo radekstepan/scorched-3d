@@ -1,6 +1,13 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import type { UnitField } from "./place.js";
-import { isWalkable, PATH_MAX_SLOPE } from "./pathfinding.js";
+import {
+  isTreeCell,
+  isWalkable,
+  PATH_MAX_SLOPE,
+  segmentPointDistSq,
+  TRUNK_KEEPOUT,
+  TRUNK_RADIUS,
+} from "./pathfinding.js";
 import type { UnitKind } from "./types.js";
 
 /**
@@ -206,13 +213,14 @@ export function seatHull(
 }
 
 /**
- * True when a hull must not step from (fromX, fromZ) to (toX, toZ): the
- * destination cell is unwalkable (water/steep, the same gate pathfinding
- * uses) or the raw point-to-point grade exceeds what the gate tolerates.
- * A blocked mover holds position and keeps turning toward its target
- * (retail's blocked-mover behavior) instead of clipping into the slope.
+ * True when a hull must not step from (fromX, fromZ) to (toX, toZ) for
+ * terrain reasons alone: the destination cell is unwalkable (water/steep,
+ * the same gate pathfinding uses) or the raw point-to-point grade exceeds
+ * what the gate tolerates. Trunk keepouts are NOT considered here — see
+ * `stepBlocked` for the full gate. Split out so drivers can tell a hard
+ * terrain wall (hold position) from wood (slide around it).
  */
-export function stepBlocked(
+export function terrainStepBlocked(
   field: SeatField,
   fromX: number,
   fromZ: number,
@@ -234,6 +242,208 @@ export function stepBlocked(
   if (!isWalkable(field, cellX, cellZ)) return true;
   const grade = Math.abs(sampleHeightBilinear(field, toX, toZ) - sampleHeightBilinear(field, fromX, fromZ)) / dist;
   return grade > MAX_DRIVE_GRADE;
+}
+
+/**
+ * Full drive gate: unwalkable/too-steep ground (see `terrainStepBlocked`)
+ * plus standing-trunk keepouts (see `segmentClipsTrunk`). A blocked mover
+ * holds position and keeps turning toward its target (retail's
+ * blocked-mover behavior) instead of clipping into the slope — or through
+ * the trunk.
+ */
+export function stepBlocked(
+  field: SeatField,
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+  kind?: UnitKind,
+): boolean {
+  if (terrainStepBlocked(field, fromX, fromZ, toX, toZ)) return true;
+  return segmentClipsTrunk(field, fromX, fromZ, toX, toZ, kind);
+}
+
+/** Hull body radius for trunk keepout: the flank half-width it turns with. */
+export function hullBodyRadius(kind: UnitKind): number {
+  return (HULL_FOOTPRINT[kind] ?? HULL_FOOTPRINT.flash)?.halfWid ?? 8;
+}
+
+/**
+ * Trunk keepout for a kind: hull body radius plus the trunk radius, so the
+ * hull's flank (not just its center) clears the wood. Without a kind this
+ * is the widest hull's margin — the same `TRUNK_KEEPOUT` smoothing steers
+ * with, keeping drive and pathing in agreement.
+ */
+export function trunkKeepoutFor(kind?: UnitKind): number {
+  if (kind === undefined) return TRUNK_KEEPOUT;
+  return hullBodyRadius(kind) + TRUNK_RADIUS;
+}
+
+/** World-space center of an attribute-grid cell. */
+function cellCenterWorld(field: SeatField, cellX: number, cellZ: number): { x: number; z: number } {
+  return {
+    x: (cellX - (field.width - 1) / 2) * CELL_PIXELS,
+    z: (cellZ - (field.height - 1) / 2) * CELL_PIXELS,
+  };
+}
+
+/**
+ * True when world (x, z) sits inside a standing trunk's keepout. Standing
+ * means the static attribute-grid word: blast-felled trees keep their
+ * stump/snag/toppled trunk instance (fell, don't remove), so the wood is
+ * still there and still blocks — which also keeps collision out of the
+ * renderer-owned `DamageField` and the deterministic core untouched by
+ * live damage.
+ */
+export function trunkBlockedAt(field: SeatField, x: number, z: number, kind?: UnitKind): boolean {
+  if (!field.features) return false;
+  const keepout = trunkKeepoutFor(kind);
+  const r2 = keepout * keepout;
+  const cx = Math.round(x / CELL_PIXELS + (field.width - 1) / 2);
+  const cz = Math.round(z / CELL_PIXELS + (field.height - 1) / 2);
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const cellX = cx + dx;
+      const cellZ = cz + dz;
+      if (cellX < 0 || cellZ < 0 || cellX >= field.width || cellZ >= field.height) continue;
+      if (!isTreeCell(field, cellX, cellZ)) continue;
+      const c = cellCenterWorld(field, cellX, cellZ);
+      const ox = x - c.x;
+      const oz = z - c.z;
+      if (ox * ox + oz * oz < r2) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the world-space step from→to would clip a standing trunk:
+ * the destination lands inside a keepout, or the segment passes through
+ * one. A step that starts inside a keepout is exempt from that trunk's
+ * pass-through test — the hull is already there, and refusing would pin
+ * the final exit step, whose segment necessarily begins inside the
+ * circle. Entering from outside, passing through, and milling around
+ * deeper inside stay refused. Feature-less fields never clip, keeping
+ * terrain-less history byte-identical.
+ */
+export function segmentClipsTrunk(
+  field: SeatField,
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+  kind?: UnitKind,
+): boolean {
+  if (!field.features) return false;
+  const keepout = trunkKeepoutFor(kind);
+  const r2 = keepout * keepout;
+  const minCellX = Math.min(
+    Math.max(Math.floor((Math.min(fromX, toX) - keepout) / CELL_PIXELS + (field.width - 1) / 2), 0),
+    field.width - 1,
+  );
+  const maxCellX = Math.min(
+    Math.max(Math.ceil((Math.max(fromX, toX) + keepout) / CELL_PIXELS + (field.width - 1) / 2), 0),
+    field.width - 1,
+  );
+  const minCellZ = Math.min(
+    Math.max(Math.floor((Math.min(fromZ, toZ) - keepout) / CELL_PIXELS + (field.height - 1) / 2), 0),
+    field.height - 1,
+  );
+  const maxCellZ = Math.min(
+    Math.max(Math.ceil((Math.max(fromZ, toZ) + keepout) / CELL_PIXELS + (field.height - 1) / 2), 0),
+    field.height - 1,
+  );
+  for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
+    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
+      if (!isTreeCell(field, cellX, cellZ)) continue;
+      const c = cellCenterWorld(field, cellX, cellZ);
+      const sx = fromX - c.x;
+      const sz = fromZ - c.z;
+      const start2 = sx * sx + sz * sz;
+      // Already inside this trunk's keepout: only the destination decides —
+      // leaving (or holding still, decided by the caller) is allowed, going
+      // deeper is not.
+      if (start2 < r2) {
+        const ex = toX - c.x;
+        const ez = toZ - c.z;
+        if (ex * ex + ez * ez < start2) return true;
+        continue;
+      }
+      const ex = toX - c.x;
+      const ez = toZ - c.z;
+      if (ex * ex + ez * ez < r2) return true;
+      if (segmentPointDistSq(fromX, fromZ, toX, toZ, c.x, c.z) < r2) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Easing speed for the trunk push-out in `movement.ts`: faster than the
+ * unit separation shove (22) so a hull parked on a trunk exits promptly,
+ * still slow enough to read as jostling rather than teleporting.
+ */
+export const TRUNK_PUSH_SPEED = 30;
+
+/**
+ * Nearest position outside every nearby trunk keepout. Marches out along
+ * the escape heading (away from the nearest trunk center, fixed +X when
+ * exactly coincident) and returns the first trunk-clear sample, so
+ * overlapping keepouts in dense stands can't ping-pong a sequential
+ * snapper back and forth. Returns the input unchanged when already clear,
+ * and a best-effort step clear of the nearest trunk when no clear sample
+ * exists within range (deep forest interiors have no trunk-free ground —
+ * the hull then holds honestly instead of clipping). Deterministic: fixed
+ * scan order with first-wins ties, bounded march, no RNG. The caller eases
+ * toward this target instead of snapping, and gates the ease with
+ * `stepBlocked`, so the exit never clips into water or steep ground.
+ */
+export function pushOutOfTrunks(
+  field: SeatField,
+  x: number,
+  z: number,
+  kind?: UnitKind,
+): { x: number; z: number } {
+  if (!field.features || !trunkBlockedAt(field, x, z, kind)) return { x, z };
+  const keepout = trunkKeepoutFor(kind);
+  const cx = Math.round(x / CELL_PIXELS + (field.width - 1) / 2);
+  const cz = Math.round(z / CELL_PIXELS + (field.height - 1) / 2);
+  let nx = 0;
+  let nz = 0;
+  let best = Infinity;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const cellX = cx + dx;
+      const cellZ = cz + dz;
+      if (cellX < 0 || cellZ < 0 || cellX >= field.width || cellZ >= field.height) continue;
+      if (!isTreeCell(field, cellX, cellZ)) continue;
+      const c = cellCenterWorld(field, cellX, cellZ);
+      const ox = x - c.x;
+      const oz = z - c.z;
+      const d2 = ox * ox + oz * oz;
+      if (d2 < best) {
+        best = d2;
+        nx = c.x;
+        nz = c.z;
+      }
+    }
+  }
+  let hx = x - nx;
+  let hz = z - nz;
+  const d = Math.hypot(hx, hz);
+  if (d > 1e-6) {
+    hx /= d;
+    hz /= d;
+  } else {
+    hx = 1;
+    hz = 0;
+  }
+  for (let step = keepout + 0.5; step <= keepout + 64.5; step += 2) {
+    const px = x + hx * step;
+    const pz = z + hz * step;
+    if (!trunkBlockedAt(field, px, pz, kind)) return { x: px, z: pz };
+  }
+  return { x: x + hx * (keepout + 0.5), z: z + hz * (keepout + 0.5) };
 }
 
 /** Feature word at a cell, or 0xffff (empty) when out of bounds / unknown. */
