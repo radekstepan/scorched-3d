@@ -83,12 +83,12 @@ import type { UnitField } from "./place.js";
 
 /** Patrol speed per kind, world units per second (fast scouts → slow guns). */
 export const MOVE_SPEED: Record<UnitKind, number> = {
-  flash: 58,
-  stump: 40,
-  commander: 32,
-  hammer: 26,
+  flash: 72,
+  stump: 50,
+  commander: 40,
+  hammer: 34,
   // Infantry scout: the fastest feet on the field, outruns every tank.
-  peewee: 64,
+  peewee: 80,
 };
 
 /** Waypoints per looping route, including the spawn cell as waypoint 0. */
@@ -102,7 +102,7 @@ export const STOP_RADIUS = 30;
 /** Spacing: crawl at SLOW_SCALE inside this distance (world units). */
 export const SLOW_RADIUS = 72;
 /** Speed multiplier while inside SLOW_RADIUS of another mover. */
-export const SLOW_SCALE = 0.35;
+export const SLOW_SCALE = 0.5;
 /**
  * Spacing floor for ordered hulls: a player-sent unit keeps at least this
  * fraction of its drive inside another mover's stop radius instead of
@@ -112,8 +112,8 @@ export const SLOW_SCALE = 0.35;
  * hull can close the last metres to a goal near a parked unit and arrive.
  * Patrol keeps the hard 0 (ambient wandering must rest outside the hold,
  * and separation alone opens those gaps). Stacking through the floor is
- * still bounded: separation shoves harder (22 u/s) than the floor drives
- * (≤17 u/s), so head-on pairs open rather than pass through each other.
+ * still bounded: separation shoves harder (30 u/s) than the floor drives
+ * (≤24 u/s), so head-on pairs open rather than pass through each other.
  */
 export const ORDER_SPACING_FLOOR = 0.3;
 /**
@@ -129,11 +129,12 @@ export const ORDER_SPACING_FLOOR = 0.3;
  */
 export const SEPARATION_RADIUS = STOP_RADIUS;
 /**
- * Separation push speed, world units per second. Slower than any hull's
- * forward drive (`MOVE_SPEED` floor is 26) so the nudge reads as jostling,
- * not teleporting — but fast enough to clear a 30-unit hold in ~2 s.
+ * Separation push speed, world units per second. Faster than any hull's
+ * floor drive (`MOVE_SPEED` ceiling is 80 × `ORDER_SPACING_FLOOR` 0.3 = 24)
+ * so the nudge reads as jostling, not teleporting — but fast enough to
+ * clear a 30-unit hold in ~1 s.
  */
-export const SEPARATION_SPEED = 22;
+export const SEPARATION_SPEED = 30;
 /**
  * Sidestep weight inside the separation push, relative to the radial shove.
  * Purely radial push cannot resolve head-on crossings (the pair backs away

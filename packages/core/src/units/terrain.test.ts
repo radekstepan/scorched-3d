@@ -458,10 +458,10 @@ describe("hull crush contact (which standing trees a step touches)", () => {
     return { points: [at(14, 16), at(18, 16)], states: ["intact", "intact"] };
   }
 
-  it("crawls much slower than canopy brush while crushing", () => {
-    // Ordering pin: crushing a fresh lane (0.25) labours far below the
-    // canopy-brush proximity drag (0.6) — and both below open ground.
-    expect(CRUSH_DRAG).toBe(0.25);
+  it("crawls slower than canopy brush while crushing", () => {
+    // Ordering pin: crushing a fresh lane (0.4) labours below the
+    // canopy-brush proximity drag (0.75) — and both below open ground.
+    expect(CRUSH_DRAG).toBe(0.4);
     expect(CRUSH_DRAG).toBeLessThan(TREE_DRAG);
     expect(TREE_DRAG).toBeLessThan(1);
   });

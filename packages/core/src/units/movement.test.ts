@@ -12,6 +12,7 @@ import {
   initMover,
   MOVE_SPEED,
   orderMover,
+  ORDER_SPACING_FLOOR,
   planRoutes,
   predictDrivenPath,
   ROUTE_WAYPOINTS,
@@ -19,6 +20,7 @@ import {
   separationVector,
   SEPARATION_RADIUS,
   SEPARATION_SIDESTEP,
+  SEPARATION_SPEED,
   SLOW_SCALE,
   spacingScale,
   STOP_RADIUS,
@@ -32,7 +34,7 @@ import { addScorchMark, createDamageField, type DamageField } from "./destructio
 import { STUN_MAX_DURATION } from "./impact.js";
 import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
-import { CRUSH_DRAG, TREE_DRAG, trunkBlockedAt } from "./terrain.js";
+import { CRUSH_DRAG, TREE_DRAG, featureDrag, trunkBlockedAt } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const;
@@ -502,7 +504,7 @@ describe("crowd separation", () => {
 
   it("moves single-file columns forward instead of grinding", () => {
     // Trailer 20 behind the leader, same lane, same goal: the old full push
-    // shoved the trailer backwards at 22 u/s against its floor drive, so
+    // shoved the trailer backwards at separation speed against its floor drive, so
     // the column ground through the stop. Stripping the opposed radial half
     // keeps every tick's progress while the kept sidestep still opens the
     // lane (measured: trailer z at tick 60 goes 14.9 -> 20.6, lane offset
@@ -1043,5 +1045,63 @@ describe("predictDrivenPath", () => {
     const route = flatRoute();
     const mover = orderMover({ x: 10, z: 20, hull: 1.2, leg: 0 }, [{ x: 300, z: 300 }]);
     expect(predictDrivenPath("hammer", mover, route)).toEqual(predictDrivenPath("hammer", mover, route));
+  });
+});
+
+describe("faster movement tune", () => {
+  it("keeps kind ordering with lifted base speeds", () => {
+    expect(MOVE_SPEED.peewee).toBeGreaterThan(MOVE_SPEED.flash);
+    expect(MOVE_SPEED.flash).toBeGreaterThan(MOVE_SPEED.stump);
+    expect(MOVE_SPEED.stump).toBeGreaterThan(MOVE_SPEED.commander);
+    expect(MOVE_SPEED.commander).toBeGreaterThan(MOVE_SPEED.hammer);
+    expect(MOVE_SPEED.hammer).toBeGreaterThanOrEqual(30);
+    expect(MOVE_SPEED.flash).toBeGreaterThanOrEqual(70);
+  });
+
+  it("keeps crowd drags ordered but lighter than before", () => {
+    // SLOW_SCALE 0.5 crawls faster than the old 0.35 without removing the
+    // convoy signal; separation still outruns the ordered floor drive so
+    // head-on pairs open instead of stacking through each other.
+    expect(SLOW_SCALE).toBe(0.5);
+    expect(ORDER_SPACING_FLOOR).toBe(0.3);
+    const floorMax = Math.max(...Object.values(MOVE_SPEED)) * ORDER_SPACING_FLOOR;
+    expect(SEPARATION_SPEED).toBeGreaterThan(floorMax);
+  });
+
+  it("covers open ground quickly and rough/woods proportionally faster", () => {
+    const field = openField();
+    const ramp = rampField();
+    const drive = (terrain: SeatField, ticks: number): number => {
+      const startX = worldX(terrain, 5);
+      let mover: Mover = { x: startX, z: 0, hull: Math.PI / 2, leg: 0 };
+      mover = orderMover(mover, [{ x: worldX(terrain, 30), z: 0 }]);
+      for (let n = 0; n < ticks; n++) {
+        mover = advanceMover("flash", mover, [], 1 / 60, 1, terrain);
+      }
+      return mover.x - startX;
+    };
+    // 400 world units in well under 10 s on the flat at 72 u/s.
+    const flat200 = drive(field, 360);
+    expect(flat200).toBeGreaterThan(380);
+    // Rough grade still drags, but keeps most of the pace (>=55% of flat
+    // with the 0.6 slope floor, vs ~40% on the old 0.45 tune).
+    const rough200 = drive(ramp, 360);
+    expect(rough200).toBeLessThan(flat200);
+    expect(rough200 / flat200).toBeGreaterThan(0.55);
+  });
+
+  it("brushes canopy near full pace on a felled lane", () => {
+    expect(TREE_DRAG).toBe(0.75);
+    expect(CRUSH_DRAG).toBe(0.4);
+    expect(CRUSH_DRAG).toBeLessThan(TREE_DRAG);
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    const features = new Uint16Array(w * h).fill(0xffff);
+    features[11 * w + 18] = 0;
+    const wooded: SeatField = { width: w, height: h, heights, seaLevel: 0, features };
+    const z = (11 - (h - 1) / 2) * CELL_PIXELS;
+    const near = { x: worldX(wooded, 17), z };
+    expect(featureDrag(wooded, near.x, near.z)).toBe(0.75);
   });
 });

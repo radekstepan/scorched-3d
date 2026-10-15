@@ -34,12 +34,12 @@ export const TURRET_LIMIT: Record<UnitKind, number> = {
 
 /** Hull turn rate per kind, radians per second. */
 export const HULL_TURN_RATE: Record<UnitKind, number> = {
-  flash: 2.0,
-  stump: 1.5,
-  hammer: 1.1,
-  commander: 1.6,
+  flash: 2.2,
+  stump: 1.7,
+  hammer: 1.3,
+  commander: 1.8,
   // Infantry: nimble on its feet, spins to face fast.
-  peewee: 2.6,
+  peewee: 2.7,
 };
 
 /** Turret slew rate per kind, radians per second. */

@@ -94,8 +94,8 @@ describe("aimStep", () => {
 
   it("slews the turret for small off-boresight targets, hull barely moves", () => {
     const first = aimStep("stump", 0, 0, 0.3, 0.05);
-    // Hull turns at most 1.5 * 0.05 = 0.075; the turret takes the rest.
-    expect(Math.abs(first.hull)).toBeLessThanOrEqual(0.075 + 1e-9);
+    // Hull turns at most rate * dt; the turret takes the rest.
+    expect(Math.abs(first.hull)).toBeLessThanOrEqual(HULL_TURN_RATE.stump! * 0.05 + 1e-9);
     expect(first.turret).not.toBe(0);
     expect(Math.abs(first.turret)).toBeLessThanOrEqual(TURRET_LIMIT.stump! + 1e-9);
   });

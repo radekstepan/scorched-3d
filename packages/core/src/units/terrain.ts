@@ -92,18 +92,18 @@ export const MAX_DRIVE_GRADE = PATH_MAX_SLOPE / CELL_PIXELS;
  * Slowest slope drag: a hull climbing the steepest still-walkable grade
  * keeps this fraction of its speed. Linear between flat (1) and here.
  */
-export const ROUGH_SLOPE_FLOOR = 0.45;
+export const ROUGH_SLOPE_FLOOR = 0.6;
 /** Speed fraction while pushing through standing trees (cell or neighbour). */
-export const TREE_DRAG = 0.6;
+export const TREE_DRAG = 0.75;
 /** Speed fraction while picking through rocks or metal deposits. */
-export const ROCK_DRAG = 0.5;
+export const ROCK_DRAG = 0.65;
 /**
  * Speed fraction while a step crushes standing wood (see
- * `treesCrushedByStep`): far slower than the `TREE_DRAG` canopy brush, so
+ * `treesCrushedByStep`): slower than the `TREE_DRAG` canopy brush, so
  * ploughing a fresh lane through forest reads as labouring — while a second
  * pass over the already-fallen trunks rides the lighter proximity drag.
  */
-export const CRUSH_DRAG = 0.25;
+export const CRUSH_DRAG = 0.4;
 
 /** Seated pose for one hull: surface height plus hull-frame tilt. */
 export interface HullSeat {
@@ -465,10 +465,10 @@ export function segmentClipsTrunk(
 
 /**
  * Easing speed for the trunk push-out in `movement.ts`: faster than the
- * unit separation shove (22) so a hull parked on a trunk exits promptly,
+ * unit separation shove (30) so a hull parked on a trunk exits promptly,
  * still slow enough to read as jostling rather than teleporting.
  */
-export const TRUNK_PUSH_SPEED = 30;
+export const TRUNK_PUSH_SPEED = 36;
 
 /**
  * Nearest position outside every nearby trunk keepout. Marches out along
