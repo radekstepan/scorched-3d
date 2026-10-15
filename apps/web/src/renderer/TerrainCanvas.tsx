@@ -566,6 +566,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     combat.onUnitThreatened = (victim, attacker, ax, az) => {
       movement.threatenUnit(victim, attacker, ax, az);
     };
+    // Obstructed guns: a hull that holds fire because terrain hides its
+    // target repositions toward it (higher vantage or closer) through the
+    // same pursuit drive instead of shooting through the hill.
+    combat.onObstructedShot = (attacker, target, x, z) => {
+      movement.seekEngage(attacker, target, x, z);
+    };
 
     // Move-order pings: short-lived expanding rings where an order landed.
     // Same round-circle compositing as the unit selection beacon

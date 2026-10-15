@@ -11,7 +11,9 @@ import {
   disperseAim,
   ELEVATION_MAX,
   ELEVATION_MIN,
+  flightClearsTerrain,
   flightClearsTrees,
+  flightTerrainHit,
   FLIGHT_MAX_TIME,
   flightDuration,
   GRAVITY,
@@ -35,6 +37,7 @@ import {
   solveDirect,
   solveShot,
   solveShotClearing,
+  TERRAIN_GRAZE,
   treesOnSegment,
   treeStickChance,
   trunksOnBarrel,
@@ -459,6 +462,77 @@ describe("tree interception", () => {
     expect(rollTreeStick([], "flash", rng)).toBe(-1);
     // A roll above the chance flies on through every tree.
     expect(rollTreeStick([1, 2], "flash", () => 0.999)).toBe(-1);
+  });
+});
+
+describe("terrain collision", () => {
+  const flat = () => 0;
+  // A blocky ridge astride the line of fire: 60 tall between x=150..250.
+  const ridge = (x: number, _z: number) => (x > 150 && x < 250 ? 60 : 0);
+
+  it("clears flat bolts over flat ground", () => {
+    const from = { x: 0, y: 30, z: 0 };
+    const to = { x: 400, y: 30, z: 0 };
+    const sol = solveDirect(from, to, 1000)!;
+    expect(flightClearsTerrain(from, sol.velocity, 0, sol.duration, flat)).toBe(true);
+    expect(flightTerrainHit(from, sol.velocity, 0, 0, sol.duration, flat)).toBeNull();
+  });
+
+  it("catches a bolt flying into a ridge, seating the hit on its face", () => {
+    const from = { x: 0, y: 30, z: 0 };
+    const to = { x: 400, y: 30, z: 0 };
+    const sol = solveDirect(from, to, 1000)!;
+    expect(flightClearsTerrain(from, sol.velocity, 0, sol.duration, ridge)).toBe(false);
+    const hit = flightTerrainHit(from, sol.velocity, 0, 0, sol.duration, ridge)!;
+    expect(hit).not.toBeNull();
+    // Contact on the near face (x ≈ 150): the flat arc meets the wall at
+    // its own height (y ≈ 30), well below the ridge top it never reaches.
+    expect(hit.x).toBeGreaterThan(140);
+    expect(hit.x).toBeLessThan(165);
+    expect(hit.y).toBeCloseTo(30, 0);
+    expect(hit.y).toBeLessThan(60);
+    expect(hit.t).toBeGreaterThan(0);
+    expect(hit.t).toBeLessThan(sol.duration);
+  });
+
+  it("cannot tunnel: a fast bolt in one long window still hits a narrow ridge", () => {
+    // 1300 u/s bolt, single 1 s window; both endpoints sit above a
+    // 200-tall sliver (600..660) an endpoint-only check would straddle.
+    const from = { x: 0, y: 100, z: 0 };
+    const vel = { x: 1300, y: 0, z: 0 };
+    const sliver = (x: number, _z: number) => (x > 600 && x < 660 ? 200 : 0);
+    const hit = flightTerrainHit(from, vel, 0, 0, 1, sliver)!;
+    expect(hit).not.toBeNull();
+    expect(hit.x).toBeGreaterThan(590);
+    expect(hit.x).toBeLessThan(675);
+    expect(flightClearsTerrain(from, vel, 0, 1, sliver)).toBe(false);
+  });
+
+  it("lets shells lob over the ridge that blocks their flat root", () => {
+    const a = { x: 0, y: 30, z: 0 };
+    const b = { x: 400, y: 30, z: 0 };
+    const low = solveBallistic(a, b, 520, GRAVITY)!;
+    expect(flightClearsTerrain(a, low.velocity, GRAVITY, low.duration, ridge)).toBe(false);
+    const high = solveBallisticHigh(a, b, 520, GRAVITY)!;
+    expect(flightClearsTerrain(a, high.velocity, GRAVITY, high.duration, ridge)).toBe(true);
+  });
+
+  it("lets honest skimmers fly but clips dirt-grazers", () => {
+    const skim = { x: 0, y: TERRAIN_GRAZE + 1, z: 0 };
+    const skimSol = solveDirect(skim, { x: 400, y: TERRAIN_GRAZE + 1, z: 0 }, 1000)!;
+    expect(flightClearsTerrain(skim, skimSol.velocity, 0, skimSol.duration, flat)).toBe(true);
+    const graze = { x: 0, y: TERRAIN_GRAZE - 1, z: 0 };
+    const grazeSol = solveDirect(graze, { x: 400, y: TERRAIN_GRAZE - 1, z: 0 }, 1000)!;
+    expect(flightClearsTerrain(graze, grazeSol.velocity, 0, grazeSol.duration, flat)).toBe(false);
+  });
+
+  it("reads degenerate windows as clear", () => {
+    const from = { x: 0, y: 30, z: 0 };
+    const vel = { x: 1000, y: 0, z: 0 };
+    expect(flightClearsTerrain(from, vel, 0, 0, ridge)).toBe(true);
+    expect(flightClearsTerrain(from, vel, 0, -1, ridge)).toBe(true);
+    expect(flightTerrainHit(from, vel, 0, 1, 1, ridge)).toBeNull();
+    expect(flightTerrainHit(from, vel, 0, 2, 1, ridge)).toBeNull();
   });
 });
 

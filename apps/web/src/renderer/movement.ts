@@ -11,6 +11,7 @@ import {
   initMover,
   notifyThreat,
   orderMover,
+  seekEngage,
   slewTilt,
   snappedFormationTargets,
   stunMover,
@@ -203,6 +204,23 @@ export class UnitMovement {
   hasThreat(index: number): boolean {
     const mover = this.movers[index];
     return mover ? hasThreat(mover) : false;
+  }
+
+  /**
+   * Reposition a live hull whose gun cannot engage because terrain hides
+   * the target (core `seekEngage` through the retaliation pursuit drive, so
+   * the hull closes toward the target — a higher vantage or shorter range —
+   * holds at weapons-range stand-off, and resumes patrol if the fight moves
+   * on). Wrecks refuse (they hold forever), a hull never seeks itself, and
+   * ordered/holding hulls refuse (player orders win). Idempotent per tick:
+   * re-seeks refresh the memory, they never stack.
+   */
+  seekEngage(seeker: number, target: number, x: number, z: number): void {
+    const mover = this.movers[seeker];
+    if (!mover || this.destroyed[seeker]) return;
+    if (seeker === target) return;
+    const anchor = this.routes[seeker]?.[0] ?? null;
+    this.movers[seeker] = seekEngage(mover, mover, target, x, z, anchor);
   }
 
   /**

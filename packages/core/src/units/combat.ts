@@ -752,6 +752,116 @@ export function rollTreeStick(
 }
 
 /**
+ * Terrain collision for projectiles (flat tracers + ballistic shells).
+ * Shots previously flew their analytic arc straight to the aimed impact and
+ * only ever checked trees mid-flight, so any ridge between the muzzle and
+ * the target let the round visibly pass through the hillside. Every flight
+ * is now swept against the live surface instead: the arc is marched at
+ * arc-length steps no longer than `TERRAIN_SAMPLE_STEP` (no tunneling even
+ * for 1300 u/s bolts on long ticks) and the first below-surface sample is
+ * bisected back to the contact face, so impacts seat on the dirt they hit.
+ * A small `TERRAIN_GRAZE` keeps honest skimmers (rounds riding a few units
+ * over a crest) from reading as hits on bilinear sampling noise.
+ */
+
+/** Longest arc-length step when sweeping a flight against terrain, world units. */
+export const TERRAIN_SAMPLE_STEP = 8;
+/** Surface grace: a round within this height above the dirt still flies. */
+export const TERRAIN_GRAZE = 2;
+/** Bisection passes refining a below-surface sample back to the contact face. */
+export const TERRAIN_REFINE_STEPS = 12;
+/** Hard cap on sweep samples per call (longest lobbed arc stays far below). */
+export const TERRAIN_MAX_SAMPLES = 512;
+
+/** First terrain contact of a swept flight: contact time plus world point. */
+export interface TerrainHit {
+  /** Seconds after leaving the muzzle (within the swept window). */
+  t: number;
+  /** World-space contact point on the flight arc. */
+  x: number;
+  y: number;
+  z: number;
+}
+
+/**
+ * First terrain contact of the flight `start` + `velocity` under `gravity`
+ * inside the time window [`t0`, `t1`], or null when the whole window flies.
+ * Marches the analytic arc at ≤`TERRAIN_SAMPLE_STEP` arc-length steps and
+ * bisects the first below-surface sample (`y < groundY + TERRAIN_GRAZE`)
+ * back to the contact face. Pure; the caller owns the surface (live
+ * `groundY` in the renderer, synthetic ridges in tests).
+ */
+export function flightTerrainHit(
+  start: CombatVec3,
+  velocity: CombatVec3,
+  gravity: number,
+  t0: number,
+  t1: number,
+  groundY: (x: number, z: number) => number,
+): TerrainHit | null {
+  if (!(t1 > t0) || !(Number.isFinite(t0) && Number.isFinite(t1))) return null;
+  if (
+    !(
+      Number.isFinite(start.x) && Number.isFinite(start.y) && Number.isFinite(start.z) &&
+      Number.isFinite(velocity.x) && Number.isFinite(velocity.y) && Number.isFinite(velocity.z) &&
+      Number.isFinite(gravity)
+    )
+  ) {
+    return null;
+  }
+  const dt = t1 - t0;
+  // Arc-length estimate: mean speed over the window (gravity bleed included)
+  // times the window — an overestimate on curved arcs, which only refines.
+  const speed = Math.hypot(velocity.x, velocity.y, velocity.z);
+  if (!(speed >= 0)) return null;
+  const est = (speed + 0.5 * Math.abs(gravity) * dt) * dt;
+  if (!(est > 0)) return null;
+  const steps = Math.min(Math.max(Math.ceil(est / TERRAIN_SAMPLE_STEP), 1), TERRAIN_MAX_SAMPLES);
+  let prevT = t0;
+  for (let s = 1; s <= steps; s++) {
+    const t = t0 + (dt * s) / steps;
+    const p = ballisticPosition(start, velocity, t, gravity);
+    if (p.y < groundY(p.x, p.z) + TERRAIN_GRAZE) {
+      // Bisect the above-surface `prevT` against the below-surface `t`.
+      let lo = prevT;
+      let hi = t;
+      let hit = { ...p, t };
+      for (let i = 0; i < TERRAIN_REFINE_STEPS; i++) {
+        const mid = (lo + hi) / 2;
+        const m = ballisticPosition(start, velocity, mid, gravity);
+        if (m.y < groundY(m.x, m.z) + TERRAIN_GRAZE) {
+          hi = mid;
+          hit = { x: m.x, y: m.y, z: m.z, t: mid };
+        } else {
+          lo = mid;
+        }
+      }
+      return hit;
+    }
+    prevT = t;
+  }
+  return null;
+}
+
+/**
+ * True when the whole flight `start` + `velocity` under `gravity` for
+ * `duration` seconds stays above the surface — the fire-time admission gate
+ * (guns hold fire into a hillside instead of shooting through it) and the
+ * per-tick sweep twin below share it. Null/non-positive durations read as
+ * clear, so degenerate solves never block on terrain.
+ */
+export function flightClearsTerrain(
+  start: CombatVec3,
+  velocity: CombatVec3,
+  gravity: number,
+  duration: number,
+  groundY: (x: number, z: number) => number,
+): boolean {
+  if (!(duration > 0)) return true;
+  return flightTerrainHit(start, velocity, gravity, 0, duration, groundY) === null;
+}
+
+/**
  * Gun-tube collision with standing trunks. A traversing turret sweeps a
  * 14–32-unit tube well outside the hull-flank trunk keepout (11–14), so the
  * hull can stand clear of the wood while its cannon passes straight through

@@ -205,6 +205,67 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
 }
 
 /**
+ * Reposition for a blocked line of fire: point an idle/patrolling hull at
+ * the target its gun cannot reach because terrain (or wood) hides it, so
+ * the hull closes to a higher vantage or shorter range instead of shooting
+ * through the hill. Drives the same threat/pursuit pipeline retaliation
+ * uses (stand-off hold, disengage give-up, anchor leash, memory expiry —
+ * see `pursueStep`), so the hull advances, holds facing the target inside
+ * stand-off, and resumes patrol if the fight moves on.
+ *
+ * Compared to `notifyThreat` (which records a hit someone else dealt), the
+ * seeker is the *shooter*: there is no engage-radius gate — a gun inside
+ * admitted range but behind a ridge must still close even when the target
+ * sits past the retaliation notice bound — while the rest of the authority
+ * rules hold:
+ *
+ * - Ordered/holding movers ignore the seek (player orders win).
+ * - The patrol-anchor leash still applies (local repositioning only, never
+ *   a map-wide chase): a target past the leash leaves the mover untouched.
+ * - `attacker` is the *target* roster index the hull should close on, or
+ *   -1 for a structure with no roster row (an HQ): the drive falls back to
+ *   the last-known (`ax`, `az`) position. Self-seeks never happen (guns
+ *   only ever draw cross-team pairs) but are refused anyway.
+ * - A live memory is refreshed in place (position + clock), preserving its
+ *   leash (a hunt memory keeps ranging wide instead of collapsing to the
+ *   retaliation leash mid-chase).
+ *
+ * Pure: no rng, no clocks.
+ */
+export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
+  mover: M,
+  victim: { x: number; z: number },
+  attacker: number,
+  ax: number,
+  az: number,
+  anchor?: ThreatAnchor | null,
+): M {
+  if (!Number.isInteger(attacker) || attacker < -1) return mover;
+  if (!Number.isFinite(ax) || !Number.isFinite(az)) return mover;
+  if (!victim || !Number.isFinite(victim.x) || !Number.isFinite(victim.z)) return mover;
+  if (mover.hold) return mover;
+  const order = mover.order as { at?: number; points?: readonly unknown[] } | undefined;
+  if (order && (order.at ?? 0) >= 0 && (order.at ?? 0) < (order.points?.length ?? 0)) return mover;
+  // Self-seeks never happen (guns only ever draw cross-team pairs); the
+  // renderer also refuses seeker === target like the threat pipeline does.
+  if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
+  const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
+  if (live) {
+    return {
+      ...mover,
+      threat: {
+        attacker,
+        x: ax,
+        z: az,
+        ttl: THREAT_MEMORY_DURATION,
+        ...(live.leash !== undefined ? { leash: live.leash } : {}),
+      },
+    };
+  }
+  return { ...mover, threat: { attacker, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } };
+}
+
+/**
  * Tick a threat countdown by `dt` seconds, dropping the key at expiry so
  * post-pursuit snapshots compare equal with never-threatened ones. Pure;
  * a non-positive step leaves the mover untouched.

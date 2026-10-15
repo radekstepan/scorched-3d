@@ -297,6 +297,36 @@ describe("UnitMovement retaliation", () => {
   });
 });
 
+describe("UnitMovement LOS repositioning", () => {
+  it("records a seek on an idle hull and drives it toward the target", () => {
+    const { movement } = makeMovement();
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.seekEngage(0, 1, 500, 300);
+    expect(movement.hasThreat(0)).toBe(true);
+    const before = movement.moverState(0)!;
+    const distBefore = Math.hypot(before.x - 500, before.z - 300);
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    const after = movement.moverState(0)!;
+    // Same pursuit drive as retaliation: visibly closes on the target.
+    expect(Math.hypot(after.x - 500, after.z - 300)).toBeLessThan(distBefore);
+    expect(movement.hasThreat(0)).toBe(true);
+    movement.dispose();
+  });
+
+  it("lets player orders, holds, wrecks, and self-seeks refuse", () => {
+    const { movement } = makeMovement();
+    movement.orderUnit(0, { x: 100, z: 100 });
+    movement.seekEngage(0, 1, 500, 300);
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.seekEngage(1, 1, 500, 300);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.markDestroyed(1);
+    movement.seekEngage(1, 0, 0, 0);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.dispose();
+  });
+});
+
 describe("UnitMovement hunt", () => {
   /** Two idle hulls 583 apart on opposite sides, anchors at their spawns. */
   function makeHuntMovement(teams: [number, number]): { movement: UnitMovement; units: THREE.Group } {

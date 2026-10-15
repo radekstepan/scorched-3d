@@ -1251,6 +1251,129 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
   });
 });
 
+describe("CombatFx terrain collision (no shooting through hills)", () => {
+  /** Two flash hulls 400 apart along +X on flat ground, facing each other. */
+  function makeRidgePair(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 1, cellZ: 1, rotation: Math.PI / 2 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: -Math.PI / 2 },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(400, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    (group.children[0] as THREE.Group).rotation.y = Math.PI / 2;
+    (group.children[1] as THREE.Group).rotation.y = -Math.PI / 2;
+    return group;
+  }
+
+  /** 70-tall ridge astride the line of fire (muzzles ride ~110). */
+  const ridgeY = (x: number, _z: number) => (x > 150 && x < 250 ? 170 : 100);
+
+  it("holds flat fire into a hillside and reports the obstruction", () => {
+    const scene = new THREE.Scene();
+    const units = makeRidgePair();
+    const obstructed: { attacker: number; target: number; x: number; z: number }[] = [];
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: ridgeY,
+      blastFeatures: () => {},
+    });
+    fx.onObstructedShot = (attacker, target, x, z) => obstructed.push({ attacker, target, x, z });
+    for (let n = 0; n < 1200; n++) fx.update(1 / 60);
+    // No round ever leaves into the hill — and every hold names a
+    // cross-team pair plus the target position to close on.
+    expect(fx.totalFired).toBe(0);
+    expect(obstructed.length).toBeGreaterThan(0);
+    for (const o of obstructed) {
+      expect(o.attacker).not.toBe(o.target);
+      expect(new Set([o.attacker, o.target])).toEqual(new Set([0, 1]));
+      const t = units.children[o.target] as THREE.Group;
+      // The hook carries the target position to close on (aim scatter
+      // keeps the impact within a bound of the hull).
+      expect(Math.abs(o.x - t.position.x)).toBeLessThan(100);
+      expect(Math.abs(o.z - t.position.z)).toBeLessThan(100);
+    }
+    fx.dispose();
+  });
+
+  it("detonates a round mid-flight when terrain rises under it (no pass-through)", () => {
+    const scene = new THREE.Scene();
+    const units = makeRidgePair();
+    const blasts: number[] = [];
+    let ridgeOn = false;
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: (x, z) => (ridgeOn ? ridgeY(x, z) : 100),
+      blastFeatures: (x) => {
+        blasts.push(x);
+      },
+    });
+    // Let one round leave on flat ground, then raise the ridge under it.
+    let n = 0;
+    for (; n < 600 && fx.shotCount === 0; n++) fx.update(1 / 60);
+    expect(fx.shotCount).toBeGreaterThan(0);
+    ridgeOn = true;
+    for (let k = 0; k < 240; k++) fx.update(1 / 60);
+    // The in-flight round died on the ridge face — nothing reached the
+    // far hull at x=400, and later volleys held fire at the gate.
+    expect(blasts.length).toBeGreaterThan(0);
+    for (const x of blasts) expect(x).toBeLessThan(300);
+    expect(fx.shotCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("lobs shells over the ridge that blocks their flat root", () => {
+    const scene = new THREE.Scene();
+    const width = 64;
+    const height = 64;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "hammer", cellX: 20, cellZ: 32, rotation: Math.PI / 2 },
+        { kind: "hammer", cellX: 45, cellZ: 32, rotation: -Math.PI / 2 },
+      ],
+    } as unknown as TNTMap;
+    const units = buildUnits(map, 1);
+    const blasts: number[] = [];
+    const obstructed: unknown[] = [];
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      // Ridge between the hulls (world x≈16): the flat root digs in, the
+      // high root sails over.
+      groundY: (x) => (Math.abs(x - 16) < 60 ? 170 : 100),
+      blastFeatures: (x) => {
+        blasts.push(x);
+      },
+    });
+    fx.onObstructedShot = (...args: unknown[]) => obstructed.push(args);
+    const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
+    let lobbed = false;
+    for (let k = 0; k < 9000 && !(lobbed && blasts.length > 0); k++) {
+      fx.update(1 / 60);
+      lobbed =
+        lobbed ||
+        (units.children as THREE.Group[]).some(
+          (body, i) => kinds[i] === "hammer" && getBarrel(body) && barrelElevation(body) > 1.0,
+        );
+    }
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(lobbed).toBe(true);
+    // Lobbed rounds arrive past the ridge (never into it), so no hold-fire.
+    expect(obstructed).toHaveLength(0);
+    expect(blasts.length).toBeGreaterThan(0);
+    // Every arrival seats near a hull (x≈∓184/216), never on the ridge
+    // face (world x 16±60): no round flew through the hill.
+    for (const x of blasts) expect(Math.abs(x - 16)).toBeGreaterThan(60);
+    fx.dispose();
+  });
+});
+
 describe("CombatFx barrel crush (tubes knock down what they touch)", () => {
   /** One stump at the origin facing +Z (tube z 4..26 at y ~112.5). */
   function makeParkedStump(): THREE.Group {

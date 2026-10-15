@@ -15,6 +15,9 @@ import {
   craterDepthForIntensity,
   createUnitDamage,
   disperseAim,
+  flightClearsTerrain,
+  flightClearsTrees,
+  flightTerrainHit,
   GRAVITY,
   huskDecay,
   huskSink,
@@ -41,6 +44,7 @@ import {
   scorchForKind,
   scorchSeed,
   scorchShade,
+  solveBallisticHigh,
   solveShotClearing,
   stepAngle,
   THREAT_ENGAGE_RADIUS,
@@ -615,6 +619,16 @@ export class CombatFx {
   onUnitThreatened:
     | ((victim: number, attacker: number, ax: number, az: number, damageAdd: number) => void)
     | null = null;
+  /**
+   * Fired when a gun holds fire because terrain hides its target (the arc
+   * would hit the hillside): the attacker must reposition to a higher
+   * vantage or closer instead of shooting through the hill. Carries the
+   * attacker's roster index, the intended target index (-1 for a
+   * structure), and the target's world X/Z. Assigned by the canvas (which
+   * steers the hull through the movement drive); null in headless tests,
+   * where obstructed guns just hold fire silently.
+   */
+  onObstructedShot: ((attacker: number, target: number, x: number, z: number) => void) | null = null;
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Reused husk-decay fractions for `poseHusks` (no per-tick array). */
@@ -1762,8 +1776,38 @@ export class CombatFx {
     // Shells at max ballistic range fly ~5.3s; canopy lobs hang ~7.4s —
     // anything longer is rejected.
     if (!clearing) return false;
-    const sol = clearing.solution;
+    let sol = clearing.solution;
     if (sol.duration <= 0 || sol.duration > (clearing.elevated ? LOBBED_MAX_TIME : 6)) return false;
+    // Terrain admission: the round must clear the live surface all the way
+    // to the impact — never through a hillside. Shells whose flat root digs
+    // into the grade lob the high root over it when that clears wood and
+    // dirt alike (and fits the flight-time safety net); anything still
+    // blocked holds fire and asks for a reposition (higher vantage, closer)
+    // instead of shooting through the hill.
+    if (this.env) {
+      const from = { x: start.x, y: start.y, z: start.z };
+      const gravity = profile.shot === "shell" ? GRAVITY : 0;
+      const to = { x: impact.x, y: impact.y, z: impact.z };
+      if (!flightClearsTerrain(from, sol.velocity, gravity, sol.duration, this.env.groundY)) {
+        if (profile.shot === "shell" && !clearing.elevated) {
+          const high = solveBallisticHigh(from, to, profile.speed, GRAVITY);
+          if (
+            high && high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
+            flightClearsTrees(from, high.velocity, GRAVITY, high.duration, stands) &&
+            flightClearsTerrain(from, high.velocity, GRAVITY, high.duration, this.env.groundY)
+          ) {
+            setBarrelElevation(attacker, clampElevation(high.elevation));
+            sol = high;
+          } else {
+            this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);
+            return false;
+          }
+        } else {
+          this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);
+          return false;
+        }
+      }
+    }
     const barrelDir = live
       ? new THREE.Vector3(live.direction.x, live.direction.y, live.direction.z)
       : new THREE.Vector3(
@@ -2239,6 +2283,36 @@ export class CombatFx {
             this.kickLight(at, 0xff8a3c, 1400);
           }
           continue;
+        }
+      }
+      // Terrain sweep: the flown arc window (previous time → new time) is
+      // marched against the live surface at ≤8-unit steps, so even a 1300
+      // u/s bolt on a long tick cannot tunnel through a ridge it crosses
+      // mid-flight — the round detonates on the dirt it hits with the full
+      // arrival stack (splash, scorch, structures) instead of flying
+      // through the hillside to its aimed impact.
+      if (this.env) {
+        const tPrev = Math.max(t - dt, 0);
+        if (t > tPrev) {
+          const hit = flightTerrainHit(
+            { x: shot.start.x, y: shot.start.y, z: shot.start.z },
+            { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
+            shot.gravity,
+            tPrev,
+            t,
+            this.env.groundY,
+          );
+          if (hit) {
+            _shotAt.set(hit.x, hit.y, hit.z);
+            const at = _shotAt;
+            const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
+            this.scene.remove(shot.mesh);
+            (shot.mesh.material as THREE.Material).dispose();
+            this.shots.splice(this.shots.indexOf(shot), 1);
+            this.explode(at, color, shot.kind, false, shot.attacker);
+            this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
+            continue;
+          }
         }
       }
       shot.mesh.position.set(p.x, p.y, p.z);

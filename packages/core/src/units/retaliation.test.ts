@@ -19,6 +19,7 @@ import {
   hasThreat,
   notifyThreat,
   pursueStandOff,
+  seekEngage,
   tickThreat,
 } from "./retaliation.js";
 
@@ -95,6 +96,65 @@ describe("notifyThreat", () => {
     expect(notifyThreat(mover, mover, -1, 100, 0, null).threat).toBeUndefined();
     expect(notifyThreat(mover, mover, 1.5, 100, 0, null).threat).toBeUndefined();
     expect(notifyThreat(mover, mover, 1, Number.NaN, 0, null).threat).toBeUndefined();
+  });
+});
+
+describe("seekEngage", () => {
+  it("closes on a target past the retaliation engage radius (no notice gate)", () => {
+    const mover = initMover(flatRoute(), 0);
+    // A gun in admitted range (hammer reaches 1000) but behind a ridge must
+    // still reposition: the seek has no engage-radius gate (the anchor sits
+    // near the target, so the local leash still passes).
+    const next = seekEngage(mover, mover, 1, THREAT_ENGAGE_RADIUS + 100, 0, { x: 700, z: 0 });
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat).toMatchObject({
+      attacker: 1,
+      x: THREAT_ENGAGE_RADIUS + 100,
+      z: 0,
+      ttl: THREAT_MEMORY_DURATION,
+    });
+    expect(mover.threat).toBeUndefined();
+  });
+
+  it("seeks structures with no roster row (attacker -1 reads last-known)", () => {
+    const mover = initMover(flatRoute(), 0);
+    const next = seekEngage(mover, mover, -1, 400, 100, { x: 0, z: 0 });
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat?.attacker).toBe(-1);
+  });
+
+  it("lets player orders win: ordered and holding hulls stay put", () => {
+    const route = flatRoute();
+    const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
+    expect(seekEngage(ordered, ordered, 1, 100, 0, route[0]).threat).toBeUndefined();
+    const holding: Mover = { ...initMover(route, 0), hold: true };
+    expect(seekEngage(holding, holding, 1, 100, 0, route[0]).threat).toBeUndefined();
+  });
+
+  it("keeps the local leash: cross-map targets never pull a patrol off its loop", () => {
+    const mover = initMover(flatRoute(), 0);
+    const next = seekEngage(mover, mover, 1, THREAT_LEASH_RADIUS + 50, 0, { x: 0, z: 0 });
+    expect(hasThreat(next)).toBe(false);
+    expect(next.threat).toBeUndefined();
+  });
+
+  it("refreshes a live memory in place, preserving a hunt leash", () => {
+    const route = flatRoute();
+    const hunting: Mover = {
+      ...initMover(route, 0),
+      threat: { attacker: 2, x: 500, z: 0, ttl: 6, leash: HUNT_LEASH_RADIUS },
+    };
+    const next = seekEngage(hunting, hunting, 2, 520, 20, route[0]);
+    expect(next.threat).toMatchObject({ attacker: 2, x: 520, z: 20, ttl: THREAT_MEMORY_DURATION });
+    // The wide hunt leash survives the refresh (no mid-chase collapse).
+    expect(next.threat?.leash).toBe(HUNT_LEASH_RADIUS);
+  });
+
+  it("rejects invalid attackers and positions", () => {
+    const mover = initMover(flatRoute(), 0);
+    expect(seekEngage(mover, mover, -2, 100, 0, null).threat).toBeUndefined();
+    expect(seekEngage(mover, mover, 1.5, 100, 0, null).threat).toBeUndefined();
+    expect(seekEngage(mover, mover, 1, Number.NaN, 0, null).threat).toBeUndefined();
   });
 });
 
