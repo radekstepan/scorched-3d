@@ -27,10 +27,10 @@ describe("move-order ping shares the unit circle logic", () => {
     mat.dispose();
   });
 
-  it("ignores depth like selection rings so hills never cut it off", () => {
+  it("ignores depth like the selection beacon so hills never cut it off", () => {
     const marker = buildSelectionMarker();
     try {
-      const selectMat = (marker.getObjectByName("select-core") as THREE.Mesh)
+      const selectMat = (marker.getObjectByName("select-chevron") as THREE.Mesh)
         .material as THREE.MeshBasicMaterial;
       const pingMat = buildMovePingMaterial();
       try {

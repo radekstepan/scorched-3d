@@ -49,7 +49,8 @@ describe("selection contrast on scorch (the brown mud)", () => {
   });
 
   it("white halo carries light ground (grass) where cyan alone is weaker", () => {
-    // Double-ring strategy: at least one ring must clear AA on grass.
+    // Halo/core contrast pair (legacy double-ring policy, still pinned so
+    // the palette math cannot drift): at least one must clear AA on grass.
     const best = Math.max(
       contrastRatio(SELECTION_OUTER, GRASS_MID),
       contrastRatio(SELECTION_CORE, GRASS_MID),
@@ -76,25 +77,20 @@ describe("hue separation from fire (why amber failed)", () => {
 });
 
 describe("marker layering policy (composites over scorch/smoke/fire)", () => {
-  it("rings + chevron ignore depth and render above the scorch layer", () => {
+  it("chevron beacon ignores depth and renders above the scorch layer", () => {
     const marker = buildSelectionMarker();
     try {
       expect(SELECTION_RENDER_ORDER).toBeGreaterThan(SCORCH_RENDER_ORDER);
-      for (const name of ["select-outer", "select-core", "select-chevron"]) {
-        const mesh = marker.getObjectByName(name) as THREE.Mesh;
-        expect(mesh).toBeTruthy();
-        const mat = mesh.material as THREE.MeshBasicMaterial;
-        expect(mat.depthTest).toBe(false);
-        expect(mat.depthWrite).toBe(false);
-        expect(mesh.renderOrder).toBeGreaterThanOrEqual(SELECTION_RENDER_ORDER);
-      }
-      // Core floats just above the halo so the coplanar pair never z-fights.
-      const outer = marker.getObjectByName("select-outer")!;
-      const core = marker.getObjectByName("select-core")!;
-      expect(core.position.y).toBeGreaterThan(outer.position.y);
-      expect((core as THREE.Mesh).renderOrder).toBeGreaterThan(
-        (outer as THREE.Mesh).renderOrder,
-      );
+      // One ground circle per unit (the team ring) + this beacon: no
+      // stacked selection rings.
+      expect(marker.getObjectByName("select-outer")).toBeFalsy();
+      expect(marker.getObjectByName("select-core")).toBeFalsy();
+      const chev = marker.getObjectByName("select-chevron") as THREE.Mesh;
+      expect(chev).toBeTruthy();
+      const mat = chev.material as THREE.MeshBasicMaterial;
+      expect(mat.depthTest).toBe(false);
+      expect(mat.depthWrite).toBe(false);
+      expect(chev.renderOrder).toBeGreaterThanOrEqual(SELECTION_RENDER_ORDER);
     } finally {
       disposeSelectionAssets();
     }
@@ -116,8 +112,8 @@ describe("marker layering policy (composites over scorch/smoke/fire)", () => {
     const a = buildSelectionMarker();
     const b = buildSelectionMarker();
     try {
-      const geoA = (a.getObjectByName("select-outer") as THREE.Mesh).geometry;
-      const geoB = (b.getObjectByName("select-outer") as THREE.Mesh).geometry;
+      const geoA = (a.getObjectByName("select-chevron") as THREE.Mesh).geometry;
+      const geoB = (b.getObjectByName("select-chevron") as THREE.Mesh).geometry;
       expect(geoA).toBe(geoB);
     } finally {
       disposeSelectionAssets();
@@ -141,28 +137,25 @@ describe("pulse math (legacy: markers no longer consume it)", () => {
     expect(selectionBeaconBob(0.5)).toBe(selectionBeaconBob(0.5));
   });
 
-  it("updateSelectionMarker is static: unit scale, rest height, fixed yaw at any t", () => {
+  it("updateSelectionMarker is static: rest height, fixed yaw at any t", () => {
     const marker = buildSelectionMarker();
     try {
       updateSelectionMarker(marker, 1.25, true);
       expect(marker.visible).toBe(true);
-      const outer = marker.getObjectByName("select-outer")!;
-      expect(outer.scale.x).toBe(1);
-      expect(outer.scale.z).toBe(1);
       const chev = marker.getObjectByName("select-chevron")!;
       expect(chev.position.y).toBe(SELECTION_CHEVRON_HEIGHT);
       expect(chev.rotation.y).toBeCloseTo(SELECTION_CHEVRON_YAW, 10);
       // No motion over time: a later tick poses identically.
-      const before = { y: chev.position.y, ry: chev.rotation.y, sx: outer.scale.x };
+      const before = { y: chev.position.y, ry: chev.rotation.y };
       updateSelectionMarker(marker, 2.5, true);
       expect(marker.visible).toBe(true);
       expect(chev.position.y).toBe(before.y);
       expect(chev.rotation.y).toBe(before.ry);
-      expect(outer.scale.x).toBe(before.sx);
       updateSelectionMarker(marker, 3.75, false);
       expect(marker.visible).toBe(false);
-      // Same objects, no per-frame allocation: child count never grows.
-      expect(marker.children.length).toBe(3);
+      // Beacon only — the ground circle lives on the team ring, so the
+      // marker never grows a second ring: child count never grows.
+      expect(marker.children.length).toBe(1);
     } finally {
       disposeSelectionAssets();
     }
@@ -223,12 +216,10 @@ describe("hull paint preserved (highlight never tints the hull blue)", () => {
     }
   });
 
-  it("selection markers stay tagged so damage charring skips them", () => {
+  it("selection beacon stays tagged so damage charring skips it", () => {
     const marker = buildSelectionMarker();
     try {
-      for (const name of ["select-outer", "select-core", "select-chevron"]) {
-        expect(marker.getObjectByName(name)!.userData.noHighlight).toBe(true);
-      }
+      expect(marker.getObjectByName("select-chevron")!.userData.noHighlight).toBe(true);
     } finally {
       disposeSelectionAssets();
     }

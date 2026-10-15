@@ -7,8 +7,8 @@ import { SELECTION_CORE, SELECTION_RENDER_ORDER } from "./selectionFx";
  *
  * Previously this was a plain depth-tested ring at `groundY + 1.5`, so on
  * hilly terrain the far side dipped under the mesh and the circle read as
- * "cut off". Unit outlines (selection halo + core) never do that: they
- * composite with `depthTest: false` above the terrain/scorch layers. The
+ * "cut off". Unit selection never does that: it composites with
+ * `depthTest: false` above the terrain/scorch layers. The
  * ping now shares exactly that policy — same color, same depth-ignored
  * compositing, same render-order band — so the destination circle always
  * draws whole, like the ring around the unit itself.

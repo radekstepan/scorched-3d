@@ -184,19 +184,23 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
 }
 
 /** Team ground-ring radii (inner/outer), world units: outside the hull
- * footprint, inside the selection halo, so team identity and selection read
- * as concentric signals instead of overlapping. The band is deliberately
- * thin (2 units) so the unselected ring reads as a quiet side marker. */
+ * footprint. This is the ONE ground circle per unit — selection never
+ * stacks a second ring on top; the selected state widens this same band
+ * (see `TEAM_RING_INNER_SELECTED`) so the eye reads "thicker", not
+ * "double". The unselected band is deliberately thin (2 units) so it
+ * reads as a quiet side marker. */
 export const TEAM_RING_INNER = 25;
 export const TEAM_RING_OUTER = 27;
+/** Selected team-ring inner radius: the band widens inward (5 units wide)
+ * while the outer edge stays put, so the circle thickens without growing
+ * a second outline. */
+export const TEAM_RING_INNER_SELECTED = 22;
 /** Team rings sit just above the dirt, under scorch decals + selection. */
 export const TEAM_RING_LIFT = 1.0;
 /** Unselected team-ring opacity: a quiet marker, not a highlight. */
 export const TEAM_RING_OPACITY = 0.3;
-/** Selected team-ring opacity: the ring brightens with the selection halo. */
+/** Selected team-ring opacity: the ring brightens with selection. */
 export const TEAM_RING_OPACITY_SELECTED = 0.9;
-/** Selected team-ring scale: a slight swell so the boost reads at distance. */
-export const TEAM_RING_SCALE_SELECTED = 1.1;
 
 /** Team color of a roster side (falls back to white for unknown sides). */
 export function teamRingColor(team: TeamId): number {
@@ -204,18 +208,35 @@ export function teamRingColor(team: TeamId): number {
 }
 
 /**
+ * Flat team-ring band geometry for the selection state: thin and quiet
+ * unselected, widened inward (thicker, same outer edge) selected. Fresh
+ * geometry per call — selection toggles are rare, and per-mesh ownership
+ * keeps `dispose()` safe (no shared-geometry lifetime to manage).
+ */
+export function teamRingGeometry(selected: boolean): THREE.RingGeometry {
+  const geo = new THREE.RingGeometry(
+    selected ? TEAM_RING_INNER_SELECTED : TEAM_RING_INNER,
+    TEAM_RING_OUTER,
+    48,
+  );
+  geo.rotateX(-Math.PI / 2);
+  return geo;
+}
+
+/**
  * Build one team ground ring: a flat team-colored band under the hull that
  * carries side identity in 3D without tinting the hull itself (the no-tint
  * policy from the selection task: hulls keep their normal paint including
- * damage charring). The mesh carries `userData.noHighlight` so damage
- * charring never touches it, and the name `team-ring` so the occlusion
- * ghost (which mirrors hull silhouettes, not markers) skips it like the
- * selection marker. Owned by the body group so it rides motion and
- * exaggeration re-snaps for free.
+ * damage charring). This is the unit's only ground circle — selection
+ * thickens + brightens this same mesh (see `setTeamRingSelected`) instead
+ * of adding a second ring. The mesh carries `userData.noHighlight` so
+ * damage charring never touches it, and the name `team-ring` so the
+ * occlusion ghost (which mirrors hull silhouettes, not markers) skips it
+ * like the selection beacon. Owned by the body group so it rides motion
+ * and exaggeration re-snaps for free.
  */
 export function buildTeamRing(team: TeamId): THREE.Mesh {
-  const geo = new THREE.RingGeometry(TEAM_RING_INNER, TEAM_RING_OUTER, 48);
-  geo.rotateX(-Math.PI / 2);
+  const geo = teamRingGeometry(false);
   const mat = new THREE.MeshBasicMaterial({
     color: teamRingColor(team),
     transparent: true,
@@ -235,23 +256,20 @@ export function teamRingOpacity(selected: boolean): number {
   return selected ? TEAM_RING_OPACITY_SELECTED : TEAM_RING_OPACITY;
 }
 
-/** Team-ring scale for the selection state (pure: selected swells slightly). */
-export function teamRingScale(selected: boolean): number {
-  return selected ? TEAM_RING_SCALE_SELECTED : 1;
-}
-
 /**
- * Brighten (or quiet) a unit body's team ring for the selection state:
- * selected rings run opaque + slightly swollen, unselected rings fall back
- * to the subtle marker. Team color is never touched. No-op for plain test
- * groups without a ring.
+ * Thicken (or quiet) a unit body's team ring for the selection state:
+ * selected rings run opaque + widened, unselected rings fall back to the
+ * subtle thin marker. Exactly one ring either way — never a stacked pair.
+ * Team color is never touched. No-op for plain test groups without a ring.
  */
 export function setTeamRingSelected(body: THREE.Group, selected: boolean): void {
   const ring = getTeamRing(body);
   if (!ring) return;
   const mat = ring.material as THREE.MeshBasicMaterial;
   mat.opacity = teamRingOpacity(selected);
-  ring.scale.setScalar(teamRingScale(selected));
+  ring.geometry.dispose();
+  ring.geometry = teamRingGeometry(selected);
+  ring.scale.setScalar(1);
 }
 
 /** Team ground ring of a unit body, or null (plain test groups). */

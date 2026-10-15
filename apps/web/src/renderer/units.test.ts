@@ -20,15 +20,20 @@ import {
   setTeamRingSelected,
   setUnitAim,
   TEAM_RING_INNER,
+  TEAM_RING_INNER_SELECTED,
   TEAM_RING_OPACITY,
   TEAM_RING_OPACITY_SELECTED,
   TEAM_RING_OUTER,
-  TEAM_RING_SCALE_SELECTED,
   teamRingColor,
+  teamRingGeometry,
   teamRingOpacity,
-  teamRingScale,
 } from "./units";
 import { TEAM_DEFS } from "@scorched-3d/core";
+import {
+  buildSelectionMarker,
+  disposeSelectionAssets,
+  updateSelectionMarker,
+} from "./selectionFx";
 
 function fakeMap(): TNTMap {
   const width = 32;
@@ -433,7 +438,7 @@ describe("team ground rings", () => {
   });
 });
 
-describe("team ring selection emphasis", () => {
+describe("team ring selection emphasis (one circle, thicker on select)", () => {
   it("builds subtle by default and pins the selected/unselected split", () => {
     const ring = buildTeamRing(0);
     // Quiet marker out of the box: thin band, low opacity.
@@ -444,24 +449,40 @@ describe("team ring selection emphasis", () => {
     expect(teamRingOpacity(false)).toBe(TEAM_RING_OPACITY);
     expect(teamRingOpacity(true)).toBe(TEAM_RING_OPACITY_SELECTED);
     expect(teamRingOpacity(true)).toBeGreaterThan(teamRingOpacity(false) + 0.4);
-    expect(teamRingScale(false)).toBe(1);
-    expect(teamRingScale(true)).toBe(TEAM_RING_SCALE_SELECTED);
-    expect(teamRingScale(true)).toBeGreaterThan(1);
+    // Thickness, not a second ring: the selected band widens inward while
+    // the outer edge stays put.
+    expect(TEAM_RING_INNER_SELECTED).toBeLessThan(TEAM_RING_INNER);
+    expect(TEAM_RING_OUTER - TEAM_RING_INNER_SELECTED).toBeGreaterThan(
+      (TEAM_RING_OUTER - TEAM_RING_INNER) * 2,
+    );
+    expect(teamRingGeometry(true)).toBeInstanceOf(THREE.RingGeometry);
     ring.geometry.dispose();
     (ring.material as THREE.Material).dispose();
   });
 
-  it("boosts the selected body's ring and restores on deselect, keeping team color", () => {
+  it("thickens + brightens the same ring on select and restores on deselect, keeping team color", () => {
     const body = buildSpawnedUnit("stump", 1, 0, 0, 0, () => 100);
     const ring = getTeamRing(body)!;
     const before = (ring.material as THREE.MeshBasicMaterial).color.getHex();
+    const countBefore = body.children.filter((c) => c.name === "team-ring").length;
     setTeamRingSelected(body, true);
     expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY_SELECTED);
-    expect(ring.scale.x).toBeCloseTo(TEAM_RING_SCALE_SELECTED);
+    // Still exactly one ring — the band itself got wider, no stacked pair.
+    expect(body.children.filter((c) => c.name === "team-ring").length).toBe(countBefore);
+    expect(ring.scale.x).toBeCloseTo(1);
+    const selected = ring.geometry as THREE.RingGeometry;
+    expect(selected.parameters.innerRadius).toBeCloseTo(TEAM_RING_INNER_SELECTED);
+    expect(selected.parameters.outerRadius).toBeCloseTo(TEAM_RING_OUTER);
+    expect(selected.parameters.outerRadius - selected.parameters.innerRadius).toBeGreaterThan(
+      TEAM_RING_OUTER - TEAM_RING_INNER,
+    );
     // Team color untouched by the emphasis.
     expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(before);
     setTeamRingSelected(body, false);
     expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY);
+    expect((ring.geometry as THREE.RingGeometry).parameters.innerRadius).toBeCloseTo(
+      TEAM_RING_INNER,
+    );
     expect(ring.scale.x).toBeCloseTo(1);
     expect((ring.material as THREE.MeshBasicMaterial).color.getHex()).toBe(before);
   });
@@ -469,6 +490,25 @@ describe("team ring selection emphasis", () => {
   it("no-ops on plain groups without a ring", () => {
     expect(() => setTeamRingSelected(new THREE.Group(), true)).not.toThrow();
     expect(() => setTeamRingSelected(new THREE.Group(), false)).not.toThrow();
+  });
+
+  it("selected unit shows exactly one ground circle (no stacked pair)", () => {
+    const body = buildSpawnedUnit("stump", 0, 0, 0, 0, () => 100);
+    const marker = buildSelectionMarker();
+    body.add(marker);
+    try {
+      setTeamRingSelected(body, true);
+      updateSelectionMarker(marker, 0, true);
+      // The thickened team ring is the only ground circle; the marker is
+      // a beacon only, with no ring meshes of its own.
+      expect(body.children.filter((c) => c.name === "team-ring").length).toBe(1);
+      expect(marker.getObjectByName("select-outer")).toBeFalsy();
+      expect(marker.getObjectByName("select-core")).toBeFalsy();
+      expect(marker.getObjectByName("select-chevron")).toBeTruthy();
+      expect(marker.visible).toBe(true);
+    } finally {
+      disposeSelectionAssets();
+    }
   });
 });
 
