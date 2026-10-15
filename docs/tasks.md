@@ -16,16 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-the cannon of a tank sometimes clips through a tree trunk. this shouldn't happen. Make sure we implement collisions correctly. If it simplifies things, you can consider a bounding box around a vehicle and that's it's full "size" for collission purposes
+The projectiles streaking across the ground should show a smaller "highlight" circle on the ground. Right now it's a bit too much.
 
-Remote the "Patrolling TA ..." text under "Units"
+The icons for units when selected are ugly. Make them a 3D render of the actual units of from the side and somewhat from above. Cache these on load.
 
-vehicle tracks should be a bit more visible
+The factories we generate should look a bit more factory like and NOT be placed on high mountains or in the water.
 
-We should have even "teams" starting across the map and hunting each other down. Make sure we can tell team colors. Really iron out the AI logic of the units.
+Remove the long text in the "Units" section and remove everything but the (live) count of units starting with commander and ending with hammer.
 
-See if we can have a bit more camo detail on the units.
+Make the unit ring less visible and more subtle. When you select a unit, just make the unit's ring more visible.
 
-When we select a unit, the circle and arrow don't have to be "flashing" or moving, static is fine. And when we do select a unit, show at the bottom a little list of boxes with a little icon (or rendering) of said unit and how many we have selected in the corner. I assume these would be pre-rendered once and reused. There should be a colored border (at the top?) matching the "color" of the unit that matches what we show in the Units box.
+Make the tracks that a unit leaves be actual 2 tracks in case of tanks and little lines that have gaps in them in case of commander. Basically match the footprint of the unit.
 
-Add HQ building at opposing end of the map where the teams start and periodically open the "door" sliding up to it (a hall) and a new unit will drive out to join the fray. Enemy units can destroy the HQ, yes. Maybe reduce how far different units can shoot or they'll lob the HQ half way across the map.
+Something is off with the AI, it should be more real like and they should be tryign to fight each other and decice strategically when to engage whom and whom to pursue and if to wait for others etc.
