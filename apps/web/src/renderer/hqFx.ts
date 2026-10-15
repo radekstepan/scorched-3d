@@ -14,8 +14,10 @@ import {
   doorLiftOf,
   hqExitWorld,
   hqFacingFor,
+  hqFoundationDropWorld,
   poseHqWreck,
   setDoorLift,
+  setHqFoundation,
   HQ_DOOR_TRAVEL,
   type HqFacing,
 } from "./hq";
@@ -104,6 +106,10 @@ export class HqFx {
       const group = buildHq(a.team);
       if (facing < 0) group.rotation.y = Math.PI;
       group.position.set(a.x, a.y, a.z);
+      // Seat the works into the hill: size the footings from the live
+      // surface under the footprint so the downhill side shows concrete
+      // instead of an air gap (flat ground just buries them invisibly).
+      setHqFoundation(group, hqFoundationDropWorld({ x: a.x, y: a.y, z: a.z }, facing, env.groundY));
       this.scene.add(group);
       this.groups.push(group);
       this.facings.push(facing);
@@ -252,7 +258,11 @@ export class HqFx {
     for (let i = 0; i < this.groups.length; i++) {
       const group = this.groups[i]!;
       const a = this.anchors[i]!;
-      group.position.set(a.x, this.env.groundY(a.x, a.z), a.z);
+      const y = this.env.groundY(a.x, a.z);
+      group.position.set(a.x, y, a.z);
+      // The exaggeration change steepens every slope, so re-measure the
+      // footing drop — otherwise a taller hill re-opens the air gap.
+      setHqFoundation(group, hqFoundationDropWorld({ x: a.x, y, z: a.z }, this.facings[i] ?? 1, this.env.groundY));
     }
   }
 

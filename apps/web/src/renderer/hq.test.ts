@@ -3,17 +3,24 @@ import { describe, expect, it } from "vitest";
 import {
   buildHq,
   doorLiftOf,
+  foundationDepthOf,
   getHqDoor,
   hqDoorBaseY,
   hqExitWorld,
   hqFacingFor,
+  hqFoundationDropWorld,
   poseHqWreck,
   setDoorLift,
+  setHqFoundation,
+  HQ_BASE_D,
   HQ_BASE_W,
   HQ_DOOR_H,
   HQ_DOOR_TRAVEL,
   HQ_DOOR_W,
   HQ_EXIT_OFFSET,
+  HQ_FOUNDATION_DEPTH,
+  HQ_FOUNDATION_MARGIN,
+  HQ_HALL_LEN,
   HQ_WALL_H,
 } from "./hq";
 
@@ -113,5 +120,73 @@ describe("buildHq", () => {
     const again = door.position.y;
     poseHqWreck(group);
     expect(door.position.y).toBe(again);
+  });
+});
+
+describe("hq foundations", () => {
+  it("hangs concrete footings under the slab and hall", () => {
+    const group = buildHq(0);
+    const slab = group.getObjectByName("hq-foundation") as THREE.Mesh;
+    const hall = group.getObjectByName("hq-hall-foundation") as THREE.Mesh;
+    expect(slab, "slab footing").toBeDefined();
+    expect(hall, "hall footing").toBeDefined();
+    // Seated flush under the slab underside (local y=0), tops hidden.
+    expect(slab.position.y).toBeCloseTo(-HQ_FOUNDATION_DEPTH / 2, 9);
+    expect(foundationDepthOf(group)).toBeCloseTo(HQ_FOUNDATION_DEPTH, 9);
+    // Inset inside the slab/hall outline so the footing reads as a base.
+    const slabGeo = slab.geometry as THREE.BoxGeometry;
+    expect(slabGeo.parameters.width).toBeLessThan(HQ_BASE_W);
+    expect(slabGeo.parameters.depth).toBeLessThan(HQ_BASE_D);
+    const hallGeo = hall.geometry as THREE.BoxGeometry;
+    expect(hallGeo.parameters.width).toBeCloseTo(HQ_HALL_LEN, 9);
+    // Tagged like every other factory surface (no highlight, chars dead).
+    expect(slab.userData.noHighlight).toBe(true);
+    expect(hall.userData.noHighlight).toBe(true);
+  });
+
+  it("sizes the footings to the measured drop", () => {
+    const group = buildHq(1);
+    setHqFoundation(group, 90);
+    expect(foundationDepthOf(group)).toBeCloseTo(90, 9);
+    const slab = group.getObjectByName("hq-foundation") as THREE.Mesh;
+    const hall = group.getObjectByName("hq-hall-foundation") as THREE.Mesh;
+    // Both bottoms reach the drop; tops stay pinned at the slab underside.
+    expect(slab.position.y + ((slab.geometry as THREE.BoxGeometry).parameters.height * slab.scale.y) / 2).toBeCloseTo(0, 9);
+    expect(hall.position.y + ((hall.geometry as THREE.BoxGeometry).parameters.height * hall.scale.y) / 2).toBeCloseTo(0, 9);
+    expect(slab.position.y).toBeCloseTo(-45, 9);
+    // Flat-ground re-seat never inverts the footing.
+    setHqFoundation(group, 0);
+    expect(foundationDepthOf(group)).toBe(0);
+  });
+
+  it("measures the drop to the lowest footprint corner plus margin", () => {
+    // Flat: anchor height everywhere, just the burial margin.
+    expect(hqFoundationDropWorld({ x: 0, y: 80, z: 0 }, 1, () => 80)).toBeCloseTo(
+      HQ_FOUNDATION_MARGIN,
+      9,
+    );
+    // Steady downhill toward the map center: the hall mouth is the low
+    // corner, so the drop covers its fall plus the margin.
+    const fall = (x: number): number => 80 - (x / HQ_HALL_LEN) * 30;
+    const drop = hqFoundationDropWorld({ x: 0, y: 80, z: 0 }, 1, (x) => fall(x));
+    expect(drop).toBeCloseTo(30 * (HQ_BASE_W / 2 + HQ_HALL_LEN) / HQ_HALL_LEN + HQ_FOUNDATION_MARGIN, 9);
+    // Uphill everywhere: nothing to bridge, margin only.
+    expect(hqFoundationDropWorld({ x: 0, y: 80, z: 0 }, 1, (x) => 80 + Math.abs(x) * 0.5)).toBeCloseTo(
+      HQ_FOUNDATION_MARGIN,
+      9,
+    );
+  });
+
+  it("chars the footings with the wreck", () => {
+    const group = buildHq(0);
+    setHqFoundation(group, 60);
+    poseHqWreck(group);
+    for (const name of ["hq-foundation", "hq-hall-foundation"]) {
+      const mesh = group.getObjectByName(name) as THREE.Mesh;
+      const mat = mesh.material as THREE.MeshLambertMaterial;
+      expect((mat.color.r + mat.color.g + mat.color.b) / 3).toBeLessThan(0.15);
+    }
+    // The wreck keeps the deep seat — foundations survive posing.
+    expect(foundationDepthOf(group)).toBeCloseTo(60, 9);
   });
 });

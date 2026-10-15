@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { HQ_MAX_SPAWNS, HQ_SPAWN_CYCLE, HQ_SPAWN_INTERVAL } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
-import { HQ_DOOR_TRAVEL } from "./hq";
+import { foundationDepthOf, HQ_DOOR_TRAVEL, HQ_FOUNDATION_MARGIN } from "./hq";
 
 function anchors() {
   return [
@@ -107,6 +107,27 @@ describe("HqFx", () => {
     ground = 90;
     hq.resnap();
     expect(hq.targets()[0]!.y).toBe(100);
+    hq.dispose();
+  });
+
+  it("seats the footings into a slope and re-measures on resnap", () => {
+    const scene = new THREE.Scene();
+    // Hillsides falling toward the map center on both ends: each downhill
+    // hall mouth sits `steep` below its anchor.
+    let steep = 60;
+    const groundY = (x: number): number => 40 - ((1000 - Math.abs(x)) / 178) * steep;
+    const hq = new HqFx(scene, anchors(), { groundY });
+    const groups = scene.children.filter((c) => c.name === "hq") as THREE.Group[];
+    expect(groups).toHaveLength(2);
+    // Both forts bridge their own fall plus the burial margin.
+    expect(foundationDepthOf(groups[0]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
+    expect(foundationDepthOf(groups[1]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
+    // Steepen the hill (exaggeration slider) and re-snap: the footings
+    // follow instead of re-opening the air gap.
+    steep = 120;
+    hq.resnap();
+    expect(foundationDepthOf(groups[0]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
+    expect(foundationDepthOf(groups[1]!)).toBeCloseTo(steep + HQ_FOUNDATION_MARGIN, 0);
     hq.dispose();
   });
 });

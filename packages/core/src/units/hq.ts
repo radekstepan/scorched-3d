@@ -81,6 +81,13 @@ export const HQ_HIGH_FRACTION = 0.6;
 /** Hall-corridor cells checked toward the map center (exit offset in cells). */
 export const HQ_HALL_CELLS = 12;
 /**
+ * World units the concrete footing extends below the lowest ground sampled
+ * under the works footprint. Covers bilinear ripple between sampled cells
+ * (anchors sit on cell corners while the renderer seats on bilinear
+ * samples) plus shallow crater dents, so no air gap ever shows downhill.
+ */
+export const HQ_FOUNDATION_MARGIN = 6;
+/**
  * End-band columns searched per side (outermost first): island shores step
  * the fort inward off the surf instead of beaching it, while inland maps
  * still take the outermost column.
@@ -255,6 +262,33 @@ export function placeHqs(field: HqField, seed: number): HqSite[] {
     if (dry.cellZ >= 0) return { team, cellX: dry.cellX, cellZ: dry.cellZ };
     return { team, cellX: endX, cellZ: mid };
   });
+}
+
+/**
+ * How far the works footing must reach below its anchor so the HQ reads as
+ * set into the ground instead of floating over a downhill air gap. Samples
+ * the footprint cells — the base slab (96×76 world ≈ ±3 cells each way) plus
+ * the hall corridor (`HQ_HALL_CELLS` toward the map center, ±2 cells wide)
+ * — takes the lowest ground under it, and returns the world-space drop from
+ * the anchor to that low corner plus `HQ_FOUNDATION_MARGIN`, so the skirt
+ * stays buried even on the steepest admitted slope. Pure, deterministic.
+ */
+export function hqFoundationDrop(field: HqField, site: HqSite, exaggeration: number): number {
+  const anchorH = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
+  const dir = site.team === 0 ? 1 : -1;
+  let low = anchorH;
+  const at = (x: number, z: number): void => {
+    if (x < 0 || x >= field.width || z < 0 || z >= field.height) return;
+    const h = field.heights[z * field.width + x] ?? 0;
+    if (h < low) low = h;
+  };
+  for (let dx = -3; dx <= 3; dx++) {
+    for (let dz = -3; dz <= 3; dz++) at(site.cellX + dx, site.cellZ + dz);
+  }
+  for (let i = 0; i <= HQ_HALL_CELLS; i++) {
+    for (let dz = -2; dz <= 2; dz++) at(site.cellX + dir * i, site.cellZ + dz);
+  }
+  return Math.max(0, anchorH - low) * exaggeration + HQ_FOUNDATION_MARGIN;
 }
 
 function cellSlope(field: HqField, x: number, z: number): number {

@@ -6,6 +6,7 @@ import {
   HQ_DRY_MARGIN,
   HQ_FALLBACK_DRY_MARGIN,
   HQ_FALLBACK_SLOPE,
+  HQ_FOUNDATION_MARGIN,
   HQ_HIGH_BASELINE,
   HQ_HIGH_FRACTION,
   HQ_MAX_SLOPE,
@@ -15,6 +16,7 @@ import {
   hqAnchor,
   hqCellSlope,
   hqCellX,
+  hqFoundationDrop,
   hqHallClear,
   hqMaxAboveSea,
   isHqDestroyed,
@@ -174,6 +176,32 @@ describe("placeHqs", () => {
         }
       }
     }
+  });
+});
+
+describe("hqFoundationDrop", () => {
+  it("returns just the burial margin on flat ground", () => {
+    const field = flatField();
+    const [site] = placeHqs(field, 7);
+    expect(hqFoundationDrop(field, site!, 2)).toBeCloseTo(HQ_FOUNDATION_MARGIN, 9);
+  });
+
+  it("reaches the lowest footprint corner plus margin on a slope", () => {
+    const field = flatField(64, 64, 40);
+    const site = { team: 0 as const, cellX: hqCellX(64, 0), cellZ: 32 };
+    // Downhill dip inside the hall corridor (8 cells toward the center).
+    field.heights[32 * 64 + site.cellX + 8] = 20;
+    expect(hqFoundationDrop(field, site, 2)).toBeCloseTo(20 * 2 + HQ_FOUNDATION_MARGIN, 9);
+    // Steeper exaggeration needs a deeper skirt for the same hill.
+    expect(hqFoundationDrop(field, site, 6)).toBeCloseTo(20 * 6 + HQ_FOUNDATION_MARGIN, 9);
+  });
+
+  it("ignores ground outside the footprint and never goes above the margin", () => {
+    const field = flatField(64, 64, 40);
+    // Anchor is the lowest cell: a far-away peak must not deepen the skirt.
+    const site = { team: 1 as const, cellX: hqCellX(64, 1), cellZ: 32 };
+    field.heights[0] = 200;
+    expect(hqFoundationDrop(field, site, 2)).toBeCloseTo(HQ_FOUNDATION_MARGIN, 9);
   });
 });
 

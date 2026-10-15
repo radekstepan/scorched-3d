@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { TEAM_DEFS, type TeamId } from "@scorched-3d/core";
+import { HQ_FOUNDATION_MARGIN, TEAM_DEFS, type TeamId } from "@scorched-3d/core";
 import { buildTeamRing } from "./units";
 
 /**
@@ -40,6 +40,15 @@ export const HQ_EXIT_OFFSET = 48 + HQ_HALL_LEN;
 /** Concrete + dark trim palette (team color comes from TEAM_DEFS). */
 export const HQ_CONCRETE = 0x6b6f75;
 export const HQ_DARK = 0x3a3d42;
+/**
+ * Default footing depth under the slab/hall (world units, straight down
+ * from the slab underside at local y=0). `HqFx` re-sizes both footings per
+ * site via `setHqFoundation` from live terrain sampling, so a bare
+ * `buildHq` still reads seated while sited forts reach their own low
+ * corner plus `HQ_FOUNDATION_MARGIN` (re-exported from core).
+ */
+export const HQ_FOUNDATION_DEPTH = 24;
+export { HQ_FOUNDATION_MARGIN };
 
 /** Which way an HQ's door faces: team 0 (west) opens east, team 1 mirrors. */
 export type HqFacing = 1 | -1;
@@ -176,6 +185,19 @@ export function buildHq(team: TeamId): THREE.Group {
   for (const s of [-1, 1]) {
     tag(hqBox(group, HQ_HALL_LEN, 6, 4, hallCx, 3, s * 17, HQ_DARK));
   }
+  // Deep foundations: a concrete footing under the slab plus one under the
+  // hall floor, both hanging straight down from the slab underside (local
+  // y=0). On flat ground they sit fully buried and invisible; on a slope
+  // the downhill side shows concrete instead of an air gap, so the works
+  // reads as set into the hill. `setHqFoundation` sizes them per site.
+  const footing = hqBox(group, HQ_BASE_W - 8, HQ_FOUNDATION_DEPTH, HQ_BASE_D - 8, 0, -HQ_FOUNDATION_DEPTH / 2, 0, HQ_CONCRETE);
+  footing.name = "hq-foundation";
+  footing.userData.baseH = HQ_FOUNDATION_DEPTH;
+  tag(footing);
+  const hallFooting = hqBox(group, HQ_HALL_LEN, HQ_FOUNDATION_DEPTH, 26, hallCx, -HQ_FOUNDATION_DEPTH / 2, 0, HQ_CONCRETE);
+  hallFooting.name = "hq-hall-foundation";
+  hallFooting.userData.baseH = HQ_FOUNDATION_DEPTH;
+  tag(hallFooting);
   return group;
 }
 
@@ -187,6 +209,64 @@ export function getHqDoor(group: THREE.Group): THREE.Mesh | null {
 /** Seated door height (slab top + half door), for tests. */
 export function hqDoorBaseY(): number {
   return 4 + HQ_DOOR_H / 2;
+}
+
+/**
+ * Size both footings so their bottoms sit `drop` world units below the slab
+ * underside (local y=0): the footing spans -depth..0 via Y scale + re-seat,
+ * so exaggeration re-snaps just call this again. `drop` already includes
+ * the burial margin (see `hqFoundationDropWorld`). Clamped at 0 — the
+ * footing never pokes above the slab.
+ */
+export function setHqFoundation(group: THREE.Group, drop: number): void {
+  const depth = Math.max(0, drop);
+  for (const name of ["hq-foundation", "hq-hall-foundation"]) {
+    const mesh = group.getObjectByName(name) as THREE.Mesh | undefined;
+    if (!mesh) continue;
+    const base = (mesh.userData.baseH as number | undefined) ?? HQ_FOUNDATION_DEPTH;
+    if (!(base > 0)) continue;
+    mesh.scale.y = depth / base;
+    mesh.position.y = -depth / 2;
+  }
+}
+
+/** Current footing depth below the slab underside, for tests. */
+export function foundationDepthOf(group: THREE.Group): number {
+  const mesh = group.getObjectByName("hq-foundation") as THREE.Mesh | undefined;
+  if (!mesh) return 0;
+  const base = (mesh.userData.baseH as number | undefined) ?? HQ_FOUNDATION_DEPTH;
+  return base * mesh.scale.y;
+}
+
+/**
+ * World-space footing drop for an HQ anchor: sample the terrain under the
+ * works footprint — the base slab corners/edges/center plus the hall strip
+ * toward the map center — and return the drop from the anchor to the lowest
+ * sampled ground plus the burial margin. The group stays seated at the
+ * anchor while the footings reach the low corner, so uphill concrete buries
+ * into the hill and downhill concrete shows instead of air.
+ */
+export function hqFoundationDropWorld(
+  anchor: { x: number; y: number; z: number },
+  facing: HqFacing,
+  groundY: (x: number, z: number) => number,
+): number {
+  let low = Infinity;
+  const at = (x: number, z: number): void => {
+    const g = groundY(x, z);
+    if (g < low) low = g;
+  };
+  for (const dx of [-HQ_BASE_W / 2, -HQ_BASE_W / 4, 0, HQ_BASE_W / 4, HQ_BASE_W / 2]) {
+    for (const dz of [-HQ_BASE_D / 2, -HQ_BASE_D / 4, 0, HQ_BASE_D / 4, HQ_BASE_D / 2]) {
+      at(anchor.x + dx, anchor.z + dz);
+    }
+  }
+  for (const t of [0.25, 0.5, 0.75, 1]) {
+    const hx = anchor.x + facing * (HQ_BASE_W / 2 + HQ_HALL_LEN * t);
+    for (const dz of [-15, 0, 15]) at(hx, anchor.z + dz);
+  }
+  if (!isFinite(low)) return HQ_FOUNDATION_MARGIN;
+  return Math.max(0, anchor.y - low) + HQ_FOUNDATION_MARGIN;
 }
 
 /** Slide the door `lift` world units up from its seat (clamped). */
