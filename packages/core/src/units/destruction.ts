@@ -1,4 +1,4 @@
-import type { UnitKind } from "./types.js";
+import type { AttackMode, UnitKind } from "./types.js";
 
 /**
  * Persistent environment destruction from fire/explosions.
@@ -55,6 +55,20 @@ export const BLAST_RADIUS: Record<UnitKind, number> = {
   peewee: 28,
 };
 
+/**
+ * Peewee grenade blast radius: the close-range lob hits harder than the
+ * peashooter (see `PEEWEE_GRENADE_UNIT_DAMAGE`) but stays under the Flash's
+ * 36, so the "peewee bolt is the smallest splash" doctrine still holds for
+ * primary guns and no light infantry out-splashes a tank.
+ */
+export const PEEWEE_GRENADE_BLAST_RADIUS = 32;
+
+/** Blast radius for a shot: grenades use the lob radius, everything else the kind table. */
+export function blastRadiusFor(kind: UnitKind, attack: AttackMode = "round"): number {
+  if (attack === "grenade" && kind === "peewee") return PEEWEE_GRENADE_BLAST_RADIUS;
+  return BLAST_RADIUS[kind] ?? 0;
+}
+
 /** Scorch decal size/darkness per firing kind: shells scar big and black. */
 export function scorchForKind(kind: UnitKind): { radius: number; intensity: number } {
   switch (kind) {
@@ -69,6 +83,19 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
     case "peewee":
       return { radius: 14, intensity: 0.4 };
   }
+}
+
+/**
+ * Scorch decal for a shot: grenade lobs scar slightly bigger than peashooter
+ * bolts (16 vs 14) but stay under the Flash's 18, matching the blast-radius
+ * doctrine above. Every other attack reads its kind table unchanged.
+ */
+export function scorchForAttack(
+  kind: UnitKind,
+  attack: AttackMode = "round",
+): { radius: number; intensity: number } {
+  if (attack === "grenade" && kind === "peewee") return { radius: 16, intensity: 0.42 };
+  return scorchForKind(kind);
 }
 
 /**

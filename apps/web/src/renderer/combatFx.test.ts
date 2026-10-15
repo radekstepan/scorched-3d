@@ -79,6 +79,30 @@ function makeAsternPair(): THREE.Group {
   return group;
 }
 
+/** Two peewees facing each other `distance` apart (attacker at the origin). */
+function makePeeweeDuel(distance: number): THREE.Group {
+  const group = new THREE.Group();
+  group.userData.units = [
+    { kind: "peewee", cellX: 1, cellZ: 1, rotation: 0 },
+    { kind: "peewee", cellX: 2, cellZ: 2, rotation: Math.PI },
+  ];
+  const bodies = [
+    { pos: new THREE.Vector3(0, 100, 0), rot: 0 },
+    { pos: new THREE.Vector3(0, 100, distance), rot: Math.PI },
+  ];
+  bodies.forEach((b) => {
+    const body = new THREE.Group();
+    body.rotation.y = b.rot;
+    body.position.copy(b.pos);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+  });
+  return group;
+}
+
 /** Eight hulls on a wide grid for barrage-cap tests (far outside any blast). */
 function makeBarrageUnits(): THREE.Group {
   const kinds = ["stump", "hammer", "flash", "commander", "stump", "hammer", "flash", "commander"];
@@ -330,6 +354,54 @@ describe("CombatFx", () => {
       return Math.abs(barrelElevation(body) - restBarrelElevation(kinds[i]!)) > 1e-6;
     });
     expect(posed).toBe(true);
+    fx.dispose();
+  });
+
+  it("lobs grenades at close range, bolts past it", () => {
+    // Knife-fight duel at 150 (inside the 220 grenade range): every volley
+    // leaves as a high-arc lob, never a flat bolt.
+    const scene = new THREE.Scene();
+    const duel = makePeeweeDuel(150);
+    const fx = new CombatFx(scene, duel, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 600 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    expect(fx.grenadeCount).toBeGreaterThan(0);
+    expect(fx.grenadeCount).toBe(fx.totalFired);
+    fx.dispose();
+  });
+
+  it("keeps the peashooter past grenade range", () => {
+    // Brawling range at 400 (inside the 550 bolt reach, past the 220 lob):
+    // volleys leave as flat bolts, never grenades.
+    const scene = new THREE.Scene();
+    const duel = makePeeweeDuel(400);
+    const fx = new CombatFx(scene, duel, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 600 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    expect(fx.grenadeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("splashes landed grenades onto hulls", () => {
+    // Close duel runs long enough for ~4 s lob flights to land: the hulls
+    // must carry damage from the grenade splashes.
+    const scene = new THREE.Scene();
+    const duel = makePeeweeDuel(150);
+    const fx = new CombatFx(scene, duel, mulberry32(21));
+    for (let n = 0; n < 3600; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(fx.grenadeCount).toBeGreaterThan(0);
+    expect(fx.unitDamageAt(0) + fx.unitDamageAt(1)).toBeGreaterThan(0);
     fx.dispose();
   });
 

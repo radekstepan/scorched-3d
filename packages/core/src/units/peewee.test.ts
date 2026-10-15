@@ -3,18 +3,32 @@ import {
   AIM_SCATTER_MAX,
   AIM_SCATTER_RATE,
   BARREL_MOUNT,
+  ballisticPosition,
+  GRAVITY,
   inRange,
+  isPeeweeGrenadeRange,
   maxRangeFor,
   muzzleForward,
   muzzleHeight,
+  nextShotDelayFor,
+  PEEWEE_GRENADE_RANGE,
+  PEEWEE_GRENADE_SPEED,
+  peeweeAttackFor,
   scatterRadius,
+  SHOT_DELAY,
+  SHOT_DELAY_MAX,
+  SHOT_DELAY_MIN,
+  shotDelayFor,
+  solveBallistic,
+  solvePeeweeGrenade,
   solveShot,
   WEAPON_MAX_RANGE,
   WEAPON_PROFILES,
 } from "./combat.js";
-import { BLAST_RADIUS, scorchForKind } from "./destruction.js";
+import { BLAST_RADIUS, blastRadiusFor, PEEWEE_GRENADE_BLAST_RADIUS, scorchForAttack, scorchForKind } from "./destruction.js";
+import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, TURRET_LIMIT, TURRET_SLEW_RATE } from "./facing.js";
-import { HQ_HIT_DAMAGE, HQ_SPAWN_CYCLE, spawnKindFor } from "./hq.js";
+import { HQ_HIT_DAMAGE, HQ_SPAWN_CYCLE, hqHitDamage, PEEWEE_GRENADE_HQ_DAMAGE, spawnKindFor } from "./hq.js";
 import { LEG_STRIDE, WHEEL_RADIUS } from "./locomotion.js";
 import { MOVE_SPEED } from "./movement.js";
 import { placeUnits } from "./place.js";
@@ -22,7 +36,8 @@ import { PURSUE_STANDOFF } from "./retaliation.js";
 import { generateMap } from "../terrain/generate.js";
 import { HULL_FOOTPRINT } from "./terrain.js";
 import { UNIT_DEFS, UNIT_KINDS } from "./types.js";
-import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
+import { createUnitDamage, applyBlastToUnits, PEEWEE_GRENADE_UNIT_DAMAGE, unitHitDamage, UNIT_HIT_DAMAGE } from "./unitDamage.js";
+import { applyBlastToHqs, createHqDamage } from "./hq.js";
 
 /**
  * Peewee (ARMPW) infantry scout: the small fast fragile fifth kind. Pins the
@@ -126,5 +141,103 @@ describe("peewee infantry kind", () => {
       "hammer",
       "peewee",
     ]);
+  });
+
+  it("fires faster than the tanks, commander-quick", () => {
+    // Walker guns cycle quicker: both ends of their window sit under the
+    // corresponding tank end, and the peewee is the quickest gun on the field.
+    for (const tank of ["flash", "stump", "hammer"] as const) {
+      expect(shotDelayFor("peewee").min).toBeLessThan(shotDelayFor(tank).min);
+      expect(shotDelayFor("peewee").max).toBeLessThan(shotDelayFor(tank).max);
+      expect(shotDelayFor("commander").min).toBeLessThan(shotDelayFor(tank).min);
+      expect(shotDelayFor("commander").max).toBeLessThan(shotDelayFor(tank).max);
+    }
+    expect(shotDelayFor("peewee").max).toBeLessThanOrEqual(shotDelayFor("commander").max);
+    // Tank windows are the legacy global window exactly.
+    for (const tank of ["flash", "stump", "hammer"] as const) {
+      expect(shotDelayFor(tank)).toEqual({ min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX });
+    }
+    expect(SHOT_DELAY.peewee.min).toBeGreaterThan(0);
+  });
+
+  it("draws its refire inside its own window", () => {
+    for (const seed of [1, 2, 3]) {
+      const rng = mulberry32(seed);
+      for (let n = 0; n < 100; n++) {
+        const d = nextShotDelayFor("peewee", rng);
+        expect(d).toBeGreaterThanOrEqual(SHOT_DELAY.peewee.min);
+        expect(d).toBeLessThanOrEqual(SHOT_DELAY.peewee.max);
+      }
+    }
+    // Mean peewee refire (~0.36 s) is roughly twice as quick as the tank
+    // mean (~0.72 s): faster rate, lighter hit — the per-hit damage below
+    // stays the weakest on the field to compensate.
+    const mean = (kind: "peewee" | "flash"): number => {
+      const rng = mulberry32(9);
+      let total = 0;
+      for (let n = 0; n < 400; n++) total += nextShotDelayFor(kind, rng);
+      return total / 400;
+    };
+    expect(mean("peewee")).toBeLessThan(mean("flash") / 1.5);
+  });
+
+  it("lobs grenades inside grenade range, bolts past it", () => {
+    expect(PEEWEE_GRENADE_RANGE).toBeLessThan(maxRangeFor("peewee"));
+    expect(PEEWEE_GRENADE_RANGE).toBeGreaterThan(PURSUE_STANDOFF.peewee);
+    expect(peeweeAttackFor(PEEWEE_GRENADE_RANGE)).toBe("grenade");
+    expect(peeweeAttackFor(PEEWEE_GRENADE_RANGE + 1)).toBe("round");
+    expect(isPeeweeGrenadeRange(100)).toBe(true);
+    expect(isPeeweeGrenadeRange(549)).toBe(false);
+    // Too close to depress onto: the muzzle gate still holds fire.
+    expect(isPeeweeGrenadeRange(10)).toBe(false);
+  });
+
+  it("solves the grenade as a slow high-arc lob, not a cannon flat", () => {
+    const from = { x: 0, y: 9, z: 0 };
+    const to = { x: 200, y: 9, z: 0 };
+    const lob = solvePeeweeGrenade(from, to)!;
+    expect(lob).not.toBeNull();
+    // Slow lob: much longer hang than any bolt over the same ground.
+    expect(lob.duration).toBeGreaterThan(200 / WEAPON_PROFILES.peewee.speed + 1);
+    expect(lob.duration).toBeLessThanOrEqual(8);
+    // High root: steeper than the cannon's flat low root at full speed.
+    const flat = solveBallistic(from, to, WEAPON_PROFILES.hammer.speed, GRAVITY)!;
+    expect(lob.elevation).toBeGreaterThan(flat.elevation);
+    expect(lob.elevation).toBeGreaterThan(Math.PI / 4);
+    expect(PEEWEE_GRENADE_SPEED).toBeLessThan(WEAPON_PROFILES.hammer.speed);
+    // Lands on the mark by construction.
+    const landed = ballisticPosition(from, lob.velocity, lob.duration, GRAVITY);
+    expect(landed.x).toBeCloseTo(to.x, 6);
+    expect(landed.y).toBeCloseTo(to.y, 6);
+    expect(landed.z).toBeCloseTo(to.z, 6);
+  });
+
+  it("splashes grenades harder than bolts but lighter than artillery", () => {
+    expect(PEEWEE_GRENADE_UNIT_DAMAGE).toBeGreaterThan(UNIT_HIT_DAMAGE.peewee);
+    expect(PEEWEE_GRENADE_UNIT_DAMAGE).toBeLessThan(UNIT_HIT_DAMAGE.hammer);
+    expect(unitHitDamage("peewee", "grenade")).toBe(PEEWEE_GRENADE_UNIT_DAMAGE);
+    expect(unitHitDamage("peewee")).toBe(UNIT_HIT_DAMAGE.peewee);
+    expect(unitHitDamage("flash", "grenade")).toBe(UNIT_HIT_DAMAGE.flash);
+    expect(PEEWEE_GRENADE_BLAST_RADIUS).toBeGreaterThan(BLAST_RADIUS.peewee);
+    expect(PEEWEE_GRENADE_BLAST_RADIUS).toBeLessThan(BLAST_RADIUS.flash);
+    expect(blastRadiusFor("peewee", "grenade")).toBe(PEEWEE_GRENADE_BLAST_RADIUS);
+    expect(blastRadiusFor("peewee")).toBe(BLAST_RADIUS.peewee);
+    expect(blastRadiusFor("hammer", "grenade")).toBe(BLAST_RADIUS.hammer);
+    // Point-blank grenade splash deals exactly the lob damage.
+    const damage = createUnitDamage(1);
+    applyBlastToUnits(damage, [{ x: 0, z: 0 }], 0, 0, "peewee", undefined, "grenade");
+    expect(damage[0]).toBeCloseTo(PEEWEE_GRENADE_UNIT_DAMAGE, 12);
+    // Structures chip double the bolt, still lightest after it.
+    expect(PEEWEE_GRENADE_HQ_DAMAGE).toBeGreaterThan(HQ_HIT_DAMAGE.peewee);
+    expect(hqHitDamage("peewee", "grenade")).toBe(PEEWEE_GRENADE_HQ_DAMAGE);
+    const hq = createHqDamage();
+    applyBlastToHqs(hq, [{ x: 0, z: 0 }], 0, 0, "peewee", undefined, "grenade");
+    expect(hq[0]).toBeCloseTo(PEEWEE_GRENADE_HQ_DAMAGE, 12);
+    // Grenade scorch reads bigger than the bolt's, smaller than a tank's.
+    const boltScorch = scorchForKind("peewee");
+    const lobScorch = scorchForAttack("peewee", "grenade");
+    expect(lobScorch.radius).toBeGreaterThan(boltScorch.radius);
+    expect(lobScorch.radius).toBeLessThan(scorchForKind("flash").radius);
+    expect(scorchForAttack("flash", "grenade")).toEqual(scorchForKind("flash"));
   });
 });

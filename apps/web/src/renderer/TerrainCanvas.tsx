@@ -398,8 +398,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // range (range caps keep cross-map lobs impossible), and every blast
       // — aimed or collateral — splashes them through the HQ damage state.
       hqTargets: () => hq?.targets() ?? [],
-      damageStructures: (at, kind, shooter) => {
-        hq?.splash(at.x, at.z, kind, shooter);
+      damageStructures: (at, kind, shooter, _hostile, attack) => {
+        hq?.splash(at.x, at.z, kind, shooter, attack);
       },
     });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at

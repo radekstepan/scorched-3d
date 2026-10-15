@@ -7,6 +7,7 @@ import {
   spawnKindFor,
   tickHqSpawn,
   type HqSpawnState,
+  type AttackMode,
   type UnitKind,
 } from "@scorched-3d/core";
 import {
@@ -185,7 +186,7 @@ export class HqFx {
    * epic burst through combat); chips fire `onDamaged` so the canvas can
    * point nearby defenders at the shooter.
    */
-  splash(x: number, z: number, kind: UnitKind, shooter: number | null): void {
+  splash(x: number, z: number, kind: UnitKind, shooter: number | null, attack: AttackMode = "round"): void {
     if (this.disposed || this.groups.length === 0) return;
     const before = this.damage.slice();
     const touched = applyBlastToHqs(
@@ -194,6 +195,8 @@ export class HqFx {
       x,
       z,
       kind,
+      undefined,
+      attack,
     );
     for (const i of touched) {
       if (this.destroyed[i]) continue;

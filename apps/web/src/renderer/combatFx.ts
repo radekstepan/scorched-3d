@@ -7,7 +7,8 @@ import {
   ballisticPosition,
   ballisticVelocity,
   barrelSegment,
-  BLAST_RADIUS,
+  blastRadiusFor,
+  type AttackMode,
   type BlastSlope,
   canFire,
   clampElevation,
@@ -26,6 +27,7 @@ import {
   inRange,
   isDestroyed,
   isHuskGone,
+  isPeeweeGrenadeRange,
   LOBBED_MAX_TIME,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
@@ -35,13 +37,16 @@ import {
   muzzleHeight,
   muzzleYaw,
   nextShotDelay,
+  nextShotDelayFor,
+  PEEWEE_GRENADE_COLOR,
+  PEEWEE_GRENADE_FLASH_TIME,
   pickHostilePair,
   pickSkirmishPair,
   pickStrategicTarget,
   resolveScorchSeed,
   rollTreeStick,
   scorchAnisotropy,
-  scorchForKind,
+  scorchForAttack,
   scorchSeed,
   scorchShade,
   solveBallisticHigh,
@@ -116,6 +121,13 @@ interface Shot {
   age: number;
   dur: number;
   kind: UnitKind;
+  /**
+   * Which weapon fired the round: the kind's primary `round` or the peewee's
+   * close-range `grenade` lob. Splashes read it for the lob damage/radius
+   * (see core `blastRadiusFor`), and tree interception treats gravity rounds
+   * (shells + grenades) as early-burst detonations, bolts as stuck embers.
+   */
+  attack: AttackMode;
   /**
    * Roster index that fired the round (and its intended target), threaded
    * through to the impact splash so victims know *who* to pursue. Fire only
@@ -496,6 +508,7 @@ export interface CombatEnv {
     kind: UnitKind,
     shooter: number | null,
     hostile: boolean,
+    attack?: AttackMode,
   ) => void;
 }
 
@@ -521,8 +534,16 @@ export class CombatFx {
   private shotGlowMats: THREE.MeshBasicMaterial[] = [];
   private shotGlowGeo = new THREE.CircleGeometry(1, 20);
   private fired = 0;
+  /** Peewee grenade lobs fired since construction (for tests/HUD). */
+  private lobs = 0;
   /** Rounds stuck in live wood (stuck bolt embers + shell early bursts). */
   private stuck = 0;
+  /**
+   * Kind of the most recent volley (null before the first shot): the shared
+   * ambient timer reloads from that kind's `SHOT_DELAY` window, so rapid
+   * walker guns quicken the cadence while tank volleys keep the legacy pace.
+   */
+  private lastKind: UnitKind | null = null;
   /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
   private aim: { hull: number; turret: number }[] = [];
   /** Attacker → target traverse goals, slewed every frame until aimed. */
@@ -722,6 +743,11 @@ export class CombatFx {
     return this.stuck;
   }
 
+  /** Peewee grenade lobs fired since construction (subset of `totalFired`). */
+  get grenadeCount(): number {
+    return this.lobs;
+  }
+
   /**
    * Glowing in-flight rounds right now: min(live shots, `SHOT_GLOW_LIGHTS`).
    * The pool is fixed — a full volley reuses slots instead of adding lights.
@@ -908,7 +934,9 @@ export class CombatFx {
     this.timer -= dt;
     if (this.timer <= 0) {
       if (this.tryFire()) {
-        this.timer = nextShotDelay(this.rng);
+        // Per-kind refire: the volley that just left sets the next beat —
+        // rapid walker guns quicken the shared cadence, tanks keep it.
+        this.timer = this.lastKind ? nextShotDelayFor(this.lastKind, this.rng) : nextShotDelay(this.rng);
       } else {
         // Still traversing (or capped): retry soon so aimed pairs fire
         // without waiting out a full ambient interval.
@@ -1067,6 +1095,7 @@ export class CombatFx {
     slope?: BlastSlope | null,
     shooter?: number | null,
     hostile = true,
+    attack: AttackMode = "round",
   ): void {
     if (this.damage.length === 0) return;
     const bodies = this.units.children as THREE.Group[];
@@ -1078,6 +1107,7 @@ export class CombatFx {
       at.z,
       kind,
       slope ?? undefined,
+      attack,
     );
     for (const i of touched) {
       const body = bodies[i];
@@ -1749,16 +1779,27 @@ export class CombatFx {
     // Range admission (cf. retail spec 06 §3.3): too close to depress onto
     // or ballistically unreachable — keep traversing, retry on a new pair.
     if (!inRange(kind, approxDist)) return false;
+    // Peewee secondary: inside grenade range the hand-cannon lobs a slow
+    // high-arc grenade instead of firing its peashooter bolt (see core
+    // `peeweeAttackFor` — lobs start where the knife-fight stand-off ends).
+    const lobGrenade = kind === "peewee" && isPeeweeGrenadeRange(approxDist);
+    const attack: AttackMode = lobGrenade ? "grenade" : "round";
+    const roundColor = lobGrenade ? PEEWEE_GRENADE_COLOR : profile.color;
+    const roundFlash = lobGrenade ? PEEWEE_GRENADE_FLASH_TIME : profile.flashTime;
+    const roundShell = lobGrenade || profile.shot === "shell";
+    const roundGravity = roundShell ? GRAVITY : 0;
     // Canopy admission: shells lob the high root over live wood when it
     // clears and fits the flight-time safety net, else fire flat into the
     // branches (the interception roll may catch the round); flat bolts stay
-    // on the target line and accept the stick risk.
+    // on the target line and accept the stick risk. Grenades always lob —
+    // the steep arc is their whole trajectory (see `solveShotClearing`).
     const stands = this.env?.treeStands?.() ?? [];
     const seedClearing = solveShotClearing(
       kind,
       approx,
       impact,
       stands,
+      attack,
     );
     if (!seedClearing) return false;
     setBarrelElevation(attacker, clampElevation(seedClearing.solution.elevation));
@@ -1772,6 +1813,7 @@ export class CombatFx {
       { x: start.x, y: start.y, z: start.z },
       impact,
       stands,
+      attack,
     );
     // Shells at max ballistic range fly ~5.3s; canopy lobs hang ~7.4s —
     // anything longer is rejected.
@@ -1783,13 +1825,14 @@ export class CombatFx {
     // into the grade lob the high root over it when that clears wood and
     // dirt alike (and fits the flight-time safety net); anything still
     // blocked holds fire and asks for a reposition (higher vantage, closer)
-    // instead of shooting through the hill.
+    // instead of shooting through the hill. Grenades arrive lobbed already,
+    // so a blocked lob holds fire the same way an elevated shell does.
     if (this.env) {
       const from = { x: start.x, y: start.y, z: start.z };
-      const gravity = profile.shot === "shell" ? GRAVITY : 0;
+      const gravity = roundGravity;
       const to = { x: impact.x, y: impact.y, z: impact.z };
       if (!flightClearsTerrain(from, sol.velocity, gravity, sol.duration, this.env.groundY)) {
-        if (profile.shot === "shell" && !clearing.elevated) {
+        if (roundShell && !clearing.elevated) {
           const high = solveBallisticHigh(from, to, profile.speed, GRAVITY);
           if (
             high && high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
@@ -1816,10 +1859,10 @@ export class CombatFx {
           Math.cos(gunYaw) * Math.cos(sol.elevation),
         );
 
-    const geo = profile.shot === "bolt" ? this.boltGeo : this.shellGeo;
+    const geo = roundShell ? this.shellGeo : this.boltGeo;
     const mesh = new THREE.Mesh(
       geo,
-      new THREE.MeshBasicMaterial({ color: profile.color }),
+      new THREE.MeshBasicMaterial({ color: roundColor }),
     );
     mesh.position.copy(start);
     mesh.frustumCulled = false;
@@ -1828,17 +1871,20 @@ export class CombatFx {
       mesh,
       start,
       vel: new THREE.Vector3(sol.velocity.x, sol.velocity.y, sol.velocity.z),
-      gravity: profile.shot === "shell" ? GRAVITY : 0,
+      gravity: roundGravity,
       age: 0,
       dur: sol.duration,
       kind,
+      attack,
       attacker: attackerIdx,
       target,
     });
     this.fired += 1;
+    this.lastKind = kind;
+    if (lobGrenade) this.lobs += 1;
 
-    this.spawnMuzzle(start, profile.color, profile.flashTime);
-    this.kickLight(start, profile.color);
+    this.spawnMuzzle(start, roundColor, roundFlash);
+    this.kickLight(start, roundColor);
     this.kickRecoil(attackerIdx, attacker, barrelDir);
     return true;
   }
@@ -1973,6 +2019,7 @@ export class CombatFx {
     epic = false,
     shooter: number | null = null,
     hostile = true,
+    attack: AttackMode = "round",
   ): void {
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
@@ -1983,7 +2030,7 @@ export class CombatFx {
     const ground = this.env ? this.env.groundY(at.x, at.z) : at.y;
     const slope = this.env?.slopeAt?.(at.x, at.z) ?? null;
     const wash = slope && slope.skew > 0 ? slope : null;
-    const shape = scorchForKind(kind);
+    const shape = scorchForAttack(kind, attack);
     const radiusScale = epic ? EPIC_RADIUS_SCALE : 1;
     const puffCount = epic ? EPIC_SMOKE_PUFFS : SMOKE_PER_EXPLOSION;
     const sparkCount = epic ? EPIC_SPARKS : SPARKS_PER_EXPLOSION;
@@ -2124,12 +2171,12 @@ export class CombatFx {
       glowRadius: shape.radius * radiusScale,
     });
     this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
-    this.scarGround(at, kind, slope ?? undefined);
-    this.damageUnits(at, kind, slope, shooter, hostile);
+    this.scarGround(at, kind, slope ?? undefined, attack);
+    this.damageUnits(at, kind, slope, shooter, hostile, attack);
     // Structures share every blast: an HQ near the impact takes honest
     // splash through the canvas-owned damage state (collateral even when the
     // volley aimed at a hull).
-    this.env?.damageStructures?.({ x: at.x, y: at.y, z: at.z }, kind, shooter, hostile);
+    this.env?.damageStructures?.({ x: at.x, y: at.y, z: at.z }, kind, shooter, hostile, attack);
   }
 
   /**
@@ -2142,8 +2189,8 @@ export class CombatFx {
    * caller; a tree flattened under a unit still leaves the unit where it
    * stands.
    */
-  private scarGround(at: THREE.Vector3, kind: UnitKind, slope?: BlastSlope | null): void {
-    const shape = scorchForKind(kind);
+  private scarGround(at: THREE.Vector3, kind: UnitKind, slope?: BlastSlope | null, attack: AttackMode = "round"): void {
+    const shape = scorchForAttack(kind, attack);
     const wash = slope && slope.skew > 0 ? slope : null;
     this.scorchMarks = addScorchMark(this.scorchMarks, {
       x: at.x,
@@ -2154,7 +2201,7 @@ export class CombatFx {
       ...(wash ? { sx: wash.sx, sz: wash.sz, skew: wash.skew } : {}),
     });
     this.syncScorch(at.y);
-    this.env?.blastFeatures(at.x, at.z, BLAST_RADIUS[kind], slope ?? undefined);
+    this.env?.blastFeatures(at.x, at.z, blastRadiusFor(kind, attack), slope ?? undefined);
     this.env?.dentTerrain?.(at.x, at.z, shape.radius, craterDepthForIntensity(shape.intensity), slope ?? undefined);
   }
 
@@ -2274,8 +2321,8 @@ export class CombatFx {
           this.shots.splice(this.shots.indexOf(shot), 1);
           this.stuck += 1;
           this.env?.strikeTree?.(stuckFid);
-          if (shot.kind === "hammer") {
-            this.explode(at, color, shot.kind, false, shot.attacker);
+          if (shot.gravity > 0) {
+            this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
             this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
           } else {
             this.spawnFlash(at, 0xffd34d, FLASH_MAX_AGE * 0.6);
@@ -2309,7 +2356,7 @@ export class CombatFx {
             this.scene.remove(shot.mesh);
             (shot.mesh.material as THREE.Material).dispose();
             this.shots.splice(this.shots.indexOf(shot), 1);
-            this.explode(at, color, shot.kind, false, shot.attacker);
+            this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
             this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
             continue;
           }
@@ -2337,7 +2384,7 @@ export class CombatFx {
       this.scene.remove(shot.mesh);
       (shot.mesh.material as THREE.Material).dispose();
       this.shots.splice(this.shots.indexOf(shot), 1);
-      this.explode(at, color, shot.kind, false, shot.attacker);
+      this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
       this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
     }
   }

@@ -1,5 +1,5 @@
-import { BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
-import type { UnitKind } from "./types.js";
+import { BLAST_RADIUS, PEEWEE_GRENADE_BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
+import type { AttackMode, UnitKind } from "./types.js";
 
 /**
  * Per-unit battle damage from ambient skirmish fire.
@@ -29,6 +29,20 @@ export const UNIT_HIT_DAMAGE: Record<UnitKind, number> = {
   // Infantry peashooter: chips the paint, takes a squad to finish.
   peewee: 0.045,
 };
+
+/**
+ * Point-blank hull damage of one landed peewee grenade: double the
+ * peashooter bolt (the close-range payoff for closing to knife-fight range)
+ * but still well under the hammer's 0.16 — light infantry never out-hits
+ * artillery, burst-for-burst or otherwise.
+ */
+export const PEEWEE_GRENADE_UNIT_DAMAGE = 0.09;
+
+/** Point-blank hull damage for a shot: grenade lobs read their lob table. */
+export function unitHitDamage(kind: UnitKind, attack: AttackMode = "round"): number {
+  if (attack === "grenade" && kind === "peewee") return PEEWEE_GRENADE_UNIT_DAMAGE;
+  return UNIT_HIT_DAMAGE[kind] ?? 0;
+}
 
 /** Damage fraction where a hull starts trailing smoke. */
 export const UNIT_SMOKE_DAMAGE = 0.2;
@@ -155,9 +169,11 @@ export function applyBlastToUnits(
   cz: number,
   attacker: UnitKind,
   slope?: BlastSlope,
+  attack: AttackMode = "round",
 ): number[] {
-  const radius = BLAST_RADIUS[attacker] ?? 0;
-  const hit = UNIT_HIT_DAMAGE[attacker] ?? 0;
+  const grenade = attack === "grenade" && attacker === "peewee";
+  const radius = grenade ? PEEWEE_GRENADE_BLAST_RADIUS : (BLAST_RADIUS[attacker] ?? 0);
+  const hit = grenade ? PEEWEE_GRENADE_UNIT_DAMAGE : (UNIT_HIT_DAMAGE[attacker] ?? 0);
   if (!(radius > 0) || !(hit > 0)) return [];
   const scored: { index: number; d: number }[] = [];
   const n = Math.min(damage.length, positions.length);

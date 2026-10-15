@@ -10,6 +10,14 @@
 
 export type UnitKind = "commander" | "stump" | "flash" | "hammer" | "peewee";
 
+/**
+ * Which weapon a shot was fired from: the kind's primary `round` (bolt or
+ * shell per `WEAPON_PROFILES`) or the peewee's close-range `grenade` lob.
+ * Splash lookups take it as an optional trailing argument defaulting to
+ * `round`, so every legacy call site keeps its exact behavior.
+ */
+export type AttackMode = "round" | "grenade";
+
 export interface UnitDef {
   kind: UnitKind;
   /** Retail catalog name as compiled by nanolathe (`content.UnitDef.UnitName`). */

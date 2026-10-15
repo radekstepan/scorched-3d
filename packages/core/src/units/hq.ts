@@ -1,7 +1,7 @@
-import { BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
+import { BLAST_RADIUS, PEEWEE_GRENADE_BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { TEAM_IDS } from "./types.js";
-import type { TeamId, UnitKind } from "./types.js";
+import type { AttackMode, TeamId, UnitKind } from "./types.js";
 
 /**
  * Team HQs: one fortified structure per side at its map end (Blue west,
@@ -331,6 +331,19 @@ export const HQ_HIT_DAMAGE: Record<UnitKind, number> = {
   peewee: 0.025,
 };
 
+/**
+ * Point-blank HQ damage of one landed peewee grenade: double the peashooter
+ * chip, matching the hull-damage doubling above, still the lightest
+ * structure hit after the bolt itself.
+ */
+export const PEEWEE_GRENADE_HQ_DAMAGE = 0.05;
+
+/** Point-blank HQ damage for a shot: grenade lobs read their lob table. */
+export function hqHitDamage(kind: UnitKind, attack: AttackMode = "round"): number {
+  if (attack === "grenade" && kind === "peewee") return PEEWEE_GRENADE_HQ_DAMAGE;
+  return HQ_HIT_DAMAGE[kind] ?? 0;
+}
+
 /** Fresh all-pristine HQ damage state (one entry per team, TEAM_IDS order). */
 export function createHqDamage(): number[] {
   return TEAM_IDS.map(() => 0);
@@ -359,9 +372,11 @@ export function applyBlastToHqs(
   cz: number,
   attacker: UnitKind,
   slope?: BlastSlope,
+  attack: AttackMode = "round",
 ): number[] {
-  const radius = BLAST_RADIUS[attacker] ?? 0;
-  const hit = HQ_HIT_DAMAGE[attacker] ?? 0;
+  const grenade = attack === "grenade" && attacker === "peewee";
+  const radius = grenade ? PEEWEE_GRENADE_BLAST_RADIUS : (BLAST_RADIUS[attacker] ?? 0);
+  const hit = grenade ? PEEWEE_GRENADE_HQ_DAMAGE : (HQ_HIT_DAMAGE[attacker] ?? 0);
   if (!(radius > 0) || !(hit > 0)) return [];
   const touched: number[] = [];
   const n = Math.min(damage.length, positions.length);

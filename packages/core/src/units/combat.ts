@@ -1,4 +1,4 @@
-import type { UnitKind } from "./types.js";
+import type { AttackMode, UnitKind } from "./types.js";
 
 /**
  * Ambient-skirmish combat helpers for the demo: random attacker/target
@@ -66,6 +66,29 @@ export const GRAVITY = 140;
 /** Scheduler bounds: seconds between ambient shots. */
 export const SHOT_DELAY_MIN = 0.35;
 export const SHOT_DELAY_MAX = 1.1;
+
+/**
+ * Per-kind scheduler bounds: seconds between ambient shots after a volley
+ * from `kind` leaves. The walker guns (commander, peewee) cycle roughly
+ * twice as fast as the tank guns — the retail Peewee's `emg` slot authors a
+ * 0.4 s reload with 3-round bursts against much slower tank pieces, and the
+ * demo reads the same split at the ambient scheduler: a rapid light gun that
+ * chips per hit (see `UNIT_HIT_DAMAGE`) instead of a slow heavy one. Tank
+ * bounds match the legacy global window exactly, so non-walker pacing is
+ * bit-identical with or without the table.
+ */
+export const SHOT_DELAY: Record<UnitKind, { min: number; max: number }> = {
+  flash: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
+  stump: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
+  hammer: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
+  commander: { min: 0.22, max: 0.65 },
+  peewee: { min: 0.18, max: 0.55 },
+};
+
+/** Scheduler bounds for volleys from `kind` (falls back to the global window). */
+export function shotDelayFor(kind: UnitKind): { min: number; max: number } {
+  return SHOT_DELAY[kind] ?? { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX };
+}
 /** Perf caps: concurrent tracers and the flights they may spawn. */
 export const MAX_SHOTS = 6;
 export const MAX_EXPLOSIONS = 8;
@@ -185,6 +208,19 @@ export function nextShotDelay(
   max = SHOT_DELAY_MAX,
 ): number {
   return min + rng() * (max - min);
+}
+
+/**
+ * Seconds until the next ambient shot after a volley from `kind`: uniform
+ * inside that kind's `SHOT_DELAY` window, so peewee/commander volleys
+ * quicken the shared cadence while tank volleys keep the legacy pace. The
+ * single-timer scheduler stays (one ambient gun at a time); the attacker's
+ * refire sets the next beat, which is what makes the rapid light guns read
+ * as faster-firing in the mix without per-unit cooldown state.
+ */
+export function nextShotDelayFor(kind: UnitKind, rng: () => number): number {
+  const { min, max } = shotDelayFor(kind);
+  return nextShotDelay(rng, min, max);
 }
 
 /**
@@ -696,6 +732,56 @@ export interface CanopySolution {
 }
 
 /**
+ * Peewee close-range grenade lob: the infantry secondary inside the
+ * peashooter's reach. Doctrine: `PEEWEE_GRENADE_RANGE` sits just past the
+ * 180 knife-fight stand-off (grenades start where the brawl does) and well
+ * inside the 550 bolt reach, so scouts shoot bolts on approach and switch to
+ * lobs once they close.
+ *
+ * Ballistics are deliberately distinct from the hammer's cannon: the gun
+ * fires a slow (300 u/s vs the cannon's 520) HIGH-angle root — a mortar lob
+ * hanging ~4 s over 200 units — where the cannon prefers the flat low root.
+ * Same gravity, same solver family, opposite root: the arc reads as a tossed
+ * grenade, never as artillery fire. Tint is infantry green, not cannon
+ * orange, for the same reason.
+ */
+
+/** Muzzle-to-impact distance inside which peewees lob grenades, world units. */
+export const PEEWEE_GRENADE_RANGE = 220;
+/** Grenade muzzle velocity, world units/s (slow lob, not a cannon shot). */
+export const PEEWEE_GRENADE_SPEED = 300;
+/** Grenade tracer/projectile tint as 0xRRGGBB (infantry green). */
+export const PEEWEE_GRENADE_COLOR = 0xb8f39b;
+/** Seconds of muzzle flash for a grenade lob. */
+export const PEEWEE_GRENADE_FLASH_TIME = 0.14;
+
+/** Peewee attack mode at `distance`: lobs inside grenade range, bolts past it. */
+export function peeweeAttackFor(distance: number): AttackMode {
+  return isPeeweeGrenadeRange(distance) ? "grenade" : "round";
+}
+
+/** True when a muzzle-to-impact shot at `distance` is a grenade lob. */
+export function isPeeweeGrenadeRange(distance: number): boolean {
+  return distance >= MIN_RANGE && distance <= PEEWEE_GRENADE_RANGE;
+}
+
+/**
+ * High-angle grenade solution under `GRAVITY`: same impact, same muzzle
+ * speed as a cannon root would give, but the steep mortar arc instead of
+ * the flat cannon trajectory. Null under the same conditions as
+ * `solveBallisticHigh` (out of lobbing range reads as no solution, and the
+ * caller keeps the bolt).
+ */
+export function solvePeeweeGrenade(
+  from: CombatVec3,
+  to: CombatVec3,
+  speed: number = PEEWEE_GRENADE_SPEED,
+  gravity: number = GRAVITY,
+): ShotSolution | null {
+  return solveBallisticHigh(from, to, speed, gravity);
+}
+
+/**
  * Firing solution that respects the woods. Shells prefer the flat low root,
  * but when it clips wood they lob the high root over the canopy when that
  * clears (and fits the flight-time safety net); when neither root clears,
@@ -709,9 +795,19 @@ export function solveShotClearing(
   from: CombatVec3,
   to: CombatVec3,
   trees: readonly TreeStand[],
+  attack: AttackMode = "round",
 ): CanopySolution | null {
   const profile = WEAPON_PROFILES[kind];
   if (!profile) return null;
+  // Peewee grenades always lob the steep mortar arc (the high root is the
+  // whole point of the secondary): no flat root exists to prefer, and wood
+  // in the way just fires anyway — the interception roll below may catch
+  // the round as an early burst, the same fallback flat cannon fire gets.
+  if (attack === "grenade" && kind === "peewee") {
+    const lob = solvePeeweeGrenade(from, to, PEEWEE_GRENADE_SPEED, GRAVITY);
+    if (!lob) return null;
+    return { solution: lob, elevated: true };
+  }
   if (profile.shot === "shell") {
     const low = solveBallistic(from, to, profile.speed, GRAVITY);
     if (!low) return null;
