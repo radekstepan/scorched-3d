@@ -13,6 +13,7 @@ import {
   createUnitDamage,
   GRAVITY,
   inRange,
+  isDestroyed,
   MAX_EXPLOSIONS,
   MAX_SCORCH_MARKS,
   MAX_SHOTS,
@@ -75,8 +76,9 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   ground with a persistent scorch decal (capped separately in core) and
  *   damages nearby trees/rocks through the CombatEnv blast hook (blast
  *   core flattens, fringe ignites and chips) and splashes nearby hulls with
- *   accumulating visual damage (charring hull tint, damage smoke, heavy-hit
- *   embers — hulls never move or die from it).
+ *   accumulating damage (charring hull tint, damage smoke, heavy-hit
+ *   embers — hulls are never moved by blasts; a hull that exhausts its
+ *   health dies once, epicly, and stays as a smouldering wreck).
  */
 
 interface Shot {
@@ -118,6 +120,10 @@ interface Explosion {
   points: THREE.Points;
   pointsMat: THREE.PointsMaterial;
   velocities: Float32Array;
+  /** Live spark count for this explosion (epic death bursts carry more). */
+  sparks: number;
+  /** True for a unit-death burst: bigger, longer, brighter. */
+  epic: boolean;
   age: number;
   maxAge: number;
   /** Ground-seated glow radius (kind scorch radius), for tests. */
@@ -137,6 +143,12 @@ const EXPLOSION_MAX_AGE = 1.0;
 const SPARKS_PER_EXPLOSION = 36;
 /** Cool-grey smoke puffs per explosion (never brown — task 25 palette). */
 const SMOKE_PER_EXPLOSION = 3;
+/** Epic unit-death bursts: longer staging, bigger footprint, more debris. */
+const EPIC_MAX_AGE = 1.8;
+const EPIC_SMOKE_PUFFS = 6;
+const EPIC_SPARKS = 80;
+const EPIC_RADIUS_SCALE = 1.6;
+const EPIC_LIGHT_PEAK = 5200;
 /** Muzzle + impact flashes share one bounded pool (cores + halos). */
 const MAX_FLASHES = 24;
 /** Muzzle halo: large faint shell around the hot core. */
@@ -231,6 +243,21 @@ export class CombatFx {
   private scorchTint = new THREE.Color();
   /** Per-unit accumulated damage 0..1 (core state; char/smoke are views). */
   private damage: number[] = [];
+  /**
+   * Per-unit kill flags, sized with `damage` (persistent like scorch — never
+   * reset by `clearTransients`, only dropped on dispose/regen with the fx).
+   * The kill transition derives from the core `isDestroyed` threshold on the
+   * before/after pair of one splash, so each flag flips exactly once.
+   */
+  private destroyed: boolean[] = [];
+  /** Units killed so far (wrecks persist in the roster buffers). */
+  private deathCount = 0;
+  /**
+   * Fired once per kill with the wreck index so the canvas can hold the
+   * mover, drop targeting/selection, and dim the minimap dot. Assigned by
+   * the canvas; null in headless tests.
+   */
+  onUnitKilled: ((index: number) => void) | null = null;
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Deterministic clock for damage smoke/ember phase (no rng per frame). */
@@ -309,6 +336,25 @@ export class CombatFx {
   /** Accumulated damage fraction of a unit (0 pristine .. 1 fully charred). */
   unitDamageAt(index: number): number {
     return this.damage[index] ?? 0;
+  }
+
+  /** True once the unit has exhausted its health and died (wreck persists). */
+  isDestroyedAt(index: number): boolean {
+    return this.destroyed[index] ?? false;
+  }
+
+  /** Units killed so far this session (wrecks stay in the roster). */
+  get killCount(): number {
+    return this.deathCount;
+  }
+
+  /** Live (targetable, drivable) unit count: roster minus wrecks. */
+  get aliveCount(): number {
+    let alive = 0;
+    for (let i = 0; i < this.units.children.length; i++) {
+      if (!this.destroyed[i]) alive++;
+    }
+    return alive;
   }
 
   /** Visible damage-smoke puff count (one per smoking hull, capped). */
@@ -443,16 +489,22 @@ export class CombatFx {
     } else if (this.damage.length > count) {
       this.damage.length = count;
     }
+    while (this.destroyed.length < count) this.destroyed.push(false);
+    if (this.destroyed.length > count) this.destroyed.length = count;
   }
 
   /**
    * Splash a blast onto nearby hulls: accumulate core damage with linear
    * falloff and char the touched bodies in place. Visual only — hulls are
-   * never moved (only recoil touches them) and never die.
+   * never moved (only recoil touches them). A hull crossing the kill
+   * threshold dies exactly once: an epic explosion at the hull, full char,
+   * and the `onUnitKilled` hook (movement hold, deselect) — the instance
+   * itself stays put as a smouldering wreck.
    */
   private damageUnits(at: THREE.Vector3, kind: UnitKind): void {
     if (this.damage.length === 0) return;
     const bodies = this.units.children as THREE.Group[];
+    const before = this.damage.slice();
     const touched = applyBlastToUnits(
       this.damage,
       bodies.map((b) => ({ x: b.position.x, z: b.position.z })),
@@ -463,6 +515,15 @@ export class CombatFx {
     for (const i of touched) {
       const body = bodies[i];
       if (body) applyUnitDamageTint(body, this.damage[i]!);
+      if (!this.destroyed[i] && !isDestroyed(before[i]!) && isDestroyed(this.damage[i]!)) {
+        this.destroyed[i] = true;
+        this.deathCount += 1;
+        const wreck = bodies[i];
+        if (wreck) {
+          this.explodeDeath(new THREE.Vector3(wreck.position.x, wreck.position.y, wreck.position.z));
+        }
+        this.onUnitKilled?.(i);
+      }
     }
   }
   /** Size the aim pose array to the unit roster, seeding from live yaws. */
@@ -500,6 +561,10 @@ export class CombatFx {
    */
   private slewPending(dt: number): void {
     for (const [attacker, target] of this.pending) {
+      if (this.destroyed[attacker] || this.destroyed[target]) {
+        this.pending.delete(attacker);
+        continue;
+      }
       const body = this.units.children[attacker] as THREE.Group | undefined;
       const kind = this.unitKind(attacker);
       const want = this.bearing(attacker, target);
@@ -523,18 +588,38 @@ export class CombatFx {
   }
 
   /**
+   * Draw an attacker/target pair uniformly from live hulls (wrecks excluded
+   * on both ends). Null when fewer than two hulls are alive — the skirmish
+   * goes quiet instead of shelling wrecks. Consumes rng exactly like the
+   * core pair picker so live rosters replay deterministically.
+   */
+  private pickLivePair(): { attacker: number; target: number } | null {
+    const count = this.units.children.length;
+    const alive: number[] = [];
+    for (let i = 0; i < count; i++) {
+      if (!this.destroyed[i]) alive.push(i);
+    }
+    if (alive.length < 2) return null;
+    const pair = pickSkirmishPair(alive.length, this.rng);
+    if (!pair) return null;
+    return { attacker: alive[pair.attacker]!, target: alive[pair.target]! };
+  }
+
+  /**
    * Pick a skirmish pair and fire only when the attacker is aimed: hull
    * faced at the target (or, in external-hull mode, on its patrol heading
    * with the turret slewed onto the target), turret inside its traverse,
    * muzzle down the turret line. Returns true when a shot left (or the
    * roster/caps made firing impossible, to keep the ambient schedule); false
-   * defers while the attacker is still traversing.
+   * defers while the attacker is still traversing. Wrecks neither fire nor
+   * draw fire: pairs are drawn from live hulls only, and fewer than two
+   * live hulls means silence (still true, to keep the schedule idle).
    */
   private tryFire(): boolean {
     const count = this.units.children.length;
     if (count < 2) return true;
     if (this.shots.length >= MAX_SHOTS) return true;
-    const pair = pickSkirmishPair(count, this.rng);
+    const pair = this.pickLivePair();
     if (!pair) return true;
     const attacker = this.units.children[pair.attacker] as THREE.Group | undefined;
     const target = this.units.children[pair.target] as THREE.Group | undefined;
@@ -660,14 +745,26 @@ export class CombatFx {
     this.spawnFlash(at, color, life * 1.4, HALO_SCALE, HALO_GROWTH, HALO_PEAK);
   }
 
-  private kickLight(at: THREE.Vector3, color: number): void {
+  private kickLight(at: THREE.Vector3, color: number, peak = 2600): void {
     let light = this.lights[0]!;
     for (const candidate of this.lights) {
       if (candidate.intensity < light.intensity) light = candidate;
     }
     light.color.setHex(color);
     light.position.copy(at);
-    light.intensity = 2600;
+    light.intensity = peak;
+  }
+
+  /**
+   * Epic unit-death burst: the full layered stack at ~1.6× footprint with a
+   * longer 1.8 s staging, double smoke puffs, 80 sparks, and a harder light
+   * kick — inside the same bounded explosion pool, so a volley of kills
+   * evicts oldest-first like any barrage. Scars its own scorch + dent via
+   * the shared path, sized up from the hammer's (the wreck deserves the
+   * biggest footprint on the field regardless of what killed it).
+   */
+  private explodeDeath(at: THREE.Vector3): void {
+    this.explode(at, 0xff8a3c, "hammer", true);
   }
 
   /**
@@ -682,7 +779,7 @@ export class CombatFx {
    * geometries stay shared. Smoke stays cool grey per the gentler-scorch
    * palette (never brown) and unit-damage smoke stays subtle (untouched).
    */
-  private explode(at: THREE.Vector3, color: number, kind: UnitKind): void {
+  private explode(at: THREE.Vector3, color: number, kind: UnitKind, epic = false): void {
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
       if (oldest) this.removeExplosion(oldest);
@@ -691,6 +788,9 @@ export class CombatFx {
     group.position.copy(at);
     const ground = this.env ? this.env.groundY(at.x, at.z) : at.y;
     const shape = scorchForKind(kind);
+    const radiusScale = epic ? EPIC_RADIUS_SCALE : 1;
+    const puffCount = epic ? EPIC_SMOKE_PUFFS : SMOKE_PER_EXPLOSION;
+    const sparkCount = epic ? EPIC_SPARKS : SPARKS_PER_EXPLOSION;
 
     const flashMat = new THREE.MeshBasicMaterial({
       color,
@@ -723,8 +823,8 @@ export class CombatFx {
       depthWrite: false,
     });
     const smokes: THREE.Mesh[] = [];
-    const smokeVel = new Float32Array(SMOKE_PER_EXPLOSION * 3);
-    for (let i = 0; i < SMOKE_PER_EXPLOSION; i++) {
+    const smokeVel = new Float32Array(puffCount * 3);
+    for (let i = 0; i < puffCount; i++) {
       const puff = new THREE.Mesh(this.smokeGeo, smokeMat);
       const theta = this.rng() * Math.PI * 2;
       const r = 4 + this.rng() * 10;
@@ -749,7 +849,7 @@ export class CombatFx {
     });
     const ringMesh = new THREE.Mesh(this.ringGeo, ringMat);
     ringMesh.position.y = ground - at.y + 1.6;
-    ringMesh.scale.setScalar(Math.max(shape.radius * 0.4, 1));
+    ringMesh.scale.setScalar(Math.max(shape.radius * radiusScale * 0.4, 1));
     group.add(ringMesh);
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0xff9a3c,
@@ -760,12 +860,12 @@ export class CombatFx {
     });
     const glowMesh = new THREE.Mesh(this.glowGeo, glowMat);
     glowMesh.position.y = ground - at.y + 1.4;
-    glowMesh.scale.setScalar(Math.max(shape.radius * 1.1, 1));
+    glowMesh.scale.setScalar(Math.max(shape.radius * radiusScale * 1.1, 1));
     group.add(glowMesh);
 
-    const positions = new Float32Array(SPARKS_PER_EXPLOSION * 3);
-    const velocities = new Float32Array(SPARKS_PER_EXPLOSION * 3);
-    for (let i = 0; i < SPARKS_PER_EXPLOSION; i++) {
+    const positions = new Float32Array(sparkCount * 3);
+    const velocities = new Float32Array(sparkCount * 3);
+    for (let i = 0; i < sparkCount; i++) {
       const theta = this.rng() * Math.PI * 2;
       const up = 0.4 + this.rng() * 1.2;
       const speed = 60 + this.rng() * 160;
@@ -805,11 +905,13 @@ export class CombatFx {
       points,
       pointsMat,
       velocities,
+      sparks: sparkCount,
+      epic,
       age: 0,
-      maxAge: EXPLOSION_MAX_AGE,
-      glowRadius: shape.radius,
+      maxAge: epic ? EPIC_MAX_AGE : EXPLOSION_MAX_AGE,
+      glowRadius: shape.radius * radiusScale,
     });
-    this.kickLight(at, 0xff8a3c);
+    this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
     this.scarGround(at, kind);
     this.damageUnits(at, kind);
   }
@@ -936,14 +1038,15 @@ export class CombatFx {
       const ex = this.explosions[i]!;
       ex.age += dt;
       const k = Math.min(ex.age / ex.maxAge, 1);
+      const s = ex.epic ? EPIC_RADIUS_SCALE : 1;
       // Flash shell: fast-expanding additive pop.
-      ex.flashMesh.scale.setScalar(1 + k * 5);
+      ex.flashMesh.scale.setScalar((1 + k * 5) * s);
       ex.flashMat.opacity = 0.9 * (1 - k);
       // Fireball: balloons in the first quarter, then collapses and lifts.
       const fireK = Math.min(k / 0.25, 1);
       const dieK = Math.max((k - 0.25) / 0.75, 0);
-      ex.fireMesh.scale.setScalar(0.5 + fireK * 0.9 - dieK * 1.1);
-      ex.fireMesh.position.y = k * 14;
+      ex.fireMesh.scale.setScalar((0.5 + fireK * 0.9 - dieK * 1.1) * s);
+      ex.fireMesh.position.y = k * 14 * s;
       ex.fireMat.opacity = 0.95 * (1 - k);
       // Smoke: climb, drift, and swell while fading with the shared mat.
       for (let s = 0; s < ex.smokes.length; s++) {
@@ -961,7 +1064,7 @@ export class CombatFx {
       ex.glowMesh.scale.setScalar(ex.glowRadius * 1.1 * (0.8 + 0.4 * k));
       ex.glowMat.opacity = 0.5 * (1 - k) * (1 - k * 0.3);
       const pos = ex.points.geometry.getAttribute("position") as THREE.BufferAttribute;
-      for (let p = 0; p < SPARKS_PER_EXPLOSION; p++) {
+      for (let p = 0; p < ex.sparks; p++) {
         ex.velocities[p * 3 + 1] = ex.velocities[p * 3 + 1]! - 320 * dt;
         pos.setXYZ(
           p,

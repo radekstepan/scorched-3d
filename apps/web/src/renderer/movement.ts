@@ -56,6 +56,14 @@ export class UnitMovement {
   private env: MovementEnv;
   private field: SeatField | null;
   private disposed = false;
+  /**
+   * Wreck flags by unit index: a destroyed hull holds position forever
+   * (mover frozen, orders refused) while its body stays in the scene as a
+   * smouldering wreck. Live hulls still spacing-avoid wrecks through the
+   * shared core separation (positions stay in the field), so nobody drives
+   * through a wreck — but wrecks themselves never move.
+   */
+  private destroyed: boolean[] = [];
 
   constructor(
     units: THREE.Group,
@@ -98,6 +106,23 @@ export class UnitMovement {
     return mover ? hasOrder(mover) : false;
   }
 
+  /** True once the unit has died and holds as a wreck. */
+  isDestroyed(index: number): boolean {
+    return this.destroyed[index] ?? false;
+  }
+
+  /**
+   * Freeze a unit as a wreck: drop any live order/patrol leg, hold position,
+   * and refuse all future orders. The body is untouched (combat owns the
+   * char tint; the pose stays seated where it died). Idempotent.
+   */
+  markDestroyed(index: number): void {
+    const mover = this.movers[index];
+    if (!mover) return;
+    this.destroyed[index] = true;
+    this.movers[index] = { ...mover, order: undefined, hold: true };
+  }
+
   /**
    * Issue a move order to one unit: A* from its live position to the target
    * (straight drive when no heightfield was provided), replacing any patrol
@@ -105,7 +130,7 @@ export class UnitMovement {
    */
   orderUnit(index: number, target: { x: number; z: number }): boolean {
     const mover = this.movers[index];
-    if (!mover) return false;
+    if (!mover || this.destroyed[index]) return false;
     const path = this.field
       ? findWorldPath(this.field, { x: mover.x, z: mover.z }, target)
       : [{ x: target.x, z: target.z }];
@@ -123,11 +148,12 @@ export class UnitMovement {
    * the pair inside the mutual spacing stop.
    */
   orderGroup(indices: readonly number[], target: { x: number; z: number }): number {
+    const live = indices.filter((index) => !this.destroyed[index]);
     const slots = this.field
-      ? snappedFormationTargets(this.field, target, indices.length)
-      : formationTargets(target, indices.length);
+      ? snappedFormationTargets(this.field, target, live.length)
+      : formationTargets(target, live.length);
     let issued = 0;
-    indices.forEach((index, i) => {
+    live.forEach((index, i) => {
       if (this.orderUnit(index, slots[i] ?? target)) issued++;
     });
     return issued;
@@ -136,6 +162,12 @@ export class UnitMovement {
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
     const next = advanceMovers(this.kinds, this.movers, this.routes, dt, this.field);
+    // Wrecks never move: freeze their movers at the pre-tick state (core
+    // separation may have shoved them). Live hulls still spacing-avoid the
+    // wreck positions, so nobody drives through a wreck.
+    for (let i = 0; i < next.length; i++) {
+      if (this.destroyed[i]) next[i] = this.movers[i]!;
+    }
     next.forEach((mover, i) => {
       const body = this.units.children[i] as THREE.Group | undefined;
       const prev = this.movers[i];

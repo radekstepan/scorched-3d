@@ -7,8 +7,10 @@ import type { UnitKind } from "./types.js";
  * Framework-free (no three.js): the web renderer owns the char/smoke/ember
  * visuals while all damage state lives here so vitest can cover it without
  * WebGL. Damage is a per-unit 0..1 fraction (0 pristine, 1 fully charred)
- * that only ever accumulates — units never heal and never die (no wreck
- * removal; the roster drives on, visibly battered). Blasts that already scar
+ * that only ever accumulates — units never heal. A hull that reaches 1 is
+ * destroyed (see `isDestroyed`): the renderer keeps its instance as a
+ * smouldering wreck (fell, don't remove) and drops it from targeting,
+ * movement, and selection. Blasts that already scar
  * the ground and fell trees also splash nearby hulls with linear falloff, so
  * damage state stays a pure function of impact positions: deterministic given
  * the same shot sequence, no rng consumed.
@@ -32,6 +34,13 @@ export const UNIT_SMOKE_DAMAGE = 0.2;
 export const UNIT_HEAVY_DAMAGE = 0.55;
 /** Damage fraction at which charring saturates (further hits still count). */
 export const UNIT_CHAR_SATURATE = 0.8;
+/**
+ * Damage fraction at which a hull is destroyed: `applyBlastToUnits` clamps
+ * at 1, so exhaustion == reaching the clamp. The wreck keeps its 1.0 damage
+ * (smouldering smoke/embers views keep reading it as heavy) while the
+ * renderer drops the index from targeting, movement, and selection.
+ */
+export const UNIT_KILL_DAMAGE = 1;
 
 /** Fresh all-pristine damage state for `count` units. */
 export function createUnitDamage(count: number): number[] {
@@ -52,6 +61,16 @@ export function isSmoking(damage: number): boolean {
 /** True once a hull should trail dark smoke plus embers/sparks. */
 export function isHeavilyDamaged(damage: number): boolean {
   return damage >= UNIT_HEAVY_DAMAGE;
+}
+
+/**
+ * True once a hull has exhausted its health (damage reached the clamp).
+ * Pure threshold so the renderer can derive the kill transition from the
+ * before/after pair of one splash: `!isDestroyed(prev) && isDestroyed(next)`
+ * fires exactly once per hull, with no extra state and no rng.
+ */
+export function isDestroyed(damage: number): boolean {
+  return damage >= UNIT_KILL_DAMAGE;
 }
 
 export interface UnitBlastPoint {

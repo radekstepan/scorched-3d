@@ -82,7 +82,7 @@ interface Props {
   /** Fired when the RTS selection changes (sorted unit indices). */
   onSelection?: (indices: number[]) => void;
   /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay. */
-  onPositions?: (positions: { x: number; z: number }[]) => void;
+  onPositions?: (positions: { x: number; z: number; alive: boolean }[]) => void;
 }
 
 export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions }: Props) {
@@ -299,14 +299,24 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     let selection: number[] = [];
     let selTime = 0;
     const applySelection = (next: number[]): void => {
-      selection = next;
-      const vis = markerVisibility(units.children.length, next);
+      // Wrecks are never selectable (belt-and-braces: picks already filter
+      // them, but kills can land mid-gesture).
+      selection = next.filter((i) => !combat.isDestroyedAt(i));
+      const vis = markerVisibility(units.children.length, selection);
       units.children.forEach((child, i) => {
         const marker = child.getObjectByName("select-marker");
         if (marker) marker.visible = vis[i] ?? false;
         setBodyHighlight(child, vis[i] ?? false);
       });
-      selectionRef.current?.([...next]);
+      selectionRef.current?.([...selection]);
+    };
+    // Unit death: freeze the mover as a wreck and drop it from the
+    // selection (the charred instance stays in the scene, smouldering).
+    combat.onUnitKilled = (index) => {
+      movement.markDestroyed(index);
+      if (selection.includes(index)) {
+        applySelection(selection.filter((s) => s !== index));
+      }
     };
 
     // Move-order pings: short-lived expanding rings where an order landed.
@@ -347,7 +357,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     const canvasRect = (): DOMRect => renderer.domElement.getBoundingClientRect();
 
-    /** Project every live body to canvas pixels for picking. */
+    /** Project every body to canvas pixels for picking. */
     const projectUnits = (): { x: number; y: number }[] => {
       const rect = canvasRect();
       const v = new THREE.Vector3();
@@ -355,6 +365,24 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         v.set(p.x, groundY(p.x, p.z) + 6, p.z).project(camera);
         return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
       });
+    };
+
+    /**
+     * Project wreck-free bodies for picking, keeping roster indices
+     * alongside so box/click hits remap into selection space. Wreck
+     * instances stay rendered (smouldering) but are never pickable.
+     */
+    const projectSelectable = (): { points: { x: number; y: number }[]; indices: number[] } => {
+      const all = projectUnits();
+      const points: { x: number; y: number }[] = [];
+      const indices: number[] = [];
+      all.forEach((p, i) => {
+        if (!combat.isDestroyedAt(i)) {
+          points.push(p);
+          indices.push(i);
+        }
+      });
+      return { points, indices };
     };
 
     const bodyIndexOf = (obj: THREE.Object3D | null): number | null => {
@@ -371,7 +399,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(units.children, true);
-      return hits.length > 0 ? bodyIndexOf(hits[0]?.object ?? null) : null;
+      // Wrecks are unpickable — and must not occlude live hulls behind them.
+      for (const hit of hits) {
+        const i = bodyIndexOf(hit.object);
+        if (i !== null && !combat.isDestroyedAt(i)) return i;
+      }
+      return null;
     };
 
     const pickGround = (clientX: number, clientY: number): THREE.Vector3 | null => {
@@ -441,10 +474,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
             x: cx - rect.left,
             y: cy - rect.top,
           });
+          const sel = projectSelectable();
           const hits = boxPick(
-            projectUnits(),
+            sel.points,
             normalizeRect(toLocal(wasDown.x, wasDown.y), toLocal(ev.clientX, ev.clientY)),
-          );
+          ).map((h) => sel.indices[h] ?? -1).filter((h) => h >= 0);
           applySelection(boxSelect(selection, hits, ev.shiftKey));
         }
         return;
@@ -457,10 +491,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         // nearest projection within the pick radius.
         const rect = canvasRect();
         const meshHit = pickBody(ev.clientX, ev.clientY);
-        const screenHit = pickNearest(projectUnits(), {
+        const sel = projectSelectable();
+        const screenSlot = pickNearest(sel.points, {
           x: ev.clientX - rect.left,
           y: ev.clientY - rect.top,
         });
+        const screenHit = screenSlot === null ? null : (sel.indices[screenSlot] ?? null);
         applySelection(clickSelect(selection, meshHit ?? screenHit, ev.shiftKey));
       } else if (wasDown.button === 2 && selection.length > 0) {
         const point = pickGround(ev.clientX, ev.clientY);
@@ -626,7 +662,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       posTimer += dt;
       if (posTimer >= 0.25) {
         posTimer = 0;
-        positionsRef.current?.(movement.positions());
+        // Wrecks ride along so the minimap can dim them instead of dropping
+        // them (the battlefield keeps its history).
+        positionsRef.current?.(
+          movement.positions().map((p, i) => ({ ...p, alive: !combat.isDestroyedAt(i) })),
+        );
       }
 
       if (hovering) {

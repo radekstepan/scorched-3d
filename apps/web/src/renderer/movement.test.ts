@@ -438,3 +438,41 @@ describe("drive locomotion", () => {
     movement.dispose();
   });
 });
+
+describe("UnitMovement wrecks", () => {
+  it("freezes destroyed hulls in place while the living drive on", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    expect(movement.isDestroyed(0)).toBe(false);
+    movement.markDestroyed(0);
+    expect(movement.isDestroyed(0)).toBe(true);
+    const wreck = (units.children[0] as THREE.Group).position.clone();
+    const liveBefore = (units.children[1] as THREE.Group).position.clone();
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    // The wreck never moves (X/Z frozen; Y re-seats on the flat ground).
+    expect((units.children[0] as THREE.Group).position.x).toBeCloseTo(wreck.x, 9);
+    expect((units.children[0] as THREE.Group).position.z).toBeCloseTo(wreck.z, 9);
+    // Its neighbour still patrols away.
+    const travelled = (units.children[1] as THREE.Group).position.distanceTo(liveBefore);
+    expect(travelled).toBeGreaterThan(0);
+    movement.dispose();
+  });
+
+  it("refuses move orders for wrecks and fans groups around them", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    movement.markDestroyed(0);
+    expect(movement.orderUnit(0, { x: 500, z: 500 })).toBe(false);
+    expect(movement.hasOrder(0)).toBe(false);
+    // Group orders skip the wreck: one live hull, one issued order.
+    expect(movement.orderGroup([0, 1], { x: 500, z: 500 })).toBe(1);
+    expect(movement.hasOrder(0)).toBe(false);
+    expect(movement.hasOrder(1)).toBe(true);
+    // Re-marking is idempotent, unknown indices are a no-op.
+    movement.markDestroyed(0);
+    movement.markDestroyed(99);
+    expect(movement.isDestroyed(0)).toBe(true);
+    expect(movement.isDestroyed(1)).toBe(false);
+    movement.dispose();
+  });
+});

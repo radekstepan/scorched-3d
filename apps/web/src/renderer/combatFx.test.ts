@@ -60,6 +60,29 @@ function makeAsternPair(): THREE.Group {
   return group;
 }
 
+/** Eight hulls on a wide grid for barrage-cap tests (far outside any blast). */
+function makeBarrageUnits(): THREE.Group {
+  const kinds = ["stump", "hammer", "flash", "commander", "stump", "hammer", "flash", "commander"];
+  const group = new THREE.Group();
+  group.userData.units = kinds.map((kind, i) => ({
+    kind,
+    cellX: 10 + i,
+    cellZ: 10 + i,
+    rotation: (i * Math.PI) / 4,
+  }));
+  kinds.forEach((_, i) => {
+    const body = new THREE.Group();
+    body.rotation.y = (i * Math.PI) / 4;
+    body.position.set((i % 4) * 700 - 1050, 100, Math.floor(i / 4) * 700 - 350);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+  });
+  return group;
+}
+
 describe("muzzlePoint", () => {
   it("throws the muzzle forward along the unit facing", () => {
     // Facing +Z (rotation 0): muzzle sits ahead in +Z, above the anchor.
@@ -516,6 +539,99 @@ describe("CombatFx unit damage", () => {
   });
 });
 
+describe("CombatFx unit death", () => {
+  /**
+   * White-box prime: the fx owns per-unit damage with no public setter
+   * (it only grows through live splashes), so tests park one hull near
+   * exhaustion and let aimed fire finish it.
+   */
+  function primeDamage(fx: CombatFx, index: number, value: number): void {
+    (fx as unknown as { damage: number[] }).damage[index] = value;
+  }
+
+  function sparkGroups(scene: THREE.Scene): THREE.Group[] {
+    return scene.children.filter(
+      (c) => c instanceof THREE.Group && c.children.some((k) => (k as THREE.Points).isPoints),
+    ) as THREE.Group[];
+  }
+
+  function sparkCountOf(group: THREE.Group): number {
+    const points = group.children.find((k) => (k as THREE.Points).isPoints) as THREE.Points;
+    return (points.geometry.getAttribute("position") as THREE.BufferAttribute).count;
+  }
+
+  function stepUntilKill(fx: CombatFx, maxSteps = 4000): void {
+    for (let n = 0; n < maxSteps && fx.killCount === 0; n++) fx.update(1 / 60);
+    expect(fx.killCount).toBeGreaterThan(0);
+  }
+
+  it("kills once at exhaustion: hook fires once, wreck persists, epic burst spawns", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    const killed: number[] = [];
+    fx.onUnitKilled = (i) => killed.push(i);
+    expect(fx.aliveCount).toBe(3);
+    primeDamage(fx, 0, 0.95);
+    stepUntilKill(fx);
+    // The primed hull dies on its first splash; the transition fires once.
+    expect(killed).toEqual([0]);
+    expect(fx.killCount).toBe(1);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.unitDamageAt(0)).toBe(1);
+    expect(fx.aliveCount).toBe(2);
+    // Fell, don't remove: the instance stays in the roster buffers.
+    expect(units.children.length).toBe(3);
+    expect(units.children[0]).toBeDefined();
+    // The death burst is the epic layering: 6 smoke puffs (flash + fire +
+    // 6 smoke + ring + glow + sparks = 11 children) with 80 sparks, versus
+    // the regular 3-puff / 36-spark impact stack.
+    const epic = sparkGroups(scene).filter((g) => sparkCountOf(g) === 80);
+    expect(epic.length).toBeGreaterThanOrEqual(1);
+    expect(epic[0]!.children.length).toBe(11);
+    // The kill survives more barrages without ever re-firing the hook.
+    for (let n = 0; n < 2000; n++) fx.update(1 / 60);
+    expect(killed.filter((i) => i === 0).length).toBe(1);
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(fx.unitDamageAt(0)).toBe(1);
+    fx.dispose();
+  });
+
+  it("dead hulls stop firing and stop drawing fire", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(7));
+    primeDamage(fx, 0, 0.99);
+    primeDamage(fx, 1, 0.99);
+    for (let n = 0; n < 4000 && fx.killCount < 2; n++) fx.update(1 / 60);
+    expect(fx.killCount).toBe(2);
+    expect(fx.aliveCount).toBe(1);
+    // One live hull left: the skirmish goes quiet — no shots, no new fire.
+    const fired = fx.totalFired;
+    for (let n = 0; n < 600; n++) {
+      fx.update(1 / 60);
+      expect(fx.shotCount).toBe(0);
+    }
+    expect(fx.totalFired).toBe(fired);
+    fx.dispose();
+  });
+
+  it("keeps kill flags and damage through clearTransients", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    primeDamage(fx, 2, 0.99);
+    stepUntilKill(fx);
+    expect(fx.killCount).toBe(1);
+    fx.clearTransients();
+    expect(fx.killCount).toBe(1);
+    expect(fx.isDestroyedAt(2)).toBe(true);
+    expect(fx.unitDamageAt(2)).toBe(1);
+    expect(fx.aliveCount).toBe(2);
+    fx.dispose();
+  });
+});
+
 describe("CombatFx destruction", () => {
   function makeEnv() {
     const calls: { x: number; z: number; radius: number }[] = [];
@@ -569,7 +685,11 @@ describe("CombatFx destruction", () => {
 
   it("caps scorch decals and keeps them through clearTransients", () => {
     const scene = new THREE.Scene();
-    const units = makeUnits();
+    // Eight hulls on a wide grid (pairwise ≥700 apart, far outside any
+    // 64-unit blast): the barrage reaches the 48-mark cap long before the
+    // roster can annihilate itself into silence. Three hulls would die out
+    // first and stall impacts at ~33 marks.
+    const units = makeBarrageUnits();
     const { env } = makeEnv();
     const fx = new CombatFx(scene, units, mulberry32(21), env);
     for (let n = 0; n < 4000; n++) fx.update(0.05);

@@ -3,10 +3,12 @@ import {
   applyBlastToUnits,
   charMix,
   createUnitDamage,
+  isDestroyed,
   isHeavilyDamaged,
   isSmoking,
   UNIT_HIT_DAMAGE,
   UNIT_HEAVY_DAMAGE,
+  UNIT_KILL_DAMAGE,
   UNIT_SMOKE_DAMAGE,
 } from "./unitDamage.js";
 import { BLAST_RADIUS } from "./destruction.js";
@@ -30,6 +32,36 @@ describe("thresholds", () => {
     expect(charMix(0.4)).toBeGreaterThan(0);
     expect(charMix(0.4)).toBeLessThan(1);
     expect(charMix(1)).toBe(1);
+  });
+});
+
+describe("unit death", () => {
+  it("destroys only at full exhaustion (kill == the clamp)", () => {
+    expect(UNIT_KILL_DAMAGE).toBe(1);
+    expect(isDestroyed(0.999)).toBe(false);
+    expect(isDestroyed(1)).toBe(true);
+    expect(isDestroyed(1.5)).toBe(true);
+  });
+
+  it("crosses to destroyed through accumulated blasts, then pins at 1", () => {
+    const damage = createUnitDamage(1);
+    let kills = 0;
+    for (let i = 0; i < 50 && kills === 0; i++) {
+      const before = damage[0]!;
+      applyBlastToUnits(damage, [{ x: 0, z: 0 }], 0, 0, "hammer");
+      if (!isDestroyed(before) && isDestroyed(damage[0]!)) kills++;
+    }
+    // Hammer point-blank 0.16 → ~7 direct hits to exhaust.
+    expect(kills).toBe(1);
+    expect(damage[0]).toBe(1);
+    // Further shells keep it pinned: the transition fires exactly once.
+    for (let i = 0; i < 10; i++) {
+      const before = damage[0]!;
+      applyBlastToUnits(damage, [{ x: 0, z: 0 }], 0, 0, "hammer");
+      if (!isDestroyed(before) && isDestroyed(damage[0]!)) kills++;
+    }
+    expect(kills).toBe(1);
+    expect(damage[0]).toBe(1);
   });
 });
 

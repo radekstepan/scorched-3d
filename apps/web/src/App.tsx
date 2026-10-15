@@ -26,7 +26,7 @@ export default function App() {
   const [seed, setSeed] = useState(0xa11ce);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
-  const [liveUnits, setLiveUnits] = useState<{ x: number; z: number }[]>([]);
+  const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean }[]>([]);
   const [options, setOptions] = useState<ViewOptions>({
     exaggeration: 2.0,
     showWater: true,
@@ -130,6 +130,8 @@ export default function App() {
               const kind = map.units[i]?.kind;
               const color = kind ? `#${UNIT_DEFS[kind].color.toString(16).padStart(6, "0")}` : "#fff";
               const isSel = selected.includes(i);
+              // Wrecks dim to grey and can never carry a selection glow.
+              const wrecked = p.alive === false;
               return (
                 <span
                   key={i}
@@ -137,11 +139,12 @@ export default function App() {
                   style={{
                     left: `${(p.x / worldW + 0.5) * 100}%`,
                     top: `${(p.z / worldD + 0.5) * 100}%`,
-                    width: 5,
-                    height: 5,
-                    background: color,
-                    outline: isSel ? MINIMAP_SELECTED_OUTLINE : undefined,
-                    boxShadow: isSel ? MINIMAP_SELECTED_GLOW : undefined,
+                    width: wrecked ? 4 : 5,
+                    height: wrecked ? 4 : 5,
+                    background: wrecked ? "#57534e" : color,
+                    opacity: wrecked ? 0.55 : 1,
+                    outline: !wrecked && isSel ? MINIMAP_SELECTED_OUTLINE : undefined,
+                    boxShadow: !wrecked && isSel ? MINIMAP_SELECTED_GLOW : undefined,
                   }}
                 />
               );
