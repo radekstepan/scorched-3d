@@ -135,6 +135,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.maxDistance = 4200;
     controls.panSpeed = clampPanSpeed(options.panSpeed);
     controls.zoomSpeed = clampZoomSpeed(options.zoomSpeed);
+    // Cursor-anchored zoom: wheel/pinch dolly toward the ground point under
+    // the cursor instead of the screen center, so zooming feels like leaning
+    // into the spot being looked at. Stock OrbitControls behavior otherwise
+    // (min/max distance, zoomSpeed, polar clamp all still apply); the target
+    // it migrates is re-clamped to the map every tick below.
+    controls.zoomToCursor = true;
     controls.target.set(startPose.target.x, startPose.target.y, startPose.target.z);
 
     const fogColor = new THREE.Color(0x8eb4c8);
@@ -741,6 +747,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
 
       controls.update();
+      // Cursor-anchored zoom migrates the orbit target toward the cursor, so
+      // re-clamp it to the map after the update (keyboard pan clamps before).
+      clampPanTarget(controls.target, worldW, worldD);
 
       movement.update(dt);
       tracks.update(movement, dt);
