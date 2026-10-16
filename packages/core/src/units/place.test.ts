@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "../terrain/generate.js";
 import { FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
-import { placeUnits, PRESET_UNIT_COUNTS, startingUnitCount, teamOf, teamSpan, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
+import { buildMirroredRoster, placeUnits, PRESET_UNIT_COUNTS, startingUnitCount, teamOf, teamSpan, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
+import { mulberry32 } from "../terrain/noise.js";
 import { TEAM_DEFS, TEAM_IDS, UNIT_DEFS, UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const;
@@ -198,6 +199,71 @@ describe("placeUnits even teams", () => {
     expect(teams.filter((t) => t === 1)).toHaveLength(6);
   });
 });
+
+describe("buildMirroredRoster", () => {
+  it("deals both teams the identical kind multiset on even rosters", () => {
+    for (const count of [2, 4, 8, 12, 20, 24]) {
+      const roster = buildMirroredRoster(mulberry32(1234), count);
+      expect(roster).toHaveLength(count);
+      const west = roster.slice(0, count / 2).sort();
+      const east = roster.slice(count / 2).sort();
+      expect(east).toEqual(west);
+    }
+  });
+
+  it("keeps the short side a subset on odd rosters", () => {
+    const roster = buildMirroredRoster(mulberry32(99), 5);
+    expect(roster).toHaveLength(5);
+    // teamOf deals the first ceil(5/2)=3 slots west, the last 2 east.
+    const west = roster.slice(0, 3).sort();
+    const east = roster.slice(3).sort();
+    const remaining = [...west];
+    for (const kind of east) {
+      const at = remaining.indexOf(kind);
+      expect(at).toBeGreaterThanOrEqual(0);
+      remaining.splice(at, 1);
+    }
+  });
+
+  it("still varies the shared roster per seed", () => {
+    const variants = new Set(
+      [1, 2, 3, 4, 5, 6].map((s) => buildMirroredRoster(mulberry32(s), 12).join(",")),
+    );
+    expect(variants.size).toBeGreaterThan(1);
+  });
+});
+
+describe("placeUnits mirrored balance", () => {
+  it("fields equal per-team kind counts on every map and seed", () => {
+    for (const preset of PRESETS) {
+      for (const seed of SEEDS) {
+        const map = generateMap(preset, seed);
+        const kinds0 = map.units.filter((u) => u.team === 0).map((u) => u.kind).sort();
+        const kinds1 = map.units.filter((u) => u.team === 1).map((u) => u.kind).sort();
+        expect(kinds1).toEqual(kinds0);
+      }
+    }
+  });
+
+  it("fields equal per-team starting strength on every map and seed", () => {
+    for (const preset of PRESETS) {
+      for (const seed of SEEDS) {
+        const map = generateMap(preset, seed);
+        const strength = (team: 0 | 1): number =>
+          map.units
+            .filter((u) => u.team === team)
+            .reduce((sum, u) => sum + kindWeight(u.kind), 0);
+        expect(strength(1)).toBe(strength(0));
+      }
+    }
+  });
+});
+
+function kindWeight(kind: string): number {
+  // Ordinal punch per kind (mirrors the hq spawn-strength order
+  // peewee < flash < stump < hammer, commander between stump and hammer).
+  return { peewee: 1, flash: 2, stump: 3, commander: 4, hammer: 5 }[kind] ?? 0;
+}
 
 describe("startingUnitCount", () => {
   it("covers every preset with an even roster of at least 4v4", () => {

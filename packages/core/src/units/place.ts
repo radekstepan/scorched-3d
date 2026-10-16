@@ -60,22 +60,50 @@ export function teamOf(index: number, count: number): TeamId {
 }
 
 /**
- * Deterministically place `count` units on dry land. The first four slots
- * cover every unit kind (shuffled), the rest are drawn at random, so every
- * regen shows a readable mix. Teams muster on opposite halves (west/east,
- * split at the middle column) so the skirmish opens across the map and the
- * hunt AI has room to close. A strict pass searches for flat, separated,
- * unoccupied cells; a relaxed pass loosens slope/separation; a scoring
- * fallback always returns a cell so the roster is never short.
+ * Deterministically place `count` units on dry land. Both teams muster the
+ * SAME roster (mirrored kinds, independently shuffled order): one half-roster
+ * is drawn — every unit kind covered first (shuffled), the rest at random,
+ * so every regen shows a readable mix — and each side fields that exact
+ * multiset, so neither opens with a strength edge (previously the two halves
+ * of one random draw could differ by whole hammers). Teams muster on
+ * opposite halves (west/east, split at the middle column) so the skirmish
+ * opens across the map and the hunt AI has room to close. A strict pass
+ * searches for flat, separated, unoccupied cells; a relaxed pass loosens
+ * slope/separation; a scoring fallback always returns a cell so the roster
+ * is never short.
  */
 export function placeUnits(field: UnitField, seed: number, count = UNIT_COUNT): PlacedUnit[] {
   const rng = mulberry32((seed ^ 0x9e37) >>> 0);
-  const roster = buildRoster(rng, count);
+  const roster = buildMirroredRoster(rng, count);
   const placed: PlacedUnit[] = [];
   roster.forEach((kind, i) => {
     placed.push(dropUnit(field, rng, kind, teamOf(i, roster.length), placed));
   });
   return placed;
+}
+
+/**
+ * Fair starting roster: one half-roster drawn from `buildRoster`, then dealt
+ * to both teams as the same multiset in independently shuffled order. Slot
+ * layout matches `teamOf` — the first `ceil(count / 2)` slots fight west —
+ * so even rosters are exact mirrors and an odd tail slot (east's short side
+ * is the subset) loses nothing it was promised.
+ */
+export function buildMirroredRoster(rng: () => number, count: number): UnitKind[] {
+  const westCount = Math.ceil(count / 2);
+  const half = buildRoster(rng, westCount);
+  const west = shuffleKinds(rng, half);
+  const east = shuffleKinds(rng, half.slice(0, count - westCount));
+  return [...west, ...east];
+}
+
+function shuffleKinds(rng: () => number, kinds: UnitKind[]): UnitKind[] {
+  const out = [...kinds];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [out[i], out[j]] = [out[j]!, out[i]!];
+  }
+  return out;
 }
 
 function buildRoster(rng: () => number, count: number): UnitKind[] {
