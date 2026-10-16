@@ -16,12 +16,12 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Add more fog in daytime
+The red HQ light needs to travel further, be more dispersed with a gentler fade
 
-Check for hot loops again, the last bunch of commits dropped performance. The AI is better so would make sense, but double check for optimizations, wasted cycles we could improve.
+Make new units drive off the road leading from HQ and not block the entrance
 
-Add about 100% more units to start.
+Fireflies need to move slightly faster and illuminate an area slightly less but the light radius travels further
 
-The red HQ light needs to light up the surroundings with a diffused light as if coming from a "light tower", so circling 2 red cones. Diffused. Right now it looks static.
+Fog should appear during daytime also in low lying areas
 
-Try for units not to get too close to each other since splash damage affects them. So in a big fight try for a bit more "gap". Do not break the overall AI though, looks good.
+Make the starting teams units more balanced
