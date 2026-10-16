@@ -38,9 +38,8 @@ export const terrainFragment = /* glsl */ `
   uniform vec3 fogColor;
   uniform float fogNear;
   uniform float fogFar;
-  uniform vec3 fireflyA;
-  uniform vec3 fireflyB;
-  uniform float fireflyGlow;
+  uniform vec3 fireflyPools[6];
+  uniform float fireflyGlows[6];
 
   varying vec2 vUv;
   varying vec3 vWorld;
@@ -110,15 +109,17 @@ export const terrainFragment = /* glsl */ `
       color = mix(color, vec3(1.0, 0.28, 0.18), (1.0 - smoothstep(0.0, 1.2, seaBand)) * 0.85);
     }
 
-    // Firefly ground pools: the terrain shader ignores scene lights, so the
-    // two roaming pool lights are mirrored here as additive glow (0 by day).
-    // Falloff 1/(1+(d/110)^2) — see fireflyPoolGlow in fireflies.ts. The
-    // tint burns hot on purpose: against the darkened moonlight the pools
-    // must read as real light on the dirt, not a faint wash.
-    vec3 poolTint = vec3(0.66, 0.88, 0.32);
-    float poolA = fireflyGlow / (1.0 + pow(length(vWorld - fireflyA) / 110.0, 2.0));
-    float poolB = fireflyGlow / (1.0 + pow(length(vWorld - fireflyB) / 110.0, 2.0));
-    color += poolTint * (poolA + poolB);
+    // Firefly ground pools: the terrain shader ignores scene lights, so
+    // the roaming pool lights are mirrored here as additive glow (0 by
+    // day). Falloff 1/(1+(d/38)^2) — see fireflyPoolGlow in fireflies.ts.
+    // Each pool is a small gentle halo around its own mote: soft tint,
+    // quick fade, so the swarm reads as scattered lamplight, not floods.
+    vec3 poolTint = vec3(0.30, 0.40, 0.14);
+    float pools = 0.0;
+    for (int i = 0; i < 6; i++) {
+      pools += fireflyGlows[i] / (1.0 + pow(length(vWorld - fireflyPools[i]) / 38.0, 2.0));
+    }
+    color += poolTint * pools;
 
     float dist = length(vWorld - cameraPosition);
     float fog = clamp((dist - fogNear) / (fogFar - fogNear), 0.0, 1.0);

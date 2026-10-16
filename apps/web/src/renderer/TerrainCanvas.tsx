@@ -108,7 +108,7 @@ import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
 import { applyDayNight } from "./night";
-import { FIREFLY_COUNT, FireflyFx, placeFireflies } from "./fireflies";
+import { FIREFLY_COUNT, FIREFLY_POOL_COUNT, FireflyFx, placeFireflies } from "./fireflies";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 const ORIGIN = new THREE.Vector3();
@@ -211,9 +211,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fogColor: { value: fogColor },
         fogNear: { value: fogNear },
         fogFar: { value: fogFar },
-        fireflyA: { value: new THREE.Vector3() },
-        fireflyB: { value: new THREE.Vector3() },
-        fireflyGlow: { value: 0 },
+        fireflyPools: { value: Array.from({ length: FIREFLY_POOL_COUNT }, () => new THREE.Vector3()) },
+        fireflyGlows: { value: new Array<number>(FIREFLY_POOL_COUNT).fill(0) },
       },
       vertexShader: terrainVertex,
       fragmentShader: terrainFragment,
@@ -1000,11 +999,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       fireflies.setNight(opt.nightMode);
       fireflies.update(t);
       // Mirror the roaming pools into the terrain shader (it ignores scene
-      // lights): positions track the PointLights, glow dies by day.
+      // lights): positions track the PointLights, each glow tracks its own
+      // mote's blink, everything dies by day.
       const pools = fireflies.poolLights();
-      (terrainMat.uniforms.fireflyA!.value as THREE.Vector3).copy(pools[0]?.position ?? ORIGIN);
-      (terrainMat.uniforms.fireflyB!.value as THREE.Vector3).copy(pools[1]?.position ?? ORIGIN);
-      terrainMat.uniforms.fireflyGlow!.value = opt.nightMode ? fireflies.glowLevel : 0;
+      const glows = fireflies.poolGlows();
+      const poolU = terrainMat.uniforms.fireflyPools!.value as THREE.Vector3[];
+      const glowU = terrainMat.uniforms.fireflyGlows!.value as number[];
+      for (let i = 0; i < poolU.length; i++) {
+        poolU[i]!.copy(pools[i]?.position ?? ORIGIN);
+        glowU[i] = opt.nightMode ? (glows[i] ?? 0) : 0;
+      }
       terrainMat.wireframe = opt.showWire;
       const mag = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearFilter;
       const min = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;

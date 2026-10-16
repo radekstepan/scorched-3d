@@ -2,9 +2,10 @@ import * as THREE from "three";
 
 /**
  * Night fireflies: a drifting point-cloud of blinking yellow-green motes
- * clustered around forest stands, plus two roaming PointLights at cluster
- * centroids so the glow actually pools on the ground instead of being pure
- * decoration. The whole group only renders in night mode.
+ * clustered around forest stands, plus a few roaming PointLights riding
+ * spread-out motes so each firefly gently pools a little light on the
+ * ground instead of being pure decoration. The whole group only renders
+ * in night mode.
  *
  * Placement is a pure function of (rng, tree XZ, groundY): seeded, so the
  * same map + seed always yields the same swarm.
@@ -18,18 +19,29 @@ export const FIREFLY_GLOW = 0xd4ff70;
 export const FIREFLY_SIZE = 7;
 /** Max horizontal scatter of a firefly from its anchor tree. */
 export const FIREFLY_TREE_SPREAD = 42;
+/**
+ * Min horizontal clearance from any tree trunk at placement. Round crowns
+ * reach ~18 units out, so 20 keeps anchors out of the wood (drift may
+ * still graze a canopy edge mid-orbit — a flyby, not a stuck mote).
+ */
+export const FIREFLY_TREE_CLEAR = 20;
+/** Rejection-sample attempts per mote before pushing out to the ring. */
+export const FIREFLY_PLACE_TRIES = 8;
 /** Height band above the ground the swarm occupies. */
 export const FIREFLY_MIN_LIFT = 3;
 export const FIREFLY_MAX_LIFT = 15;
 /** Drift orbit radius around each anchor. */
 export const FIREFLY_DRIFT_RADIUS = 9;
 /** Ground-pool falloff radius (world units, mirrored in the terrain shader). */
-export const FIREFLY_POOL_RADIUS = 110;
-/** Ground-pool lights: muzzle-kick order so the swarm visibly pools light. */
-export const FIREFLY_POOL_COUNT = 2;
-export const FIREFLY_POOL_PEAK = 2600;
-export const FIREFLY_POOL_DISTANCE = 420;
-export const FIREFLY_POOL_DECAY = 1.8;
+export const FIREFLY_POOL_RADIUS = 38;
+/**
+ * Ground-pool lights: one per spread-out mote, lamplight order — a gentle
+ * halo fading with inverse-square decay, never a floodlight.
+ */
+export const FIREFLY_POOL_COUNT = 6;
+export const FIREFLY_POOL_PEAK = 320;
+export const FIREFLY_POOL_DISTANCE = 150;
+export const FIREFLY_POOL_DECAY = 2;
 
 export interface FireflyAnchor {
   x: number;
@@ -45,10 +57,38 @@ export interface FireflyAnchor {
   radius: number;
 }
 
+/** True when (x, z) clears every trunk by `FIREFLY_TREE_CLEAR`. */
+function clearOfTrees(x: number, z: number, trees: readonly { x: number; z: number }[]): boolean {
+  const clear2 = FIREFLY_TREE_CLEAR * FIREFLY_TREE_CLEAR;
+  for (const t of trees) {
+    const dx = x - t.x;
+    const dz = z - t.z;
+    if (dx * dx + dz * dz < clear2) return false;
+  }
+  return true;
+}
+
+/** Nearest trunk to (x, z) — the push-out source in dense stands. */
+function nearestTree(x: number, z: number, trees: readonly { x: number; z: number }[]): { x: number; z: number } {
+  let best = trees[0]!;
+  let best2 = Infinity;
+  for (const t of trees) {
+    const dx = x - t.x;
+    const dz = z - t.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < best2) {
+      best2 = d2;
+      best = t;
+    }
+  }
+  return best;
+}
+
 /**
  * Scatter `count` fireflies near random trees (strategic: forests read as
- * the glowing patches). With no trees on the map, fall back to a loose
- * ring around the map center so night still gets its motes.
+ * the glowing patches), keeping every anchor clear of the trunks so no
+ * mote orbits forever inside a crown. With no trees on the map, fall back
+ * to a loose ring around the map center so night still gets its motes.
  */
 export function placeFireflies(
   rng: () => number,
@@ -62,10 +102,37 @@ export function placeFireflies(
     let z: number;
     if (trees.length > 0) {
       const t = trees[Math.floor(rng() * trees.length)]!;
-      const a = rng() * Math.PI * 2;
-      const r = Math.sqrt(rng()) * FIREFLY_TREE_SPREAD;
-      x = t.x + Math.cos(a) * r;
-      z = t.z + Math.sin(a) * r;
+      let px = t.x;
+      let pz = t.z;
+      let cleared = false;
+      for (let attempt = 0; attempt < FIREFLY_PLACE_TRIES; attempt++) {
+        const a = rng() * Math.PI * 2;
+        const r = Math.sqrt(rng()) * FIREFLY_TREE_SPREAD;
+        px = t.x + Math.cos(a) * r;
+        pz = t.z + Math.sin(a) * r;
+        if (clearOfTrees(px, pz, trees)) {
+          cleared = true;
+          break;
+        }
+      }
+      if (!cleared) {
+        // Dense stand with no clear gap: push out from the nearest trunk
+        // to the clearance ring instead of inside the wood.
+        const n = nearestTree(px, pz, trees);
+        const dx = px - n.x;
+        const dz = pz - n.z;
+        const d = Math.hypot(dx, dz);
+        if (d < FIREFLY_TREE_CLEAR) {
+          if (d > 1e-6) {
+            px = n.x + (dx / d) * FIREFLY_TREE_CLEAR;
+            pz = n.z + (dz / d) * FIREFLY_TREE_CLEAR;
+          } else {
+            px = n.x + FIREFLY_TREE_CLEAR;
+          }
+        }
+      }
+      x = px;
+      z = pz;
     } else {
       const a = rng() * Math.PI * 2;
       const r = 120 + rng() * 420;
@@ -96,6 +163,15 @@ export function fireflyBlink(phase: number, rate: number, t: number): number {
 }
 
 /**
+ * Per-mote glow 0..1 at time `t`: the blink curve plus a faint ember floor
+ * so traveling motes stay traceable between flashes. Shared by the sprite
+ * colors and the ground pools, so each pool pulses with its own firefly.
+ */
+export function fireflyGlow(phase: number, rate: number, t: number): number {
+  return 0.08 + 0.92 * fireflyBlink(phase, rate, t);
+}
+
+/**
  * Ground-pool falloff at distance `dist` (1 at the pool, 0.5 at
  * FIREFLY_POOL_RADIUS, → 0 far away). JS mirror of the terrain-shader term
  * — the custom terrain shader ignores scene lights, so the pools are also
@@ -122,6 +198,7 @@ export class FireflyFx {
   private readonly positions: THREE.BufferAttribute;
   private readonly colors: THREE.BufferAttribute;
   private readonly pools: THREE.PointLight[] = [];
+  private readonly poolGlow: number[] = new Array<number>(FIREFLY_POOL_COUNT).fill(0);
   private readonly anchors: FireflyAnchor[];
   private readonly base = new THREE.Color(FIREFLY_GLOW);
   private readonly groundY: (x: number, z: number) => number;
@@ -156,8 +233,8 @@ export class FireflyFx {
     this.points.frustumCulled = false;
     this.group.add(this.points);
 
-    // Ground pools ride the first anchors of each half of the swarm, so
-    // the light pools sit inside actual mote clusters, not dead center.
+    // Ground pools ride strided anchors across the swarm, so the light
+    // pools sit inside actual mote clusters, not dead center.
     for (let i = 0; i < FIREFLY_POOL_COUNT; i++) {
       const light = new THREE.PointLight(
         FIREFLY_GLOW,
@@ -191,6 +268,14 @@ export class FireflyFx {
     return this.pools;
   }
 
+  /**
+   * Per-pool glow 0..1 from the last update — each pool's own mote blink,
+   * mirrored into the terrain shader (the canvas gates all pools by night).
+   */
+  poolGlows(): readonly number[] {
+    return this.poolGlow;
+  }
+
   /** Swarm mean glow 0..1 from the last update (0 while hidden). */
   get glowLevel(): number {
     return this.group.visible ? this.meanGlow : 0;
@@ -214,8 +299,7 @@ export class FireflyFx {
       pos[i * 3] = a.x + d.x;
       pos[i * 3 + 1] = a.y + d.y;
       pos[i * 3 + 2] = a.z + d.z;
-      // A faint ember floor keeps traveling motes traceable between flashes.
-      const glow = 0.08 + 0.92 * fireflyBlink(a.phase, a.rate, t);
+      const glow = fireflyGlow(a.phase, a.rate, t);
       glowSum += glow;
       this.scratch.copy(this.base).multiplyScalar(glow);
       col[i * 3] = this.scratch.r;
@@ -224,17 +308,21 @@ export class FireflyFx {
     }
     this.positions.needsUpdate = true;
     this.colors.needsUpdate = true;
-    // Pools breathe with the swarm's mean glow and wander with their mote.
     const mean = this.anchors.length > 0 ? glowSum / this.anchors.length : 0;
     this.meanGlow = mean;
+    // Each pool wanders with its own mote and breathes with that mote's
+    // blink, so the ground light visibly comes from the fireflies.
     for (let i = 0; i < this.pools.length; i++) {
       const pool = this.pools[i]!;
       const anchor = this.anchors[Math.floor((this.anchors.length * i) / this.pools.length)];
       if (anchor) {
         const d = fireflyDrift(anchor.radius, anchor.phase, t);
         pool.position.set(anchor.x + d.x, anchor.y + d.y, anchor.z + d.z);
+        this.poolGlow[i] = fireflyGlow(anchor.phase, anchor.rate, t);
+      } else {
+        this.poolGlow[i] = 0;
       }
-      pool.intensity = FIREFLY_POOL_PEAK * (0.35 + 0.65 * mean);
+      pool.intensity = FIREFLY_POOL_PEAK * (this.poolGlow[i] ?? 0);
     }
   }
 
