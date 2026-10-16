@@ -10,6 +10,7 @@ import {
   WATER_SWELL_LAYERS,
   waterAmpMod,
   waterCaustic,
+  waterCausticMask,
   waterFoamBand,
   waterFoamNoise,
   waterFoamPatch,
@@ -311,6 +312,44 @@ describe("gated calm water", () => {
       const h = waterSurfaceHeight(s * 37.7 - 900, s * 21.3 + 140, s * 0.31);
       expect(Math.abs(h)).toBeLessThanOrEqual(2.1);
     }
+  });
+
+  it("caustic light fades in below the waterline (no shoreline seam)", () => {
+    // Regression: the underwater caustics used to switch on at full
+    // strength exactly at the waterline — (1 - wet) is 1.0 at depth 0 —
+    // drawing a hard bright line along the shore with the last underwater
+    // tile reading lighter than the rest. The mask must be 0 at the
+    // waterline and ramp up over the first few depth units instead.
+    expect(waterCausticMask(0)).toBe(0);
+    // Continuous across the line: no step between the surface and just
+    // below it (the old mask jumped 0 -> ~1.0 over the same span).
+    expect(waterCausticMask(0.05)).toBeLessThan(0.01);
+    expect(waterCausticMask(1)).toBeLessThan(0.1);
+    // Full strength a few units down, then decaying with the wet tint.
+    expect(waterCausticMask(6)).toBeCloseTo(0.85, 10);
+    expect(waterCausticMask(6)).toBeGreaterThan(waterCausticMask(3));
+    expect(waterCausticMask(20)).toBeCloseTo(0.5, 10);
+    expect(waterCausticMask(6)).toBeGreaterThan(waterCausticMask(20));
+    expect(waterCausticMask(200)).toBeCloseTo(0.18, 10);
+    expect(waterCausticMask(20)).toBeGreaterThan(waterCausticMask(200));
+    // Bounded and non-negative everywhere, including above the surface.
+    for (const d of [-4, 0, 0.5, 3, 6, 12, 33, 90, 400]) {
+      const m = waterCausticMask(d);
+      expect(m).toBeGreaterThanOrEqual(0);
+      expect(m).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("terrain GLSL gates the caustic add with the depth ramp", () => {
+    // The wet tint factor the mask mirrors.
+    expect(terrainFragment).toContain("float wet = clamp(depth * 0.025, 0.0, 0.82);");
+    // The caustic add must carry the waterline ramp with the mirrored width.
+    const addLine =
+      terrainFragment.split("\n").find((l) => l.includes("color += caustic")) ?? "";
+    expect(addLine).toContain("(1.0 - wet)");
+    expect(addLine).toContain("smoothstep(0.0, 6.0, depth)");
+    // The old un-ramped add is gone.
+    expect(terrainFragment).not.toContain("caustic * (1.0 - wet) * vec3(");
   });
 
   it("fragment ripple, foam, and caustic terms run at half pace", () => {

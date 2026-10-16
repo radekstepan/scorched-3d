@@ -93,7 +93,12 @@ export const terrainFragment = /* glsl */ `
         + sin(dot(cp, vec2(-0.06, 0.08)) + time * 0.35);
       float caustic = pow(ca * 0.25 + 0.5, 4.0);
       caustic *= 0.5 + wNoise(vWorld.xz * 0.008 + vec2(time * 0.025, 3.3));
-      color += caustic * (1.0 - wet) * vec3(0.12, 0.28, 0.3);
+      // Depth ramp: caustic webs need a little water to focus in, so they
+      // fade in over the first few units below the surface. Without the
+      // ramp (1.0 - wet) is 1.0 right at the waterline and the webs switch
+      // on at full strength there — a hard bright seam along the shore
+      // with the last underwater tile reading lighter than the rest.
+      color += caustic * (1.0 - wet) * smoothstep(0.0, 6.0, depth) * vec3(0.12, 0.28, 0.3);
     }
 
     if (showContours > 0.5) {
@@ -363,6 +368,20 @@ export function waterFoamNoise(x: number, z: number, time: number): number {
   const f2 = Math.sin(fx * -0.21 + fz * 0.28 - time * 0.8 + f1 * 1.1);
   const v = f1 * 0.55 + f2 * 0.35 + (waterNoise(fx * 0.02 + time * 0.05, fz * 0.02) - 0.5) * 0.5;
   return Math.max(-1, Math.min(1, v));
+}
+
+/**
+ * JS mirror of the underwater-caustic depth mask in the terrain shader:
+ * `(1 - wet) * smoothstep(0, 6, depth)` with `wet` the depth tint factor.
+ * Zero exactly at the waterline (no brightness step against the dry side),
+ * full strength a few units down, then decaying with the wet tint — so the
+ * light webs fade in below the surface instead of seaming the shoreline.
+ */
+export function waterCausticMask(depth: number): number {
+  const wet = Math.min(0.82, Math.max(0, depth * 0.025));
+  const t = Math.min(1, Math.max(0, depth / 6.0));
+  const ramp = t * t * (3 - 2 * t);
+  return (1 - wet) * ramp;
 }
 
 /** JS mirror of the underwater caustic webs, in [0, 1.5]. */
