@@ -3,6 +3,7 @@ import * as THREE from "three";
 import {
   IMPACT_DURATION,
   IMPACT_MAX_TILT,
+  impactTiltEnvelope,
   mulberry32,
   type UnitKind,
 } from "@scorched-3d/core";
@@ -176,10 +177,12 @@ describe("idle engine tremble", () => {
     const shaped = { ...idleTremble(3 / 60, 0) };
     fx.update(1 / 60);
     // Tilt stacks exactly: the rock rides on top of the live sway
-    // (combat only ever un-applies its own tilt).
+    // (combat only ever un-applies its own tilt). Tilt reads the damped
+    // back-and-forward envelope while position reads the linear return.
     const k = 1 - 1 / 60 / IMPACT_DURATION;
-    expect(body.rotation.x).toBeCloseTo(kick.pitch * k + shaped.pitch, 12);
-    expect(body.rotation.z).toBeCloseTo(kick.roll * k + shaped.roll, 12);
+    const tk = impactTiltEnvelope(1 / 60, IMPACT_DURATION);
+    expect(body.rotation.x).toBeCloseTo(kick.pitch * tk + shaped.pitch, 12);
+    expect(body.rotation.z).toBeCloseTo(kick.roll * tk + shaped.roll, 12);
     // Position rides the nudge base exactly: the rock displaces, the sway
     // never touches X/Z.
     expect(body.position.x).toBeCloseTo(mover.x + kick.shoveX * k, 12);

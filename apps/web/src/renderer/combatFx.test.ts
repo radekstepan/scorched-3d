@@ -638,7 +638,7 @@ describe("CombatFx turret recoil", () => {
     // The turret yaw never moves under either system (rock tilts the hull,
     // recoil slides the turret).
     expect(turret.rotation.y).toBe(0);
-    // Long after both envelopes (1.1 s rock, 0.25 s turret) everything is
+    // Long after both envelopes (0.45 s rock, 0.25 s turret) everything is
     // bit-exact: hull on its seat, turret at rest.
     for (let n = 0; n < 120; n++) fx.update(1 / 60);
     expect(body.position.equals(basePos)).toBe(true);

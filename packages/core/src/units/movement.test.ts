@@ -32,7 +32,12 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import { addScorchMark, createDamageField, type DamageField } from "./destruction.js";
-import { IMPACT_MAX_SHOVE, impactKick, STUN_MAX_DURATION } from "./impact.js";
+import {
+  IMPACT_MAX_SHOVE,
+  impactKick,
+  STUN_MAX_DURATION,
+  STUN_PER_DAMAGE,
+} from "./impact.js";
 import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
 import { CRUSH_DRAG, TREE_DRAG, featureDrag, trunkBlockedAt } from "./terrain.js";
@@ -194,9 +199,9 @@ describe("hit-stun hesitation", () => {
     // A miss returns the move untouched (no stun key appears).
     expect(stunMover(mover, 0)).toEqual(mover);
     expect(stunMover(mover, -0.2)).toEqual(mover);
-    // A flash point-blank chip hesitates ~0.3 s; a hammer point-blank hit
-    // lands the max beat.
-    expect(stunMover(mover, 0.06).stun).toBeCloseTo(0.3, 12);
+    // A flash point-blank chip hesitates a snappy mid-band beat; a hammer
+    // point-blank hit lands the max beat.
+    expect(stunMover(mover, 0.06).stun).toBeCloseTo(0.06 * STUN_PER_DAMAGE, 12);
     expect(stunMover(mover, 0.16).stun).toBe(STUN_MAX_DURATION);
   });
 
@@ -261,7 +266,7 @@ describe("hit-stun hesitation", () => {
     const kinds = ["flash", "flash"] as const;
     const routes: RoutePoint[][] = [flatRoute(), flatRoute(600)];
     const movers: Mover[] = [
-      { x: 0, z: 0, hull: 0, leg: 1, stun: 0.8 },
+      { x: 0, z: 0, hull: 0, leg: 1, stun: 0.4 },
       { x: 0, z: 20, hull: 0, leg: 1 },
     ];
     const next = advanceMovers([...kinds], movers, routes, 0.05);
@@ -269,7 +274,7 @@ describe("hit-stun hesitation", () => {
     const gap = Math.hypot(next[0]!.x - next[1]!.x, next[0]!.z - next[1]!.z);
     expect(gap).toBeGreaterThan(20);
     // And the stun clock still ticked down through the shove.
-    expect(next[0]!.stun).toBeCloseTo(0.75, 12);
+    expect(next[0]!.stun).toBeCloseTo(0.35, 12);
   });
 });
 
@@ -304,12 +309,13 @@ describe("hit recoil", () => {
     const route = flatRoute();
     let mover = stunMover({ x: 0, z: 0, hull: 0, leg: 1 }, 0.16, { x: 0, z: 30 });
     const total = mover.recoil!.z;
-    mover = advanceMover("flash", mover, route, 0.4);
-    expect(mover.stun).toBeCloseTo(0.4, 12);
+    const half = STUN_MAX_DURATION / 2;
+    mover = advanceMover("flash", mover, route, half);
+    expect(mover.stun).toBeCloseTo(half, 12);
     expect(mover.x).toBeCloseTo(0, 12);
     expect(mover.z).toBeCloseTo(total / 2, 12);
     expect(mover.recoil!.z).toBeCloseTo(total / 2, 12);
-    mover = advanceMover("flash", mover, route, 0.4);
+    mover = advanceMover("flash", mover, route, half);
     expect(mover.stun).toBeUndefined();
     expect(mover.recoil).toBeUndefined();
     expect(mover.z).toBeCloseTo(total, 12);

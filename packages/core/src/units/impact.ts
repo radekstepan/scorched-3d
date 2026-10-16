@@ -20,13 +20,16 @@
  * a blast on the right flank lifts the right side (positive roll), and the
  * shove always points away from the blast.
  *
- * The renderer owns the envelope (entries decay back to the seated pose
+ * The renderer owns the envelope (entries settle back to the seated pose
  * over `IMPACT_DURATION`, re-hits refresh and stack under the clamps), so
  * this module only shapes single kicks: no clocks, no rng, deterministic
- * given the same blast and hull pose. Hit-stun hesitation (the gameplay
- * beat under the visual jerk — a brief drive hold scaled by dealt damage)
- * is shaped here too (`stunDuration` / `accumulateStun` / `tickStun`); the
- * mover in `movement.ts` owns the countdown.
+ * given the same blast and hull pose. The tilt half of the envelope is
+ * shaped here too (`impactTiltEnvelope` — a quick rock back *and* forward,
+ * while the positional shove only slides out and returns). Hit-stun
+ * hesitation (the gameplay beat under the visual jerk — a brief drive hold
+ * scaled by dealt damage) is shaped here as well (`stunDuration` /
+ * `accumulateStun` / `tickStun`); the mover in `movement.ts` owns the
+ * countdown.
  */
 
 /** Shove per unit of dealt damage, in world units (hammer point-blank ≈ 3.5). */
@@ -44,11 +47,32 @@ export const IMPACT_MAX_SHOVE = 7;
 /** Hard cap on one stacked rock axis, radians (well under MAX_HULL_TILT). */
 export const IMPACT_MAX_TILT = 0.16;
 /**
- * Seconds for a kick to decay back to the seated pose. Slow enough to read
- * as suspension rocking (~a wobble), fast enough to settle before the next
+ * Seconds for a kick to settle back to the seated pose. Short and snappy:
+ * the tilt rocks back *and* forward (see `impactTiltEnvelope`) while the
+ * shove slides out and returns, everything landed well before the next
  * exchange. Re-hits refresh the envelope instead of stacking duration.
+ * Matches the stun cap so the gameplay beat and the visible rock end
+ * together on heavy hits.
  */
-export const IMPACT_DURATION = 1.1;
+export const IMPACT_DURATION = 0.45;
+
+/**
+ * Tilt envelope for a hit rock `age` seconds into a `dur`-second beat:
+ * full strength at the hit, then a quick damped swing back *and* forward —
+ * one overshoot past the seat (negative lobe ≈ ⅓ strength) before settling
+ * exactly to 0 at the beat end. Tilt only: the positional shove never uses
+ * this (a hull slides back and returns; it must not overshoot forward past
+ * its seat). Pure — the renderer re-reads it every tick, re-hits refresh
+ * `age` to 0. Bad durations and NaN ages read as spent (0).
+ */
+export function impactTiltEnvelope(age: number, dur: number): number {
+  if (!(dur > 0)) return 0;
+  if (Number.isNaN(age)) return 0;
+  if (age <= 0) return 1;
+  if (age >= dur) return 0;
+  const t = age / dur;
+  return (1 - t) * Math.cos(t * Math.PI * 1.5);
+}
 
 /**
  * Hit-stun (gameplay drive hesitation) pacing. The renderer-side rock above
@@ -56,15 +80,15 @@ export const IMPACT_DURATION = 1.1;
  * gameplay beat: a hit hull holds its drive briefly while the rock plays,
  * then resumes — no displacement, so separation/spacing/slope gating never
  * fight it. Seconds per unit of dealt damage: a hammer point-blank hit
- * (0.16) lands the max pause, a flash point-blank hit (0.06) lands ~0.3 s,
+ * (0.16) lands the max pause, a flash point-blank hit (0.06) lands ~0.18 s,
  * and fringe chips pin at the floor instead of vanishing. Pure shaping —
  * the mover owns the countdown, this module only sizes it.
  */
-export const STUN_PER_DAMAGE = 5;
+export const STUN_PER_DAMAGE = 3;
 /** Floor on one hit's drive hesitation, seconds (fringe chips still read). */
-export const STUN_MIN_DURATION = 0.25;
+export const STUN_MIN_DURATION = 0.15;
 /** Cap on one hit's drive hesitation, seconds (a volley never parks a hull). */
-export const STUN_MAX_DURATION = 0.8;
+export const STUN_MAX_DURATION = 0.45;
 
 /** Directional kick for one splash on one hull (hull-frame rock + shove). */
 export interface ImpactKick {

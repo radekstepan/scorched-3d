@@ -229,10 +229,10 @@ describe("TrackTrails", () => {
     const tracks = new TrackTrails(scene, { groundY: () => 100 });
     // Wreck hull 1 up front: a frozen hull stamps nothing, ever.
     movement.markDestroyed(1);
-    // Stun hull 0 for the max beat (0.8 s): the drive holds, and any
+    // Stun hull 0 for the max beat (0.45 s): the drive holds, and any
     // separation jostle is gated by mover state, not displacement.
     movement.stunUnit(0, 0.16);
-    for (let n = 0; n < 30; n++) step(movement, tracks);
+    for (let n = 0; n < 13; n++) step(movement, tracks);
     expect(movement.moverState(0)!.stun).toBeGreaterThan(0);
     expect(tracks.count).toBe(0);
     // The stun expires and the hull resumes its patrol: the trail starts.

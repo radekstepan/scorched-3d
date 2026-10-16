@@ -123,6 +123,37 @@ describe("CombatFx hit reaction", () => {
     fx.dispose();
   });
 
+  it("rocks the tilt back then forward while the shove only returns", () => {
+    const scene = new THREE.Scene();
+    const units = makeSolo();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    fx.update(1 / 60);
+    const body = units.children[0] as THREE.Group;
+    const baseX = body.position.x;
+    splash(fx, 30, 100, 0, "hammer"); // right-flank blast: shoveX < 0, roll > 0
+    const kick = fx.impactAt(0);
+    expect(kick.shoveX).toBeLessThan(0);
+    expect(kick.roll).toBeGreaterThan(0);
+    // Step through the beat: the roll must swing back *and* forward (sign
+    // reversal past the seat) while X never crosses the seat — the hull is
+    // pushed back and returns, it never overshoots forward.
+    let maxRoll = 0;
+    let minRoll = 0;
+    for (let n = 0; n < 60; n++) {
+      fx.update(1 / 60);
+      expect(body.position.x).toBeLessThanOrEqual(baseX + 1e-9);
+      maxRoll = Math.max(maxRoll, body.rotation.z);
+      minRoll = Math.min(minRoll, body.rotation.z);
+    }
+    expect(maxRoll).toBeGreaterThan(kick.roll * 0.5);
+    expect(minRoll).toBeLessThan(-kick.roll * 0.1);
+    // The short beat ends settled: no standing kick, seat restored exactly.
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    expect(body.position.x).toBe(baseX);
+    expect(body.rotation.z).toBeCloseTo(0, 12);
+    fx.dispose();
+  });
+
   it("settles rocked hulls exactly on clearTransients", () => {
     const scene = new THREE.Scene();
     const units = makeSolo();

@@ -7,6 +7,7 @@ import {
   pathWorldToCell,
   sampleHeightBilinear,
   seatHull,
+  STUN_MAX_DURATION,
   worldHeight,
   yawToTarget,
   type RoutePoint,
@@ -136,7 +137,7 @@ describe("UnitMovement", () => {
     const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
     // A hammer point-blank splash hesitates the drive for the max beat.
     movement.stunUnit(0, 0.16);
-    expect(movement.moverState(0)!.stun).toBeCloseTo(0.8, 9);
+    expect(movement.moverState(0)!.stun).toBeCloseTo(STUN_MAX_DURATION, 9);
     const held = movement.moverState(0)!;
     // One tick: the mover holds X/Z (the countdown, not the hull, moves).
     movement.update(1 / 60);
@@ -160,12 +161,12 @@ describe("UnitMovement", () => {
     // Hull 0 sits at (0, 0) yawed 0; a blast 30 ahead (+Z) recoils it back (−Z).
     movement.stunUnit(0, 0.16, 0, 30);
     const struck = movement.moverState(0)!;
-    expect(struck.stun).toBeCloseTo(0.8, 9);
+    expect(struck.stun).toBeCloseTo(STUN_MAX_DURATION, 9);
     expect(struck.recoil).toBeDefined();
     expect(struck.recoil!.z).toBeLessThan(0);
     // Mid-beat ticks slide the mover and the posed body away from the blast
-    // while the clock drains.
-    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    // while the clock drains (half the snappy beat, still recoiling).
+    for (let n = 0; n < 13; n++) movement.update(1 / 60);
     const sliding = movement.moverState(0)!;
     expect(sliding.stun).toBeGreaterThan(0);
     expect(sliding.stun).toBeLessThan(struck.stun!);

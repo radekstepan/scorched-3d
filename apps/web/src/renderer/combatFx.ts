@@ -28,6 +28,7 @@ import {
   huskSink,
   IMPACT_DURATION,
   impactKick,
+  impactTiltEnvelope,
   inRange,
   isDestroyed,
   isHuskGone,
@@ -213,9 +214,11 @@ interface Explosion {
  * `impactKick`). Position is absolute from the seated `base` (shifted by
  * patrol motion like recoil anchors, so the kick restore never snaps a
  * driving unit backward); tilt is relative, applied on top of whatever
- * grade pose movement just seated. The envelope decays linearly to zero
- * over `dur` and re-hits refresh it — sustained fire keeps the hull
- * rocking instead of restarting it. Wrecks never hold entries (cleared on
+ * grade pose movement just seated. Position decays linearly to zero over
+ * `dur` while tilt rocks back *and* forward through the shared beat (core
+ * `impactTiltEnvelope` — one damped overshoot past the seat), and re-hits
+ * refresh it — sustained fire keeps the hull rocking instead of restarting
+ * it. Wrecks never hold entries (cleared on
  * the kill), and blasts never displace movers: this kick is renderer-side
  * only, restored exactly on expiry/clear, so drive/pathing/separation never
  * see it. The matching gameplay beat is drive hesitation (see
@@ -3015,15 +3018,18 @@ export class CombatFx {
    * Advance every hull nudge one step: recoil kicks and hit-reaction rocks
    * share one entry map, so a hull is only ever posed from a single seated
    * base (no fighting between systems) and every entry restores exactly on
-   * expiry. Position rides the base absolutely; tilt applies relatively on
-   * top of the grade pose movement just seated (un-applying last tick first
-   * keeps headless restores exact and live wobble bounded). The turret-local
-   * recoil rides the same entry on its own shorter clock: the turret slides
-   * rearward along the live barrel line (re-read from the turret yaw every
-   * tick, so traverse during the kick tracks the gun) while aim yaw, hull
-   * rock, and idle breathing compose untouched — yaw lives on rotation,
-   * recoil on position, tremble on the hull. The entry drops only once both
-   * envelopes have restored (hull to its base, turret X/Z to zero).
+   * expiry. Position rides the base absolutely with a linear return; tilt
+   * applies relatively on top of the grade pose movement just seated
+   * (un-applying last tick first keeps headless restores exact and live
+   * wobble bounded) through the damped back-and-forward rock (core
+   * `impactTiltEnvelope`), so the hull is shoved back once but its tilt
+   * swings past the seat before settling. The turret-local recoil rides the
+   * same entry on its own shorter clock: the turret slides rearward along
+   * the live barrel line (re-read from the turret yaw every tick, so
+   * traverse during the kick tracks the gun) while aim yaw, hull rock, and
+   * idle breathing compose untouched — yaw lives on rotation, recoil on
+   * position, tremble on the hull. The entry drops only once both envelopes
+   * have restored (hull to its base, turret X/Z to zero).
    */
   private advanceNudges(dt: number): void {
     for (const [index, nudge] of this.nudges) {
@@ -3056,10 +3062,13 @@ export class CombatFx {
         hullDone = true;
       } else {
         child.position.set(nudge.base.x + nudge.ox * k, nudge.base.y, nudge.base.z + nudge.oz * k);
-        child.rotation.x += nudge.pitch * k;
-        child.rotation.z += nudge.roll * k;
-        nudge.appliedPitch = nudge.pitch * k;
-        nudge.appliedRoll = nudge.roll * k;
+        // Tilt rocks back *and* forward past the seat while the shove only
+        // returns (pure recoil kicks carry zero tilt, so they pose unchanged).
+        const tk = impactTiltEnvelope(nudge.age, nudge.dur);
+        child.rotation.x += nudge.pitch * tk;
+        child.rotation.z += nudge.roll * tk;
+        nudge.appliedPitch = nudge.pitch * tk;
+        nudge.appliedRoll = nudge.roll * tk;
       }
       let turretDone = true;
       const turret = getTurret(child);

@@ -9,6 +9,7 @@ import {
   IMPACT_SIDE_BIAS,
   IMPACT_TILT_PER_DAMAGE,
   impactKick,
+  impactTiltEnvelope,
   STUN_MAX_DURATION,
   STUN_MIN_DURATION,
   STUN_PER_DAMAGE,
@@ -133,9 +134,42 @@ describe("accumulateImpact", () => {
 });
 
 describe("impact pacing", () => {
-  it("settles in about a second (suspension rock, not a permanent lean)", () => {
-    expect(IMPACT_DURATION).toBeGreaterThanOrEqual(0.5);
-    expect(IMPACT_DURATION).toBeLessThanOrEqual(2);
+  it("settles in a snappy sub-second beat (rock, not a permanent lean)", () => {
+    expect(IMPACT_DURATION).toBeGreaterThanOrEqual(0.3);
+    expect(IMPACT_DURATION).toBeLessThanOrEqual(0.6);
+    // The gameplay beat and the visible rock end together on heavy hits.
+    expect(STUN_MAX_DURATION).toBe(IMPACT_DURATION);
+  });
+});
+
+describe("impactTiltEnvelope", () => {
+  it("opens full, swings back and forward, and lands exactly at 0", () => {
+    expect(impactTiltEnvelope(0, IMPACT_DURATION)).toBe(1);
+    expect(impactTiltEnvelope(IMPACT_DURATION, IMPACT_DURATION)).toBe(0);
+    expect(impactTiltEnvelope(IMPACT_DURATION + 1, IMPACT_DURATION)).toBe(0);
+    // Early beat still leans back with the kick...
+    expect(impactTiltEnvelope(IMPACT_DURATION * 0.1, IMPACT_DURATION)).toBeGreaterThan(0.5);
+    // ...then crosses the seat into a forward overshoot ≈ ⅓ strength...
+    let min = 0;
+    for (let i = 1; i < 100; i++) {
+      min = Math.min(min, impactTiltEnvelope((IMPACT_DURATION * i) / 100, IMPACT_DURATION));
+    }
+    expect(min).toBeLessThan(-0.1);
+    expect(min).toBeGreaterThan(-0.4);
+    // ...and never exceeds full strength anywhere in the beat.
+    for (let i = 0; i <= 100; i++) {
+      const e = impactTiltEnvelope((IMPACT_DURATION * i) / 100, IMPACT_DURATION);
+      expect(Math.abs(e)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("reads bad clocks as settled, deterministically", () => {
+    expect(impactTiltEnvelope(0.1, 0)).toBe(0);
+    expect(impactTiltEnvelope(0.1, -1)).toBe(0);
+    expect(impactTiltEnvelope(Number.NaN, IMPACT_DURATION)).toBe(0);
+    expect(impactTiltEnvelope(-0.1, IMPACT_DURATION)).toBe(1);
+    const run = (): number => impactTiltEnvelope(0.2, IMPACT_DURATION);
+    expect(run()).toBe(run());
   });
 });
 
