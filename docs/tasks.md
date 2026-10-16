@@ -16,16 +16,12 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Units on larger maps are genuinely lost. If a team discovers enemy, the other units know their last location. Look at how the AI is implemented in the nanolathe repo to fix this/improve this.
+Add more fog in daytime
 
-The fog should be slowly moving.
+Check for hot loops again, the last bunch of commits dropped performance. The AI is better so would make sense, but double check for optimizations, wasted cycles we could improve.
 
-The fireflies look "flashing" at the moment. It should be gentle pulsating glow and all of them should reflect against the terrain and trees, not just those close to the trees.
+Add about 100% more units to start.
 
-The closeup zoom level is a bit too close. Back off a bit from max zoom. Right now what happens is we get too close and the view angle turns completely vertical. Stop that, keep the angle.
+The red HQ light needs to light up the surroundings with a diffused light as if coming from a "light tower", so circling 2 red cones. Diffused. Right now it looks static.
 
-The red HQ light should not be showing the 2 red "cones", the cones is just a faded glow of light that reflects against the surrounding surfaces, is diffused and travels firther without a harsh border.
-
-Make the projectiles reflecting against the surroundings a bit more subtle on night map and more sublte on day map.
-
-On Dust Plains we fixed the HQ position such that it's at a high enough elevation. See if we can place the HQs further inland to not have to build a little "hill" for it.
+Try for units not to get too close to each other since splash damage affects them. So in a big fight try for a bit more "gap". Do not break the overall AI though, looks good.
