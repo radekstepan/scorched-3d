@@ -496,14 +496,11 @@ describe("UnitMovement team advance", () => {
   it("advances toward the squad's last-known contact after notice is lost", () => {
     const { movement } = makeAdvanceMovement();
     movement.update(1 / 60);
-    // B (200 from C) notices and commits; A (1200 from C, past the hunt
-    // engage gate) sees nothing yet and its side has no contact either.
+    // B (200 from C) notices and commits, and B's sighting feeds the
+    // side's shared intel the same sweep — so A (1200 from C, past its own
+    // notice) advances on a position memory (attacker -1, never a grudge
+    // against a mate) instead of guarding its loop.
     expect(movement.moverState(1)?.threat?.attacker).toBe(2);
-    expect(movement.hasThreat(0)).toBe(false);
-    movement.update(1 / 60);
-    // B's live pursuit is the squad focus, so the side knows the enemy
-    // direction: A advances on a position memory (attacker -1, never a
-    // grudge against a mate) instead of guarding its loop.
     const issued = movement.moverState(0)!;
     expect(issued.threat?.attacker).toBe(-1);
     expect(movement.hasThreat(0)).toBe(true);
@@ -654,10 +651,9 @@ describe("peewee scout", () => {
     movement.update(1 / 60);
     // The scout acquires what its heavier teammate cannot see…
     expect(movement.moverState(0)?.threat?.attacker).toBe(2);
-    expect(movement.hasThreat(1)).toBe(false);
-    movement.update(1 / 60);
-    // …and the sighting focuses the side: the tank advances on the sticky
-    // contact (a position, never a grudge) instead of guarding its loop.
+    // …and the sighting focuses the side the same sweep: the tank advances
+    // on the shared intel (a position, never a grudge) instead of guarding
+    // its loop.
     const issued = movement.moverState(1)!;
     expect(issued.threat?.attacker).toBe(-1);
     expect(movement.hasThreat(1)).toBe(true);
@@ -1230,6 +1226,170 @@ describe("UnitMovement active battlefield", () => {
     expect(movement.moverState(0)!.x).toBeGreaterThan(50);
     expect(movement.hasThreat(1)).toBe(false);
     movement.dispose();
+  });
+});
+
+describe("UnitMovement shared intel", () => {
+  /** Idle hulls with custom spawns, sides, and kinds (anchors at spawns). */
+  function makeIntelMovement(
+    spawns: { x: number; z: number }[],
+    teams: number[],
+    kinds: UnitKind[],
+  ): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = spawns.map((_, i) => ({
+      kind: kinds[i] ?? "flash",
+      cellX: 10 + i,
+      cellZ: 10,
+      rotation: 0,
+      team: teams[i],
+    }));
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(pos.x, 100, pos.z);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("shares an ordered hull's sighting with the whole side", () => {
+    // A (team 0) drives a player order past the enemy C at 500; B (team 0)
+    // guards its loop 2000 west — far past every notice gate.
+    const { movement } = makeIntelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -2000, z: 0 },
+        { x: 500, z: 0 },
+      ],
+      [0, 0, 1],
+      ["flash", "flash", "flash"],
+    );
+    movement.orderUnit(0, { x: -500, z: -500 });
+    movement.update(1 / 60);
+    // Spotting is passive but pursuit is gated: the ordered hull reports
+    // without engaging, and the far mate advances on the shared sighting
+    // (never a grudge) instead of guarding its loop. Focus-only sharing
+    // would leave B patrolling — A never pursues, so no focus ever forms.
+    expect(movement.hasThreat(0)).toBe(false);
+    const issued = movement.moverState(1)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(issued.threat?.x).toBe(500);
+    for (let n = 0; n < 240; n++) movement.update(1 / 60);
+    expect(movement.moverState(1)!.x).toBeGreaterThan(issued.x);
+    movement.dispose();
+  });
+
+  it("shares an outnumbered spotter's sighting while it holds", () => {
+    // A (team 0) faces three fresh enemies at ~500 and holds for backup;
+    // B (team 0) guards its loop 2000 west with nothing near it.
+    const { movement } = makeIntelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -2000, z: 0 },
+        { x: 500, z: 0 },
+        { x: 530, z: 10 },
+        { x: 560, z: 20 },
+      ],
+      [0, 0, 1, 1, 1],
+      ["flash", "flash", "flash", "flash", "flash"],
+    );
+    movement.update(1 / 60);
+    // A sees the column but waits instead of charging alone — and its
+    // sighting still focuses the side: B advances on the nearest enemy
+    // (never a grudge) instead of guarding its loop.
+    expect(movement.hasThreat(0)).toBe(false);
+    const issued = movement.moverState(1)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(issued.threat?.x).toBe(500);
+    movement.dispose();
+  });
+
+  it("tracks each enemy separately: mates advance on their nearest", () => {
+    // Two bloodied enemies on opposite sides of the field: B (team 0)
+    // west takes fire from the western gun, D (team 0) east from the
+    // eastern one — both too far to pursue, both alerting the side.
+    const { movement } = makeIntelMovement(
+      [
+        { x: -2800, z: 0 },
+        { x: 1900, z: 0 },
+        { x: 500, z: 0 },
+        { x: -1500, z: 0 },
+      ],
+      [0, 0, 1, 1],
+      ["flash", "flash", "flash", "flash"],
+    );
+    movement.threatenUnit(0, 3, -1500, 0);
+    movement.threatenUnit(1, 2, 500, 0);
+    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.update(1 / 60);
+    // One shared point would march both mates at the same spot; per-enemy
+    // memories split the response — each advances on its nearest.
+    expect(movement.moverState(0)?.threat).toMatchObject({ attacker: -1, x: -1500, z: 0 });
+    expect(movement.moverState(1)?.threat).toMatchObject({ attacker: -1, x: 500, z: 0 });
+    movement.dispose();
+  });
+
+  it("forgets a dead contact: the advance ends when the enemy dies", () => {
+    // A (team 0) at the origin advances on B's (team 0) sighting of C.
+    const { movement } = makeIntelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 1000, z: 0 },
+        { x: 1200, z: 0 },
+      ],
+      [0, 0, 1],
+      ["flash", "flash", "flash"],
+    );
+    movement.update(1 / 60);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(-1);
+    // C dies: the record drops in maintenance and A resumes its patrol
+    // instead of marching on a corpse (B's grudge clears the same sweep).
+    movement.markDestroyed(2);
+    movement.update(1 / 60);
+    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.hasThreat(1)).toBe(false);
+    movement.dispose();
+  });
+
+  it("drops a stale firing position a mate already covers", () => {
+    // V (team 0) takes fire attributed near M (team 0) while the live gun
+    // C stands 2000 east: M already covers the reported spot, C is gone.
+    const build = (): { movement: UnitMovement; units: THREE.Group } =>
+      makeIntelMovement(
+        [
+          { x: 0, z: 0 },
+          { x: 400, z: 0 },
+          { x: 2000, z: 0 },
+        ],
+        [0, 0, 1],
+        ["flash", "flash", "flash"],
+      );
+    const { movement: stale } = build();
+    stale.threatenUnit(0, 2, 410, 0);
+    stale.update(1 / 60);
+    // The victim's grudge dies on the drive (the live gun stands past the
+    // disengage bound) and the side forgets the covered spot — nobody
+    // marches on a position a mate already holds.
+    expect(stale.hasThreat(0)).toBe(false);
+    expect(stale.hasThreat(1)).toBe(false);
+    stale.dispose();
+    // The same alert at the gun's true position holds: the side marches.
+    const { movement: fresh } = build();
+    fresh.threatenUnit(0, 2, 2000, 0);
+    fresh.update(1 / 60);
+    expect(fresh.moverState(0)?.threat?.attacker).toBe(-1);
+    expect(fresh.moverState(1)?.threat?.attacker).toBe(-1);
+    expect(fresh.moverState(1)?.threat?.x).toBe(2000);
+    fresh.dispose();
   });
 });
 

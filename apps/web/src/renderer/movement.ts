@@ -3,13 +3,17 @@ import {
   acquireStrategicHunt,
   advanceMemory,
   advanceMovers,
+  canSpot,
   canSpotPoint,
   clearThreat,
   eyeHeight,
   findWorldPath,
   firingSidestep,
   formationTargets,
+  fortIntelKey,
+  fortIntelTeam,
   groupSpeedCap,
+  hasIntel,
   hasOrder,
   hasThreat,
   HULL_TILT_SLEW,
@@ -17,12 +21,14 @@ import {
   initMover,
   isScoutKind,
   muzzleHeight,
+  nearestIntel,
   notifyThreat,
   ORBIT_STRAFE_COOLDOWN,
   orderMover,
   orbitStrafe,
   outnumbered,
   pursueStandOff,
+  rememberSighting,
   seekEngage,
   seekStructure,
   shouldHold,
@@ -30,13 +36,14 @@ import {
   stepBlocked,
   slewTilt,
   snappedFormationTargets,
-  squadFocus,
   STRUCTURE_SIGHT_LIFT,
   stunMover,
+  sweepIntel,
   TEAM_ADVANCE_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
   type CrushContext,
   type HullSeat,
+  type IntelBoard,
   type Mover,
   type PlacedUnit,
   type RoutePoint,
@@ -110,14 +117,18 @@ export class UnitMovement {
    */
   private destroyed: boolean[] = [];
   /**
-   * Sticky per-team contact: the last-known live enemy position each side
-   * has found (refreshed from the squad focus while any teammate pursues a
-   * live enemy, kept after contact is lost). A side that has found the
-   * enemy keeps pushing that way — idle hulls advance toward the contact
-   * instead of guarding their patrol loop (see `sweepHunt`). Null until a
-   * side first engages, so unblooded sides patrol exactly as before.
+   * Shared per-team enemy intel (see core `intel.ts`): each side's
+   * per-enemy last-known positions, fed every sweep by every live hull's
+   * eyes (ordered, holding, and outnumbered hulls report without
+   * engaging), by damage alerts (`threatenUnit`), and by HQ sightings —
+   * and pruned the same sweep (stale, dead, and confirmed-gone records
+   * drop). A side that has found the enemy keeps pushing that way — idle
+   * hulls advance toward their nearest remembered contact instead of
+   * guarding their patrol loop (see `sweepHunt`). Empty until a side
+   * first spots, bleeds, or is hit, so unblooded sides patrol exactly as
+   * before. Clocked by the deterministic `elapsed`, never the wall clock.
    */
-  private teamContact = new Map<number, { x: number; z: number }>();
+  private intel: IntelBoard = new Map();
   /**
    * Live enemy HQ positions per team (`{ x, z, team }`, wrecks excluded),
    * provided by the canvas from `HqFx.targets()`: the sweep spots forts
@@ -266,8 +277,10 @@ export class UnitMovement {
    * toward the firing position. Wrecks refuse the memory (they hold
    * forever), a hull never blames itself (own-blast self-splashes are
    * ignored), and same-team attackers never draw retaliation (friendly
-   * shells are honest splash, never a grudge). Idempotent per tick: re-hits
-   * refresh the memory, they never stack.
+   * shells are honest splash, never a grudge). Every genuine cross-team hit
+   * also writes the side's shared intel board (see `intel`), even when the
+   * victim refuses the memory under orders — the mates still reinforce the
+   * firing position. Idempotent per tick: re-hits refresh, they never stack.
    */
   threatenUnit(victim: number, attacker: number, ax: number, az: number, shell = false): void {
     const mover = this.movers[victim];
@@ -279,9 +292,10 @@ export class UnitMovement {
     // mate takes fire — even when the victim itself refuses the memory
     // (ordered/holding hulls never pursue, but their mates still reinforce).
     // Damage is ground truth (the shooter is always inside weapon range), so
-    // no engage gate applies; the sweep turns the contact into advances.
-    if (victimTeam !== undefined && Number.isFinite(ax) && Number.isFinite(az)) {
-      this.teamContact.set(victimTeam, { x: ax, z: az });
+    // no engage gate applies; the sweep turns the record into advances.
+    // Unknown shooters share nothing (there is no subject to remember).
+    if (victimTeam !== undefined && Number.isInteger(attacker) && attacker >= 0) {
+      rememberSighting(this.intel, victimTeam, attacker, ax, az, this.elapsed);
     }
     const anchor = this.routes[victim]?.[0] ?? null;
     this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor, shell);
@@ -374,7 +388,7 @@ export class UnitMovement {
     * memory checks for a *winnable* fight (core `acquireStrategicHunt`) — an
     * outnumbered hull patrols on and waits for backup instead of charging
     * alone into a group, while a peewee scout probes anyway on wider scout
-    * gates (its live memory focuses the squad and feeds the sticky contact
+    * gates (its live memory focuses the squad and feeds the shared intel
     * below, so the rest of the side engages what the scout found) — and
     * quarries are chosen, not just nearest: hulls
     * join their squad's focus and prefer wounded enemies (see `strategy.ts`).
@@ -389,29 +403,33 @@ export class UnitMovement {
     * In-progress pursuits that turn suicidal hold in place inside the drive
     * itself (tactics ride `advanceMovers`), so the sweep only acquires.
     *
-    * Team advance: the sweep first records each side's contact (its squad
-    * focus's live position — being shot counts as discovery, since the
-    * victim's retaliation memory points back at a live enemy, and any hit
-    * alerts the side directly in `threatenUnit` even when the victim
-    * itself refuses the memory under orders) and keeps it
-    * after contact is lost. A free hull whose side knows the enemy direction
-    * but sees nothing itself advances toward the contact (core
-    * `advanceMemory`: a -1 position memory on the wide team-advance
+    * Shared intel: the sweep first feeds each side's board from every live
+    * hull's eyes (spotting is passive — ordered, holding, threatened, and
+    * outnumbered hulls all report what they see through the same sight
+    * picture, scout-aware), on top of damage alerts (`threatenUnit` writes
+    * the firing position even when the victim refuses the memory under
+    * orders) and HQ sightings — then prunes it (stale, dead, and
+    * confirmed-gone records drop, see core `sweepIntel`), so a side
+    * remembers each enemy's last-known position while it is fresh and
+    * forgets it after. A free hull whose side knows the enemy direction
+    * but sees nothing itself advances toward its nearest remembered contact
+    * (core `advanceMemory`: a -1 position memory on the wide team-advance
     * leash, so a mid-map meeting or a deep HQ sighting marches instead of
     * dying on the hunt leash) instead of guarding its loop — while a side
-    * with no contact ever sends only its peewee scouts ranging toward the
+    * with no intel at all sends only its peewee scouts ranging toward the
     * enemy anchors (active recon) and holds its heavies on their loops. Advances refuse exactly like hunts
-    * (ordered/holding hulls, no live enemy left anywhere, a contact past
-    * the leash — and an outnumbered hull waiting for backup, unless it is
-    * the side's peewee scout pushing ahead to keep eyes on the enemy), and
-    * a hull carrying an advance still upgrades to a live hunt the tick one
-    * appears.
+    * (ordered/holding hulls, nothing remembered — records of dead subjects
+    * drop in maintenance, so the war-over stand-down rides the same gate —
+    * a contact past the leash — and an outnumbered hull waiting for backup,
+    * unless it is the side's peewee scout pushing ahead to keep eyes on the
+    * enemy), and a hull carrying an advance still upgrades to a live hunt
+    * the tick one appears.
     *
     * Fort spotting: a hull inside its notice gate of a live enemy HQ shares
-    * the works team-wide (live grudges win — a side already fighting keeps
-    * its hull contact) and assaults the fort itself as a structure memory
-    * on the team-advance leash, so the side that finds the enemy HQ pushes
-    * it instead of standing around.
+    * the works team-wide (per-enemy records, so hull and fort contacts
+    * coexist and each hull advances on its nearest) and assaults the fort
+    * itself as a structure memory on the team-advance leash, so the side
+    * that finds the enemy HQ pushes it instead of standing around.
    */
   sweepHunt(): void {
     if (this.movers.length === 0) return;
@@ -431,53 +449,16 @@ export class UnitMovement {
     // `visibility.ts`). One snapshot per sweep (eye heights + the shared
     // per-tick stands), so every pair in the tick reads the same picture.
     const sight = this.sightFor(foes);
-    // Record what each side has found: the squad focus names the live enemy
-    // most teammates pursue, so its position is the enemy direction. Sticky
-    // — a side keeps pushing there after contact is lost. A hit already
-    // alerts the side directly (see `threatenUnit`), so this refreshes the
-    // contact from live pursuits on top of that.
-    const seen = new Set<number>();
-    const focused = new Set<number>();
-    for (let i = 0; i < this.movers.length; i++) {
-      const team = teams[i];
-      if (team === undefined || seen.has(team)) continue;
-      seen.add(team);
-      const focus = squadFocus(team, threats, teams, alive);
-      if (focus >= 0) {
-        const at = foes[focus];
-        if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) {
-          this.teamContact.set(team, { x: at.x, z: at.z });
-          focused.add(team);
-        }
-      }
-    }
-    // Fort spotting: a hull that *spots* a live enemy HQ (same sight gate
-    // as hulls — the bunker roof over the ridge line, through the wood)
-    // shares the works with its whole side (team-wide HQ-known) — scouts
-    // range far enough to be the usual spotters. Live grudges win: a side
-    // already focused on a hull keeps that contact instead of turning for
-    // the fort.
+    // Shared intel first: every live hull's eyes feed its side's board
+    // (hulls and forts, scout-aware — see `shareSightings`), on top of the
+    // damage alerts `threatenUnit` already wrote. Maintenance then prunes
+    // what the side should forget (stale, dead, confirmed-gone), so the
+    // per-hull loop below advances on fresh memories only.
     const hqs = this.hqProvider?.() ?? [];
-    if (hqs.length > 0) {
-      for (let i = 0; i < this.movers.length; i++) {
-        if (!alive[i] || this.destroyed[i]) continue;
-        const team = teams[i];
-        if (team === undefined || focused.has(team)) continue;
-        const at = foes[i];
-        if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) continue;
-        const notice = huntNoticeRadiusFor(this.kinds[i]);
-        for (const hq of hqs) {
-          if (hq.team === team) continue;
-          if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
-          const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
-          if (canSpotPoint(i, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) {
-            this.teamContact.set(team, { x: hq.x, z: hq.z });
-            focused.add(team);
-            break;
-          }
-        }
-      }
-    }
+    this.shareSightings(teams, foes, alive, sight, hqs);
+    sweepIntel(this.intel, this.elapsed, teams, foes, alive, (_team, key) =>
+      this.locateIntel(key, foes, alive, hqs),
+    );
     // One shared wood snapshot for the sweep's sidestep pass (same-tick
     // stands the sight picture reads — every holder judges the same wood).
     const stands = this.env.treeStands?.() ?? [];
@@ -522,6 +503,77 @@ export class UnitMovement {
       // whatever the acquisition above decided.
       this.movers[i] = this.maybeSidestep(next, i, teams, foes, alive, threats, stands, hp ?? undefined);
     }
+  }
+
+  /**
+   * Feed the shared intel board from every live hull's eyes: each hull
+   * reports the live enemies it *spots* through the sweep's sight picture
+   * (same gate as hunts — ridges hide, high ground extends, wood shrinks —
+   * scout-aware, so a peewee's sightings reach past tank notice) and the
+   * live enemy forts it spots (the bunker roof over the ridge line,
+   * through the wood — scouts range far enough to be the usual spotters).
+   * Spotting is passive: ordered, holding, threatened, and outnumbered
+   * hulls all report — eyes need no orders — while wrecks and unknown
+   * sides see nothing. Runs before maintenance and the per-hull loop, so a
+   * sighting focuses the side the same sweep it happens.
+   */
+  private shareSightings(
+    teams: readonly (number | undefined)[],
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+    sight: SightContext,
+    hqs: readonly { x: number; z: number; team: number }[],
+  ): void {
+    for (let i = 0; i < foes.length; i++) {
+      if (!alive[i] || this.destroyed[i]) continue;
+      const team = teams[i];
+      if (team === undefined) continue;
+      const me = foes[i];
+      if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) continue;
+      const notice = huntNoticeRadiusFor(this.kinds[i]);
+      for (let j = 0; j < foes.length; j++) {
+        if (j === i || !alive[j] || this.destroyed[j]) continue;
+        if (teams[j] === undefined || teams[j] === team) continue;
+        const foe = foes[j];
+        if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
+        if (!canSpot(i, j, foes, notice, sight, this.kinds)) continue;
+        rememberSighting(this.intel, team, j, foe.x, foe.z, this.elapsed);
+      }
+      for (const hq of hqs) {
+        if (hq.team === team) continue;
+        if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
+        const key = fortIntelKey(hq.team);
+        if (key === null) continue;
+        const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
+        if (!canSpotPoint(i, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) continue;
+        rememberSighting(this.intel, team, key, hq.x, hq.z, this.elapsed, true);
+      }
+    }
+  }
+
+  /**
+   * Live position of an intel subject for sweep maintenance (see core
+   * `sweepIntel`): a roster hull resolves to its pre-tick snapshot while
+   * it lives, a fort to its provider position while it stands — null
+   * (drop the record) for dead hulls, wrecked forts, and unknown keys.
+   */
+  private locateIntel(
+    key: number,
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+    hqs: readonly { x: number; z: number; team: number }[],
+  ): { x: number; z: number } | null {
+    const fortTeam = fortIntelTeam(key);
+    if (fortTeam !== null) {
+      const hq = hqs.find((fort) => fort.team === fortTeam);
+      if (!hq || !Number.isFinite(hq.x) || !Number.isFinite(hq.z)) return null;
+      return { x: hq.x, z: hq.z };
+    }
+    if (!Number.isInteger(key) || key < 0 || key >= foes.length) return null;
+    if (!alive[key] || this.destroyed[key]) return null;
+    const at = foes[key];
+    if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) return null;
+    return { x: at.x, z: at.z };
   }
 
   /**
@@ -634,10 +686,12 @@ export class UnitMovement {
   }
 
   /**
-   * Point a free hull at its side's last-known enemy position (see
-   * `teamContact`): the guard-to-attack fallback when the hunt sweep finds
+   * Point a free hull at its side's nearest remembered enemy contact (see
+   * `intel`): the guard-to-attack fallback when the hunt sweep finds
    * nothing. Refuses exactly like a hunt — ordered/holding hulls (player
-   * orders win), sides with no contact ever, no live enemy left anywhere,
+   * orders win), sides with nothing remembered (records of dead subjects
+   * drop in maintenance, so a wiped enemy ends the push without a war-over
+   * scan — and a live fort counts as a standing contact while it stands),
    * contacts past the team-advance leash of the patrol anchor, and
    * outnumbered hulls that should wait for backup instead of pushing alone
    * (peewee scouts excepted — they range ahead to keep the contact live).
@@ -660,33 +714,15 @@ export class UnitMovement {
     if (!alive[self] || this.destroyed[self]) return mover;
     const team = teams[self];
     if (team === undefined) return mover;
-    const contact = this.teamContact.get(team);
-    if (!contact) return mover;
+    const me = foes[self];
+    if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) return mover;
     // The whole side marches on the same wide leash — scouts no longer need
-    // a separate band now that advances range the full field.
+    // a separate band now that advances range the full field — and each
+    // hull marches on its *nearest* remembered contact, so split enemies
+    // split the response instead of collapsing it to one point.
     const leash = TEAM_ADVANCE_LEASH_RADIUS;
-    if (anchor && Math.hypot(contact.x - anchor.x, contact.z - anchor.z) > leash) return mover;
-    let enemyAlive = false;
-    for (let j = 0; j < foes.length; j++) {
-      if (j === self || !alive[j] || this.destroyed[j]) continue;
-      const side = teams[j];
-      if (side === undefined || side === team) continue;
-      const at = foes[j];
-      if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) continue;
-      enemyAlive = true;
-      break;
-    }
-    // A live enemy fort counts as a standing enemy — the war is not over
-    // while its works stands, so the side still marches on the spotted HQ.
-    if (!enemyAlive) {
-      for (const hq of this.hqProvider?.() ?? []) {
-        if (hq.team !== team && Number.isFinite(hq.x) && Number.isFinite(hq.z)) {
-          enemyAlive = true;
-          break;
-        }
-      }
-    }
-    if (!enemyAlive) return mover;
+    const contact = nearestIntel(this.intel, team, me.x, me.z, { anchor, leash });
+    if (!contact) return mover;
     // Scouts push ahead to keep eyes on the enemy even when the odds at
     // home look bad — ranging forward is their job, and their live memory
     // is what focuses the squad behind them. Heavier hulls wait for backup.
@@ -786,7 +822,7 @@ export class UnitMovement {
     if (!isScoutKind(this.kinds[self])) return null;
     const team = teams[self];
     if (team === undefined) return null;
-    if (this.teamContact.get(team)) return null;
+    if (hasIntel(this.intel, team)) return null;
     // Muster point of the enemy side: the centroid of live enemies' patrol
     // anchors (their staging area). Falls back to live enemy positions when
     // anchors are missing; without any enemy, there is nowhere to probe.
