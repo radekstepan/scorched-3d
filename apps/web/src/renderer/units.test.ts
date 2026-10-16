@@ -92,6 +92,20 @@ describe("buildUnits turrets", () => {
     expect(getTurret(body)!.rotation.y).toBeCloseTo(0.3);
   });
 
+  it("leaves turret pitch/roll to the weapon cycle and wreck slump", () => {
+    const group = buildUnits(fakeMap(), 1);
+    const body = group.children[0] as THREE.Group; // commander
+    const turret = getTurret(body)!;
+    turret.rotation.x = 0.5;
+    turret.rotation.z = 0.3;
+    setUnitAim(body, 1.2, 0.3);
+    expect(body.rotation.y).toBeCloseTo(1.2);
+    expect(turret.rotation.y).toBeCloseTo(0.3);
+    // Aim owns yaw only: a firing brace or slump on pitch/roll survives it.
+    expect(turret.rotation.x).toBe(0.5);
+    expect(turret.rotation.z).toBe(0.3);
+  });
+
   it("returns null turret for plain groups and survives re-snaps", () => {
     expect(getTurret(new THREE.Group())).toBeNull();
     const map = fakeMap();

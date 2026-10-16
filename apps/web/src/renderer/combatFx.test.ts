@@ -23,7 +23,9 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import {
+  BARREL_PUMP_KICK,
   CombatFx,
+  COMMANDER_BRACE_KICK,
   impactPoint,
   muzzlePoint,
   PEEWEE_BLAST_SCALE,
@@ -46,7 +48,7 @@ import {
   TURRET_RECOIL_KICK,
   wreckPopVelocity,
 } from "./combatFx";
-import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
+import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation, setUnitAim } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
 import { NIGHT_LIGHT_BOOST } from "./night";
 
@@ -703,6 +705,149 @@ describe("CombatFx turret recoil", () => {
     expect(turret.position.z).toBe(0);
     expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
     fx.dispose();
+  });
+});
+
+describe("CombatFx walker weapon cycle", () => {
+  /** Solo hull of `kind` that never fires organically; gun rigs get a barrel pivot at rest z. */
+  function makeSoloWalker(
+    kind: UnitKind,
+    withBarrel: boolean,
+  ): { group: THREE.Group; body: THREE.Group; turret: THREE.Group; barrel: THREE.Group | null } {
+    const group = new THREE.Group();
+    group.userData.units = [{ kind, cellX: 10, cellZ: 10, rotation: 0 }];
+    const body = new THREE.Group();
+    body.rotation.order = "YXZ";
+    body.position.set(0, 100, 0);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    let barrel: THREE.Group | null = null;
+    if (withBarrel) {
+      barrel = new THREE.Group();
+      barrel.name = "barrel";
+      barrel.position.set(0, 8, 2);
+      turret.add(barrel);
+    }
+    group.add(body);
+    return { group, body, turret, barrel };
+  }
+
+  /** Backdoor into the private fire kick (same white-box precedent as the turret-recoil block). */
+  function recoil(fx: CombatFx, index: number, body: THREE.Group): void {
+    (fx as unknown as { kickRecoil(index: number, body: THREE.Group, dir: THREE.Vector3): void }).kickRecoil(
+      index,
+      body,
+      new THREE.Vector3(0, 0, 1),
+    );
+  }
+
+  function splash(fx: CombatFx, x: number, y: number, z: number, kind: UnitKind = "hammer"): void {
+    (fx as unknown as { damageUnits(at: THREE.Vector3, kind: UnitKind): void }).damageUnits(
+      new THREE.Vector3(x, y, z),
+      kind,
+    );
+  }
+
+  it("pumps the peewee hand-cannon rearward and restores it exactly", () => {
+    const scene = new THREE.Scene();
+    const { group, body, turret, barrel } = makeSoloWalker("peewee", true);
+    const fx = new CombatFx(scene, group, mulberry32(21));
+    fx.update(1 / 60);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    const tk = 1 - 1 / 60 / TURRET_RECOIL_DURATION;
+    // The gun tube slides back along the gun line on the recoil clock while
+    // the turret slide still stacks underneath it.
+    expect(barrel!.position.z).toBeCloseTo(2 - BARREL_PUMP_KICK * tk, 9);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeCloseTo(TURRET_RECOIL_KICK * tk, 9);
+    // No torso brace on the gun rig: pitch stays on the aim axis.
+    expect(turret.rotation.x).toBe(0);
+    // A second shot mid-envelope refreshes the pump back toward full.
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    expect(barrel!.position.z).toBeCloseTo(2 - BARREL_PUMP_KICK * tk, 9);
+    // Past the envelope the tube sits bit-exact at its rest seat.
+    for (let n = 0; n < 120; n++) fx.update(1 / 60);
+    expect(barrel!.position.z).toBe(2);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    fx.dispose();
+  });
+
+  it("braces the commander torso back and recovers exactly", () => {
+    const scene = new THREE.Scene();
+    const { group, body, turret } = makeSoloWalker("commander", false);
+    const fx = new CombatFx(scene, group, mulberry32(21));
+    fx.update(1 / 60);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    const tk = 1 - 1 / 60 / TURRET_RECOIL_DURATION;
+    // Tube-less walker: the torso pitches back off the chest cannon while
+    // aim yaw and the turret slide compose untouched.
+    expect(turret.rotation.x).toBeCloseTo(-COMMANDER_BRACE_KICK * tk, 9);
+    expect(turret.rotation.y).toBe(0);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeCloseTo(TURRET_RECOIL_KICK * tk, 9);
+    // Aiming mid-envelope only yaws: the brace re-poses fresh on top,
+    // neither wiped nor doubled.
+    setUnitAim(body, 0.5, 0.2);
+    fx.update(1 / 60);
+    const tk2 = 1 - (2 / 60) / TURRET_RECOIL_DURATION;
+    expect(turret.rotation.y).toBeCloseTo(0.2, 12);
+    expect(turret.rotation.x).toBeCloseTo(-COMMANDER_BRACE_KICK * tk2, 9);
+    for (let n = 0; n < 120; n++) fx.update(1 / 60);
+    expect(turret.rotation.x).toBe(0);
+    expect(turret.position.x).toBe(0);
+    expect(turret.position.z).toBe(0);
+    expect(fx.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    fx.dispose();
+  });
+
+  it("leaves tank guns on the turret slide alone", () => {
+    const scene = new THREE.Scene();
+    const { group, body, turret, barrel } = makeSoloWalker("stump", true);
+    const fx = new CombatFx(scene, group, mulberry32(21));
+    fx.update(1 / 60);
+    recoil(fx, 0, body);
+    fx.update(1 / 60);
+    // Tanks keep exactly their old read: tube seated, torso level, turret slid.
+    expect(barrel!.position.z).toBe(2);
+    expect(turret.rotation.x).toBe(0);
+    expect(Math.hypot(turret.position.x, turret.position.z)).toBeGreaterThan(0);
+    fx.dispose();
+  });
+
+  it("settles the pump on the kill and the brace on clearTransients", () => {
+    // Peewee mid-pump takes the finishing blow: the tube restores before
+    // the turret pops into debris.
+    const scene = new THREE.Scene();
+    const scout = makeSoloWalker("peewee", true);
+    const fx = new CombatFx(scene, scout.group, mulberry32(21));
+    fx.update(1 / 60);
+    recoil(fx, 0, scout.body);
+    fx.update(1 / 60);
+    expect(scout.barrel!.position.z).toBeLessThan(2);
+    (fx as unknown as { damage: number[] }).damage[0] = 0.99;
+    splash(fx, 5, 100, 0, "hammer");
+    expect(fx.isDestroyedAt(0)).toBe(true);
+    expect(scout.barrel!.position.z).toBe(2);
+    fx.dispose();
+    // Commander mid-brace clears: torso level, slide zeroed, no entry left.
+    const scene2 = new THREE.Scene();
+    const walker = makeSoloWalker("commander", false);
+    const fx2 = new CombatFx(scene2, walker.group, mulberry32(21));
+    fx2.update(1 / 60);
+    recoil(fx2, 0, walker.body);
+    fx2.update(1 / 60);
+    expect(walker.turret.rotation.x).toBeLessThan(0);
+    fx2.clearTransients();
+    expect(walker.turret.rotation.x).toBe(0);
+    expect(walker.turret.position.x).toBe(0);
+    expect(walker.turret.position.z).toBe(0);
+    expect(fx2.impactAt(0)).toEqual({ shoveX: 0, shoveZ: 0, pitch: 0, roll: 0 });
+    fx2.dispose();
   });
 });
 

@@ -413,14 +413,17 @@ export function muzzleWorld(
 /**
  * Aim a unit body: yaw the hull (body group) and the turret subgroup
  * relative to it. Traverse clamping lives in core (`clampTurret` /
- * `aimStep`); this only applies the pose.
+ * `aimStep`); this only applies the pose. Aim owns yaw only — turret
+ * pitch/roll belong to the commander's firing brace and the wreck slump,
+ * which compose on top of the aim pose instead of being wiped by it.
  */
 export function setUnitAim(body: THREE.Group, hullYaw: number, turretRel: number): void {
   // Keep the YXZ order buildUnits sets (yaw, then hull-frame pitch/roll) so
   // aiming never flattens a grade-posed hull.
   body.rotation.order = "YXZ";
   body.rotation.y = hullYaw;
-  getTurret(body)?.rotation.set(0, turretRel, 0);
+  const turret = getTurret(body);
+  if (turret) turret.rotation.y = turretRel;
 }
 
 /** Road-wheel meshes of a unit body (empty for the walker, plain groups). */

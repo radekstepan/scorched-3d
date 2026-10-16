@@ -254,6 +254,21 @@ interface Nudge {
   turretAge: number;
   /** Seconds for the turret envelope to reach 0. */
   turretDur: number;
+  /**
+   * Walker weapon cycle, riding the turret clock: the peewee's hand-cannon
+   * pumps its barrel pivot rearward (`pump` units at envelope 1, restored
+   * from `barrelBase`), while the tube-less commander braces its torso back
+   * (`nod` radians at envelope 1, applied through `appliedNod` like the
+   * hull rock). Both are the walkers' "reloading" read — the visible weapon
+   * motion at the gun itself, on top of the shared turret slide. Zero (and
+   * null) for tanks and at rest.
+   */
+  pump: number;
+  /** Rest seat of the pumped barrel pivot (exact restore on expiry/settle). */
+  barrelBase: THREE.Vector3 | null;
+  nod: number;
+  /** Torso pitch applied last tick (subtracted before recomputing — exact). */
+  appliedNod: number;
 }
 
 /**
@@ -297,6 +312,19 @@ export const TURRET_RECOIL_KICK = 1.5;
  * turret is always re-seated before its hull restores.
  */
 export const TURRET_RECOIL_DURATION = 0.25;
+/**
+ * Walker weapon cycle: rearward pump travel of the peewee's hand-cannon
+ * barrel at full envelope — the tube slides back into its mount and springs
+ * forward on the turret clock, the visible "reloading" motion at the gun.
+ */
+export const BARREL_PUMP_KICK = 1.2;
+/**
+ * Walker weapon cycle: rearward torso pitch of the tube-less commander at
+ * full envelope — the walker braces back off its chest cannon and recovers
+ * on the turret clock. Aim is yaw-only, so the brace composes with traverse
+ * instead of fighting it.
+ */
+export const COMMANDER_BRACE_KICK = 0.07;
 const LIGHT_COUNT = 2;
 const FLASH_MAX_AGE = 0.35;
 /** Layered explosions live a beat longer than the old single flash. */
@@ -1229,7 +1257,10 @@ export class CombatFx {
         if (turret) {
           turret.position.x = 0;
           turret.position.z = 0;
+          turret.rotation.x -= nudge.appliedNod;
         }
+        const barrel = getBarrel(child);
+        if (barrel && nudge.barrelBase) barrel.position.copy(nudge.barrelBase);
       }
     }
     this.nudges.clear();
@@ -1497,6 +1528,10 @@ export class CombatFx {
       turret: 0,
       turretAge: 0,
       turretDur: TURRET_RECOIL_DURATION,
+      pump: 0,
+      barrelBase: null,
+      nod: 0,
+      appliedNod: 0,
     });
   }
 
@@ -1513,12 +1548,17 @@ export class CombatFx {
     body.rotation.x -= nudge.appliedPitch;
     body.rotation.z -= nudge.appliedRoll;
     // Recoil only ever slides the turret in X/Z (Y is the wreck-slump axis),
-    // so the restore touches only what the kick wrote.
+    // so the restore touches only what the kick wrote — plus the walker
+    // weapon cycle (pumped tube back to its seat, braced torso level), so a
+    // wreck starts from a clean gun before it pops or slumps.
     const turret = getTurret(body);
     if (turret) {
       turret.position.x = 0;
       turret.position.z = 0;
+      turret.rotation.x -= nudge.appliedNod;
     }
+    const barrel = getBarrel(body);
+    if (barrel && nudge.barrelBase) barrel.position.copy(nudge.barrelBase);
     this.nudges.delete(index);
   }
 
@@ -2381,6 +2421,15 @@ export class CombatFx {
     // Wrecks never recoil (covers white-box kills that bypass `damageUnits`;
     // organic fire only ever picks live attackers).
     if (this.destroyed[index]) return;
+    // Walker weapon cycle: the peewee pumps its hand-cannon tube back along
+    // the gun line, the tube-less commander braces its torso back — the
+    // walkers' visible "reloading" motion at the weapon, on top of the
+    // shared turret slide. Tanks keep the slide alone.
+    const kind = this.unitKind(index);
+    const barrel = getBarrel(body);
+    const pump = kind === "peewee" && barrel ? BARREL_PUMP_KICK : 0;
+    const pumpBase = pump > 0 && barrel ? barrel.position.clone() : null;
+    const nod = kind === "commander" && getTurret(body) ? COMMANDER_BRACE_KICK : 0;
     const live = this.nudges.get(index);
     if (live) {
       // A rocked hull keeps its rock (hull fields untouched): only the turret
@@ -2388,6 +2437,13 @@ export class CombatFx {
       live.turret = TURRET_RECOIL_KICK;
       live.turretAge = 0;
       live.turretDur = TURRET_RECOIL_DURATION;
+      // Re-kicks refresh the walker cycle on the same clock (the barrel seat
+      // is captured once — the kick is the sole writer of the tube position).
+      if (pump > 0) {
+        live.pump = pump;
+        if (!live.barrelBase && pumpBase) live.barrelBase = pumpBase;
+      }
+      if (nod > 0) live.nod = nod;
       return;
     }
     // Recoil opposes the barrel: horizontal projection, normalized. A
@@ -2408,6 +2464,10 @@ export class CombatFx {
       turret: TURRET_RECOIL_KICK,
       turretAge: 0,
       turretDur: TURRET_RECOIL_DURATION,
+      pump,
+      barrelBase: pumpBase,
+      nod,
+      appliedNod: 0,
     });
   }
 
@@ -3041,7 +3101,9 @@ export class CombatFx {
    * the live barrel line (re-read from the turret yaw every tick, so
    * traverse during the kick tracks the gun) while aim yaw, hull rock, and
    * idle breathing compose untouched — yaw lives on rotation, recoil on
-   * position, tremble on the hull. The entry drops only once both envelopes
+   * position, tremble on the hull. The walker weapon cycle rides the same
+   * turret envelope (peewee tube pump, commander torso brace — posed and
+   * restored with the slide). The entry drops only once both envelopes
    * have restored (hull to its base, turret X/Z to zero).
    */
   private advanceNudges(dt: number): void {
@@ -3063,7 +3125,10 @@ export class CombatFx {
         if (turret) {
           turret.position.x = 0;
           turret.position.z = 0;
+          turret.rotation.x -= nudge.appliedNod;
         }
+        const barrel = getBarrel(child);
+        if (barrel && nudge.barrelBase) barrel.position.copy(nudge.barrelBase);
         this.nudges.delete(index);
         continue;
       }
@@ -3088,10 +3153,18 @@ export class CombatFx {
       if (turret && nudge.turret > 0) {
         nudge.turretAge += dt;
         const tk = 1 - nudge.turretAge / nudge.turretDur;
+        // The brace un-applies before every re-pose (aim owns yaw only, so
+        // the nod is the sole writer of turret pitch — exact, never stacked).
+        turret.rotation.x -= nudge.appliedNod;
+        nudge.appliedNod = 0;
         if (tk <= 0) {
           turret.position.x = 0;
           turret.position.z = 0;
           nudge.turret = 0;
+          const barrel = getBarrel(child);
+          if (barrel && nudge.barrelBase) barrel.position.copy(nudge.barrelBase);
+          nudge.pump = 0;
+          nudge.nod = 0;
         } else {
           // Rearward along the live barrel: the turret's own yaw in the hull
           // frame, so the slide tracks traverse instead of freezing the
@@ -3099,6 +3172,22 @@ export class CombatFx {
           const yaw = turret.rotation.y;
           turret.position.x = -Math.sin(yaw) * nudge.turret * tk;
           turret.position.z = -Math.cos(yaw) * nudge.turret * tk;
+          // Walker weapon cycle on the same envelope: the peewee's tube
+          // pumps back into its mount along the gun line, the commander's
+          // torso braces back off its chest cannon.
+          const barrel = getBarrel(child);
+          if (barrel && nudge.barrelBase && nudge.pump > 0) {
+            barrel.position.set(
+              nudge.barrelBase.x,
+              nudge.barrelBase.y,
+              nudge.barrelBase.z - nudge.pump * tk,
+            );
+          }
+          if (nudge.nod > 0) {
+            const brace = -nudge.nod * tk;
+            turret.rotation.x += brace;
+            nudge.appliedNod = brace;
+          }
           turretDone = false;
         }
       }
