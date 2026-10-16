@@ -108,11 +108,10 @@ import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
 import { applyDayNight } from "./night";
-import { FIREFLY_COUNT, FIREFLY_POOL_COUNT, FireflyFx, placeFireflies } from "./fireflies";
+import { FIREFLY_COUNT, FireflyFx, placeFireflies } from "./fireflies";
 import { DAY_FOG_COUNT, DAY_FOG_SEED_XOR, DayFogFx, placeDayFog } from "./dayFog";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
-const ORIGIN = new THREE.Vector3();
 
 interface Props {
   map: TNTMap;
@@ -212,8 +211,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fogColor: { value: fogColor },
         fogNear: { value: fogNear },
         fogFar: { value: fogFar },
-        fireflyPools: { value: Array.from({ length: FIREFLY_POOL_COUNT }, () => new THREE.Vector3()) },
-        fireflyGlows: { value: new Array<number>(FIREFLY_POOL_COUNT).fill(0) },
+        fireflyPools: { value: Array.from({ length: FIREFLY_COUNT }, () => new THREE.Vector3()) },
+        fireflyGlows: { value: new Array<number>(FIREFLY_COUNT).fill(0) },
       },
       vertexShader: terrainVertex,
       fragmentShader: terrainFragment,
@@ -274,7 +273,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const dayNightTargets = { scene, fogColor, hemi, sun, terrainMat, waterMat, skyMat };
     applyDayNight(dayNightTargets, options.nightMode);
 
-    const trees = buildTrees(map, options.exaggeration);
+    // The tree materials alias the terrain's firefly-field uniforms, so
+    // the single per-tick mirror below reflects every mote on both.
+    const trees = buildTrees(map, options.exaggeration, {
+      pools: terrainMat.uniforms.fireflyPools!,
+      glows: terrainMat.uniforms.fireflyGlows!,
+    });
     const rocks = buildRocks(map, options.exaggeration);
     const units = buildUnits(map, options.exaggeration);
     scene.add(trees, rocks, units);
@@ -1019,17 +1023,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       fireflies.update(t);
       dayFog.setNight(opt.nightMode);
       dayFog.update(t);
-      // Mirror the roaming pools into the terrain shader (it ignores scene
-      // lights): positions track the PointLights, each glow tracks its own
-      // mote's blink, everything dies by day.
-      const pools = fireflies.poolLights();
-      const glows = fireflies.poolGlows();
+      // Mirror the full swarm into the shared shader field (terrain owns
+      // the uniforms, tree materials alias them): every mote's live
+      // position plus its own pulse glow, everything dies by day.
       const poolU = terrainMat.uniforms.fireflyPools!.value as THREE.Vector3[];
       const glowU = terrainMat.uniforms.fireflyGlows!.value as number[];
-      for (let i = 0; i < poolU.length; i++) {
-        poolU[i]!.copy(pools[i]?.position ?? ORIGIN);
-        glowU[i] = opt.nightMode ? (glows[i] ?? 0) : 0;
-      }
+      fireflies.writeField(poolU, glowU, opt.nightMode);
       terrainMat.wireframe = opt.showWire;
       const mag = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearFilter;
       const min = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;

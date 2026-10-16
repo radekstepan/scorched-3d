@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   FIREFLY_COUNT,
   FIREFLY_DRIFT_RADIUS,
+  FIREFLY_GLOW_AMP,
+  FIREFLY_GLOW_FLOOR,
   FIREFLY_MAX_LIFT,
   FIREFLY_MIN_LIFT,
   FIREFLY_POOL_COUNT,
@@ -11,14 +13,21 @@ import {
   FIREFLY_POOL_DISTANCE,
   FIREFLY_POOL_PEAK,
   FIREFLY_POOL_RADIUS,
+  FIREFLY_POOL_SHARE,
+  FIREFLY_POOL_TINT_GLSL,
+  FIREFLY_RATE_MAX,
+  FIREFLY_RATE_MIN,
   FIREFLY_TREE_CLEAR,
   FIREFLY_TREE_SPREAD,
+  applyFireflyTreeGlow,
   FireflyFx,
   fireflyBlink,
   fireflyDrift,
   fireflyGlow,
   fireflyPoolGlow,
   placeFireflies,
+  spliceFireflyTreeFragment,
+  spliceFireflyTreeVertex,
 } from "./fireflies";
 import { terrainFragment } from "./shaders";
 
@@ -86,6 +95,18 @@ describe("placeFireflies", () => {
     expect(clear.length).toBeGreaterThan(0);
   });
 
+  it("deals slow pulse rates: breathing, never strobing", () => {
+    // Gentle pulsation needs slow rates — sub-Hz, so a full breath takes
+    // seconds. Anything near 1 Hz reads as flashing.
+    expect(FIREFLY_RATE_MIN).toBeGreaterThan(0);
+    expect(FIREFLY_RATE_MAX).toBeLessThanOrEqual(0.35);
+    const anchors = placeFireflies(mulberry32(7), trees, FIREFLY_COUNT, flatGround);
+    for (const anchor of anchors) {
+      expect(anchor.rate).toBeGreaterThanOrEqual(FIREFLY_RATE_MIN);
+      expect(anchor.rate).toBeLessThanOrEqual(FIREFLY_RATE_MAX);
+    }
+  });
+
   it("falls back to a loose ring around the map when there are no trees", () => {
     const anchors = placeFireflies(mulberry32(7), [], 20, flatGround);
     expect(anchors).toHaveLength(20);
@@ -107,6 +128,18 @@ describe("fireflyBlink", () => {
     expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(0.5);
     expect(fireflyBlink(0.13, 0.8, 2 + 1 / 0.8)).toBeCloseTo(fireflyBlink(0.13, 0.8, 2), 9);
   });
+
+  it("breathes evenly: half the cycle bright, no brief-flash duty cycle", () => {
+    // A cubed sine spends most of its cycle dim and flashes briefly; a
+    // pure sine splits the cycle evenly — the gentle pulsation we want.
+    const samples = Array.from({ length: 200 }, (_, i) => fireflyBlink(0.13, 0.2, i * 0.05));
+    const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+    expect(mean).toBeGreaterThan(0.45);
+    expect(mean).toBeLessThan(0.55);
+    const bright = samples.filter((s) => s > 0.5).length / samples.length;
+    expect(bright).toBeGreaterThan(0.4);
+    expect(bright).toBeLessThan(0.6);
+  });
 });
 
 describe("fireflyDrift", () => {
@@ -121,14 +154,21 @@ describe("fireflyDrift", () => {
 });
 
 describe("fireflyGlow", () => {
-  it("rides the blink curve with an ember floor, staying in 0..1", () => {
+  it("breathes gently on a high floor: always glowing, never dark", () => {
+    // Gentle pulsation = a narrow band near full brightness (nanolathe's
+    // fire-flicker precedent), not an ember floor with brief flashes.
+    expect(FIREFLY_GLOW_FLOOR).toBeGreaterThanOrEqual(0.7);
+    expect(FIREFLY_GLOW_FLOOR + FIREFLY_GLOW_AMP).toBeLessThanOrEqual(1);
     const samples = Array.from({ length: 40 }, (_, i) => fireflyGlow(0.13, 0.8, i * 0.05));
     for (const s of samples) {
-      expect(s).toBeGreaterThanOrEqual(0.08);
-      expect(s).toBeLessThanOrEqual(1);
+      expect(s).toBeGreaterThanOrEqual(FIREFLY_GLOW_FLOOR);
+      expect(s).toBeLessThanOrEqual(FIREFLY_GLOW_FLOOR + FIREFLY_GLOW_AMP);
     }
-    expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(0.5);
-    expect(fireflyGlow(0.13, 0.8, 1.25)).toBeCloseTo(0.08 + 0.92 * fireflyBlink(0.13, 0.8, 1.25), 9);
+    expect(Math.max(...samples) - Math.min(...samples)).toBeGreaterThan(0.15);
+    expect(fireflyGlow(0.13, 0.8, 1.25)).toBeCloseTo(
+      FIREFLY_GLOW_FLOOR + FIREFLY_GLOW_AMP * fireflyBlink(0.13, 0.8, 1.25),
+      9,
+    );
   });
 });
 
@@ -145,15 +185,22 @@ describe("fireflyPoolGlow", () => {
     expect(FIREFLY_POOL_DISTANCE).toBeLessThanOrEqual(200);
   });
 
-  it("is mirrored by the terrain shader's additive pool term", () => {
+  it("is mirrored by the terrain shader's one-slot-per-mote pool term", () => {
     expect(terrainFragment).toContain("fireflyPools");
     expect(terrainFragment).toContain("fireflyGlows");
     expect(terrainFragment).toContain(String(FIREFLY_POOL_RADIUS));
-    expect(terrainFragment).toContain(`fireflyPools[${FIREFLY_POOL_COUNT}]`);
-    expect(terrainFragment).toContain(`fireflyGlows[${FIREFLY_POOL_COUNT}]`);
+    // Every mote gets a slot — the field spans the whole swarm, not just
+    // the few motes near a roaming PointLight.
+    expect(terrainFragment).toContain(`fireflyPools[${FIREFLY_COUNT}]`);
+    expect(terrainFragment).toContain(`fireflyGlows[${FIREFLY_COUNT}]`);
+    expect(terrainFragment).toContain(`i < ${FIREFLY_COUNT}`);
     // Soft lamplight tint — gentle on dark dirt, never floodlit.
-    expect(terrainFragment).toContain("0.30, 0.40, 0.14");
+    expect(terrainFragment).toContain(FIREFLY_POOL_TINT_GLSL);
     expect(terrainFragment).not.toContain("0.66, 0.88, 0.32");
+    // ...at the old-slot budget share, so the full-swarm total stays at
+    // the tuned lamplight level instead of multiplying ~15x.
+    expect(FIREFLY_POOL_SHARE * FIREFLY_COUNT).toBeCloseTo(FIREFLY_POOL_COUNT, 12);
+    expect(terrainFragment).toContain(`(${FIREFLY_POOL_COUNT}.0 / ${FIREFLY_COUNT}.0)`);
   });
 });
 
@@ -211,14 +258,19 @@ describe("FireflyFx", () => {
         expect(pool.intensity).toBeCloseTo(FIREFLY_POOL_PEAK * expected, 9);
       });
     }
-    // The pools genuinely pulse: dim embers and bright flashes both occur.
+    // The pools genuinely breathe within the gentle band: neither dark
+    // embers nor hard flashes, just a soft swell around near-full glow.
     const seen: number[] = [];
     for (let s = 0; s < 40; s++) {
       fx.update(s * 0.23);
       seen.push(...fx.poolGlows());
     }
-    expect(Math.min(...seen)).toBeLessThan(0.3);
-    expect(Math.max(...seen)).toBeGreaterThan(0.8);
+    for (const g of seen) {
+      expect(g).toBeGreaterThanOrEqual(FIREFLY_GLOW_FLOOR);
+      expect(g).toBeLessThanOrEqual(FIREFLY_GLOW_FLOOR + FIREFLY_GLOW_AMP);
+    }
+    expect(Math.min(...seen)).toBeLessThan(0.85);
+    expect(Math.max(...seen)).toBeGreaterThan(0.95);
   });
 
   it("rides gentle ground-pool lights and re-seats on exaggeration resnap", () => {
@@ -252,5 +304,94 @@ describe("FireflyFx", () => {
     expect(fx.glowLevel).toBe(0);
     fx.dispose();
     expect(scene.getObjectByName("fireflies")).toBeUndefined();
+  });
+
+  it("mirrors every mote's live position and pulse into the shader field", () => {
+    const { fx } = build();
+    fx.setNight(true);
+    fx.update(1.5);
+    const poolU = Array.from({ length: FIREFLY_COUNT }, () => new THREE.Vector3());
+    const glowU = new Array<number>(FIREFLY_COUNT).fill(-1);
+    fx.writeField(poolU, glowU, true);
+    const anchors = fx["anchors" as never] as { phase: number; rate: number }[];
+    const pos = (
+      (fx["points" as never] as THREE.Points).geometry.getAttribute("position") as THREE.BufferAttribute
+    ).array as Float32Array;
+    // One slot per mote: positions match the live sprite buffers exactly,
+    // and each glow tracks its own mote's pulse — no mote left unmirrored.
+    for (let i = 0; i < FIREFLY_COUNT; i++) {
+      expect(poolU[i]!.x).toBeCloseTo(pos[i * 3]!, 9);
+      expect(poolU[i]!.y).toBeCloseTo(pos[i * 3 + 1]!, 9);
+      expect(poolU[i]!.z).toBeCloseTo(pos[i * 3 + 2]!, 9);
+      const anchor = anchors[i]!;
+      expect(glowU[i]).toBeCloseTo(fireflyGlow(anchor.phase, anchor.rate, 1.5), 9);
+    }
+    // The field tracks drift: one frame later the slots have moved.
+    fx.update(1.6);
+    const before = poolU[0]!.x;
+    fx.writeField(poolU, glowU, true);
+    expect(poolU[0]!.x).not.toBe(before);
+  });
+
+  it("gates the whole field by night and zeroes slots past the anchors", () => {
+    const { fx } = build();
+    fx.setNight(true);
+    fx.update(1.5);
+    const poolU = Array.from({ length: FIREFLY_COUNT + 4 }, () => new THREE.Vector3());
+    const glowU = new Array<number>(FIREFLY_COUNT + 4).fill(-1);
+    fx.writeField(poolU, glowU, false);
+    for (const g of glowU) expect(g).toBe(0);
+    fx.writeField(poolU, glowU, true);
+    for (let i = 0; i < FIREFLY_COUNT; i++) expect(glowU[i]).toBeGreaterThan(0);
+    for (let i = FIREFLY_COUNT; i < glowU.length; i++) expect(glowU[i]).toBe(0);
+  });
+});
+describe("firefly tree glow", () => {
+  it("splices a world-position varying into the Lambert vertex shader", () => {
+    const out = spliceFireflyTreeVertex("prefix\n#include <project_vertex>\nsuffix");
+    expect(out).toContain("varying vec3 vFireflyWorld;");
+    expect(out).toContain("#include <project_vertex>");
+    // Instanced trees fold instanceMatrix in (guarded: the same chunk must
+    // also compile for non-instanced meshes), then modelMatrix to world.
+    expect(out).toContain("#ifdef USE_INSTANCING");
+    expect(out).toContain("instanceMatrix * ffWorldPos");
+    expect(out).toContain("( modelMatrix * ffWorldPos ).xyz");
+  });
+
+  it("splices the full-swarm pool loop into the Lambert fragment shader", () => {
+    const out = spliceFireflyTreeFragment("prefix\n#include <emissivemap_fragment>\nsuffix");
+    expect(out).toContain(`uniform vec3 fireflyPools[${FIREFLY_COUNT}]`);
+    expect(out).toContain(`uniform float fireflyGlows[${FIREFLY_COUNT}]`);
+    expect(out).toContain("varying vec3 vFireflyWorld;");
+    expect(out).toContain(`i < ${FIREFLY_COUNT}`);
+    // Same falloff shape, tint, and budget share as the terrain term.
+    expect(out).toContain(`${FIREFLY_POOL_RADIUS}.0`);
+    expect(out).toContain(FIREFLY_POOL_TINT_GLSL);
+    expect(out).toContain(`(${FIREFLY_POOL_COUNT}.0 / ${FIREFLY_COUNT}.0)`);
+    expect(out).toContain("totalEmissiveRadiance +=");
+    expect(out).toContain("#include <emissivemap_fragment>");
+  });
+
+  it("aliases the shared field uniforms and keys its own program", () => {
+    const mat = new THREE.MeshLambertMaterial({ color: 0x2d5a22 });
+    const plain = new THREE.MeshLambertMaterial({ color: 0x2d5a22 });
+    const pools = { value: [new THREE.Vector3(1, 2, 3)] };
+    const glows = { value: [0.5] };
+    applyFireflyTreeGlow(mat, { pools, glows });
+    // Distinct program from unmodified Lambert materials (rocks, units).
+    expect(mat.customProgramCacheKey()).toBe("firefly-tree-glow");
+    expect(plain.customProgramCacheKey()).not.toBe("firefly-tree-glow");
+    // onBeforeCompile wires the SAME uniform objects (single-tick mirror
+    // updates trees and terrain together) and splices both shaders.
+    const shader = {
+      uniforms: {} as Record<string, unknown>,
+      vertexShader: "#include <project_vertex>",
+      fragmentShader: "#include <emissivemap_fragment>",
+    };
+    mat.onBeforeCompile(shader as never, {} as never);
+    expect(shader.uniforms.fireflyPools).toBe(pools);
+    expect(shader.uniforms.fireflyGlows).toBe(glows);
+    expect(shader.vertexShader).toContain("vFireflyWorld");
+    expect(shader.fragmentShader).toContain("totalEmissiveRadiance +=");
   });
 });

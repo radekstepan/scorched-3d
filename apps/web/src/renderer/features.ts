@@ -10,6 +10,7 @@ import {
   type TNTMap,
   type TreeDamage,
 } from "@scorched-3d/core";
+import { applyFireflyTreeGlow, type FireflyFieldUniforms } from "./fireflies";
 
 /**
  * Tree/rock feature posing: instanced trunk + crown buffers with one shared
@@ -39,7 +40,11 @@ export function cellWorld(map: TNTMap, x: number, z: number, exaggeration: numbe
   );
 }
 
-export function buildTrees(map: TNTMap, exaggeration: number): THREE.Group {
+export function buildTrees(
+  map: TNTMap,
+  exaggeration: number,
+  fireflyField?: FireflyFieldUniforms,
+): THREE.Group {
   const group = new THREE.Group();
   group.name = "trees";
 
@@ -49,6 +54,11 @@ export function buildTrees(map: TNTMap, exaggeration: number): THREE.Group {
   const trunkMat = new THREE.MeshLambertMaterial({ color: 0x3b2a16 });
   const leafMat = new THREE.MeshLambertMaterial({ color: 0x2d5a22 });
   const pineMat = new THREE.MeshLambertMaterial({ color: 0x1f4a28 });
+  // Every firefly reflects off bark and crowns: the three materials alias
+  // the terrain's field uniforms, so one per-tick mirror feeds both.
+  if (fireflyField) {
+    for (const mat of [trunkMat, leafMat, pineMat]) applyFireflyTreeGlow(mat, fireflyField);
+  }
 
   const round: THREE.Vector3[] = [];
   const pines: THREE.Vector3[] = [];

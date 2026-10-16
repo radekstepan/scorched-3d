@@ -1,11 +1,12 @@
 import * as THREE from "three";
 
 /**
- * Night fireflies: a drifting point-cloud of blinking yellow-green motes
- * clustered around forest stands, plus a few roaming PointLights riding
- * spread-out motes so each firefly gently pools a little light on the
- * ground instead of being pure decoration. The whole group only renders
- * in night mode.
+ * Night fireflies: a drifting point-cloud of gently pulsating yellow-green
+ * motes clustered around forest stands. Every mote pools its own little
+ * halo onto the terrain and the trees (mirrored as shader uniforms — a
+ * single field both materials alias), plus a few roaming PointLights ride
+ * spread-out motes so dynamic Lambert objects catch the glow too. The
+ * whole group only renders in night mode.
  *
  * Placement is a pure function of (rng, tree XZ, groundY): seeded, so the
  * same map + seed always yields the same swarm.
@@ -32,16 +33,34 @@ export const FIREFLY_MIN_LIFT = 3;
 export const FIREFLY_MAX_LIFT = 15;
 /** Drift orbit radius around each anchor. */
 export const FIREFLY_DRIFT_RADIUS = 9;
-/** Ground-pool falloff radius (world units, mirrored in the terrain shader). */
+/** Ground-pool falloff radius (world units, mirrored in the shaders). */
 export const FIREFLY_POOL_RADIUS = 38;
+/** Pool tint shared by the terrain and tree shader terms (GLSL literal). */
+export const FIREFLY_POOL_TINT_GLSL = "0.30, 0.40, 0.14";
 /**
  * Ground-pool lights: one per spread-out mote, lamplight order — a gentle
- * halo fading with inverse-square decay, never a floodlight.
+ * halo fading with inverse-square decay, never a floodlight. These real
+ * lights only cover dynamic Lambert objects (units, rocks); the terrain
+ * and the trees mirror the full swarm, one pool slot per mote.
  */
 export const FIREFLY_POOL_COUNT = 6;
 export const FIREFLY_POOL_PEAK = 320;
 export const FIREFLY_POOL_DISTANCE = 150;
 export const FIREFLY_POOL_DECAY = 2;
+/**
+ * Per-mote share of the swarm's shader-pool light budget. Spreading the
+ * pools from FIREFLY_POOL_COUNT slots over every mote must not multiply
+ * the total ground light, so each mote pools at the old-slot fraction —
+ * the swarm's total output stays at the tuned lamplight level while every
+ * firefly now reflects.
+ */
+export const FIREFLY_POOL_SHARE = FIREFLY_POOL_COUNT / FIREFLY_COUNT;
+/** Pulse-rate band in Hz: slow breathing (~3–8 s period), never a strobe. */
+export const FIREFLY_RATE_MIN = 0.12;
+export const FIREFLY_RATE_MAX = 0.32;
+/** Glow pulse band: motes breathe between floor and floor + amp, never dark. */
+export const FIREFLY_GLOW_FLOOR = 0.75;
+export const FIREFLY_GLOW_AMP = 0.25;
 
 export interface FireflyAnchor {
   x: number;
@@ -49,9 +68,9 @@ export interface FireflyAnchor {
   z: number;
   /** Height above groundY at placement (for exaggeration re-snaps). */
   lift: number;
-  /** Blink phase 0..1. */
+  /** Pulse phase 0..1. */
   phase: number;
-  /** Blink rate multiplier. */
+  /** Pulse rate in Hz (FIREFLY_RATE_MIN..FIREFLY_RATE_MAX). */
   rate: number;
   /** Drift orbit radius. */
   radius: number;
@@ -146,7 +165,7 @@ export function placeFireflies(
       z,
       lift,
       phase: rng(),
-      rate: 0.5 + rng() * 0.9,
+      rate: FIREFLY_RATE_MIN + rng() * (FIREFLY_RATE_MAX - FIREFLY_RATE_MIN),
       radius: FIREFLY_DRIFT_RADIUS * (0.5 + rng() * 0.8),
     });
   }
@@ -154,32 +173,114 @@ export function placeFireflies(
 }
 
 /**
- * Glow pulse 0..1 at time `t`: a slow sine cubed, so each mote spends most
- * of its cycle dim and flashes briefly — firefly-like, not strobe-like.
+ * Glow pulse 0..1 at time `t`: a pure slow sine, so each mote breathes
+ * evenly — half the cycle waxing, half waning — instead of sitting dim and
+ * flashing briefly. (Precedent: nanolathe's fire-flicker is a bounded
+ * sine with a high floor and a per-source phase; same recipe here.)
  */
 export function fireflyBlink(phase: number, rate: number, t: number): number {
-  const s = 0.5 + 0.5 * Math.sin((t * rate + phase) * Math.PI * 2);
-  return s * s * s;
+  return 0.5 + 0.5 * Math.sin((t * rate + phase) * Math.PI * 2);
 }
 
 /**
- * Per-mote glow 0..1 at time `t`: the blink curve plus a faint ember floor
- * so traveling motes stay traceable between flashes. Shared by the sprite
- * colors and the ground pools, so each pool pulses with its own firefly.
+ * Per-mote glow at time `t`: the pulse curve on a high floor, so motes
+ * always glow and only breathe gently (FIREFLY_GLOW_FLOOR..FLOOR+AMP).
+ * Shared by the sprite colors and the ground pools, so each pool pulses
+ * with its own firefly.
  */
 export function fireflyGlow(phase: number, rate: number, t: number): number {
-  return 0.08 + 0.92 * fireflyBlink(phase, rate, t);
+  return FIREFLY_GLOW_FLOOR + FIREFLY_GLOW_AMP * fireflyBlink(phase, rate, t);
 }
 
 /**
  * Ground-pool falloff at distance `dist` (1 at the pool, 0.5 at
- * FIREFLY_POOL_RADIUS, → 0 far away). JS mirror of the terrain-shader term
- * — the custom terrain shader ignores scene lights, so the pools are also
- * painted as additive uniforms there.
+ * FIREFLY_POOL_RADIUS, → 0 far away). JS mirror of one mote's shader term
+ * (terrain + trees) — those shaders ignore scene lights, so every mote's
+ * halo is painted as an additive uniform slot, each scaled by
+ * FIREFLY_POOL_SHARE to hold the swarm's total light budget.
  */
 export function fireflyPoolGlow(dist: number): number {
   const k = Math.max(dist, 0) / FIREFLY_POOL_RADIUS;
   return 1 / (1 + k * k);
+}
+
+/**
+ * Shared shader-field uniforms: one slot per mote. The terrain material
+ * owns the uniform objects and the tree materials alias them (see
+ * `applyFireflyTreeGlow`), so one `FireflyFx.writeField` per tick feeds
+ * every mote's reflection on both surfaces.
+ */
+export interface FireflyFieldUniforms {
+  pools: { value: THREE.Vector3[] };
+  glows: { value: number[] };
+}
+
+/** GLSL pool-loop shared shape: falloff 1/(1+(d/radius)^2) over the field. */
+function fireflyFieldLoop(worldExpr: string): string {
+  return (
+    `float ffPools = 0.0;\n` +
+    `for (int i = 0; i < ${FIREFLY_COUNT}; i++) {\n` +
+    `  ffPools += fireflyGlows[i] / (1.0 + pow(length(${worldExpr} - fireflyPools[i]) / ${FIREFLY_POOL_RADIUS}.0, 2.0));\n` +
+    `}`
+  );
+}
+
+/** Per-mote budget share as a constant-folded GLSL factor. */
+function fireflyShareGLSL(): string {
+  return `(${FIREFLY_POOL_COUNT}.0 / ${FIREFLY_COUNT}.0)`;
+}
+
+/**
+ * Splice the world-position varying into a Lambert vertex shader (pure —
+ * tested directly). Injected after `#include <project_vertex>` where
+ * `transformed` is in scope; `instanceMatrix` folds in under
+ * USE_INSTANCING so the instanced tree meshes report true world XZ.
+ */
+export function spliceFireflyTreeVertex(src: string): string {
+  const head = `varying vec3 vFireflyWorld;\n`;
+  const inject =
+    `#include <project_vertex>\n` +
+    `vec4 ffWorldPos = vec4( transformed, 1.0 );\n` +
+    `#ifdef USE_INSTANCING\n` +
+    `ffWorldPos = instanceMatrix * ffWorldPos;\n` +
+    `#endif\n` +
+    `vFireflyWorld = ( modelMatrix * ffWorldPos ).xyz;`;
+  return head + src.replace("#include <project_vertex>", inject);
+}
+
+/**
+ * Splice the mote-pool glow into a Lambert fragment shader (pure — tested
+ * directly). Adds the same falloff loop + tint + budget share as the
+ * terrain term to `totalEmissiveRadiance`, so tree bark and crowns catch
+ * every mote's halo (fogged downstream like the rest of the surface).
+ */
+export function spliceFireflyTreeFragment(src: string): string {
+  const head =
+    `uniform vec3 fireflyPools[${FIREFLY_COUNT}];\n` +
+    `uniform float fireflyGlows[${FIREFLY_COUNT}];\n` +
+    `varying vec3 vFireflyWorld;\n`;
+  const inject =
+    `#include <emissivemap_fragment>\n` +
+    `${fireflyFieldLoop("vFireflyWorld")}\n` +
+    `totalEmissiveRadiance += vec3(${FIREFLY_POOL_TINT_GLSL}) * (ffPools * ${fireflyShareGLSL()});`;
+  return head + src.replace("#include <emissivemap_fragment>", inject);
+}
+
+/**
+ * Give a tree Lambert material the firefly field: every mote's halo adds
+ * to the surface emissive. The uniform objects are aliased (not copied),
+ * so the canvas's single per-tick mirror updates trees and terrain
+ * together. The custom program-cache key keeps these programs distinct
+ * from unmodified Lambert materials (rocks, units).
+ */
+export function applyFireflyTreeGlow(material: THREE.MeshLambertMaterial, field: FireflyFieldUniforms): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.fireflyPools = field.pools;
+    shader.uniforms.fireflyGlows = field.glows;
+    shader.vertexShader = spliceFireflyTreeVertex(shader.vertexShader);
+    shader.fragmentShader = spliceFireflyTreeFragment(shader.fragmentShader);
+  };
+  material.customProgramCacheKey = () => "firefly-tree-glow";
 }
 
 /** Drift offset around the anchor at time `t` (lissajous wander). */
@@ -199,6 +300,7 @@ export class FireflyFx {
   private readonly colors: THREE.BufferAttribute;
   private readonly pools: THREE.PointLight[] = [];
   private readonly poolGlow: number[] = new Array<number>(FIREFLY_POOL_COUNT).fill(0);
+  private readonly moteGlow: number[];
   private readonly anchors: FireflyAnchor[];
   private readonly base = new THREE.Color(FIREFLY_GLOW);
   private readonly groundY: (x: number, z: number) => number;
@@ -211,6 +313,7 @@ export class FireflyFx {
     groundY: (x: number, z: number) => number,
   ) {
     this.anchors = anchors;
+    this.moteGlow = new Array<number>(anchors.length).fill(0);
     this.groundY = groundY;
     this.group.name = "fireflies";
 
@@ -269,11 +372,31 @@ export class FireflyFx {
   }
 
   /**
-   * Per-pool glow 0..1 from the last update — each pool's own mote blink,
-   * mirrored into the terrain shader (the canvas gates all pools by night).
+   * Per-pool glow 0..1 from the last update — each pool's own mote pulse,
+   * driving its PointLight above.
    */
   poolGlows(): readonly number[] {
     return this.poolGlow;
+  }
+
+  /**
+   * Mirror the full swarm into the shared shader field (terrain owns the
+   * uniform objects, tree materials alias them): every mote's live
+   * position plus its own pulse glow, so each firefly reflects against
+   * both surfaces — not just the few near a roaming PointLight. Gated by
+   * night; oversized slots zero out past the anchor count.
+   */
+  writeField(poolU: THREE.Vector3[], glowU: number[], night: boolean): void {
+    const pos = this.positions.array as Float32Array;
+    const n = Math.min(poolU.length, this.anchors.length);
+    for (let i = 0; i < poolU.length; i++) {
+      if (i < n) {
+        poolU[i]!.set(pos[i * 3]!, pos[i * 3 + 1]!, pos[i * 3 + 2]!);
+        glowU[i] = night ? (this.moteGlow[i] ?? 0) : 0;
+      } else {
+        glowU[i] = 0;
+      }
+    }
   }
 
   /** Swarm mean glow 0..1 from the last update (0 while hidden). */
@@ -301,6 +424,7 @@ export class FireflyFx {
       pos[i * 3 + 2] = a.z + d.z;
       const glow = fireflyGlow(a.phase, a.rate, t);
       glowSum += glow;
+      this.moteGlow[i] = glow;
       this.scratch.copy(this.base).multiplyScalar(glow);
       col[i * 3] = this.scratch.r;
       col[i * 3 + 1] = this.scratch.g;
@@ -311,7 +435,7 @@ export class FireflyFx {
     const mean = this.anchors.length > 0 ? glowSum / this.anchors.length : 0;
     this.meanGlow = mean;
     // Each pool wanders with its own mote and breathes with that mote's
-    // blink, so the ground light visibly comes from the fireflies.
+    // pulse, so the roaming light visibly comes from the fireflies.
     for (let i = 0; i < this.pools.length; i++) {
       const pool = this.pools[i]!;
       const anchor = this.anchors[Math.floor((this.anchors.length * i) / this.pools.length)];

@@ -207,3 +207,31 @@ describe("fallen-tree decay posing", () => {
     expect(m.elements[10]).toBe(0);
   });
 });
+
+describe("firefly tree glow", () => {
+  it("leaves materials unmodified without a field, glows all three with one", () => {
+    const map = makeMap();
+    const plain = buildTrees(map, 1);
+    for (const child of plain.children) {
+      const mat = (child as THREE.InstancedMesh).material as THREE.MeshLambertMaterial;
+      expect(mat.customProgramCacheKey()).not.toBe("firefly-tree-glow");
+    }
+    const pools = { value: [new THREE.Vector3()] };
+    const glows = { value: [0] };
+    const lit = buildTrees(map, 1, { pools, glows });
+    expect(lit.children).toHaveLength(3);
+    for (const child of lit.children) {
+      const mat = (child as THREE.InstancedMesh).material as THREE.MeshLambertMaterial;
+      expect(mat.customProgramCacheKey()).toBe("firefly-tree-glow");
+      // Each material aliases the same field uniform objects.
+      const shader = {
+        uniforms: {} as Record<string, unknown>,
+        vertexShader: "#include <project_vertex>",
+        fragmentShader: "#include <emissivemap_fragment>",
+      };
+      mat.onBeforeCompile(shader as never, {} as never);
+      expect(shader.uniforms.fireflyPools).toBe(pools);
+      expect(shader.uniforms.fireflyGlows).toBe(glows);
+    }
+  });
+});

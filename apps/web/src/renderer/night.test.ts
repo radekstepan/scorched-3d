@@ -147,10 +147,10 @@ describe("night sky shader + canvas wiring", () => {
     expect(canvas).toContain("new FireflyFx(");
     expect(canvas).toContain("fireflies.setNight(");
     expect(canvas).toContain("fireflies.update(t)");
-    expect(canvas).toContain("fireflies.poolLights()");
-    expect(canvas).toContain("fireflies.poolGlows()");
+    expect(canvas).toContain("fireflies.writeField(poolU, glowU, opt.nightMode)");
     expect(canvas).toContain("fireflyPools:");
     expect(canvas).toContain("fireflyGlows:");
+    expect(canvas).toContain("buildTrees(map, options.exaggeration, {");
     expect(canvas).toContain("fireflies.resnap()");
     expect(canvas).toContain("fireflies.dispose()");
   });
