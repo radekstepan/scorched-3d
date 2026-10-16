@@ -38,4 +38,24 @@ describe("minimap click-to-move wiring", () => {
     // height and the clicked point renders off-center on oblique views.
     expect(canvasSource).toMatch(/jumpCameraTo\([\s\S]*?groundY/);
   });
+
+  it("measures clicks and dots against the image content box (no strut gap, no border inset)", () => {
+    // An inline img leaves a baseline strut gap (wrapper stands taller than
+    // the terrain image, so every click/dot fraction stretches southward —
+    // worst at the south edge) and a border insets the image content from
+    // the box clicks/dots are measured against (corner miss). The minimap
+    // img must be block-level with a layout-neutral (ring) frame.
+    const imgTag = appSource.match(/<img[\s\S]*?alt="Minimap"[\s\S]*?\/>/)?.[0] ?? "";
+    expect(imgTag).toContain("block");
+    expect(imgTag).not.toContain("border");
+    expect(imgTag).toContain("ring-1");
+  });
+
+  it("plots the hover chip in world coords like the dots and click handler", () => {
+    // Cell-index math would sit up to half a cell off the point a click on
+    // that spot addresses; the chip must share the dots/click mapping.
+    expect(appSource).toContain("hover.worldX");
+    expect(appSource).toContain("hover.worldZ");
+    expect(appSource).not.toContain("hover.cellX / (map.width - 1)");
+  });
 });

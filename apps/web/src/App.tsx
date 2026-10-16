@@ -159,18 +159,21 @@ export default function App() {
       }),
     [hqs, worldW, worldD],
   );
+  // Hover chip in world coords — the same mapping as the unit dots and the
+  // click handler. The 3D hover pick is continuous, so cell-index math would
+  // sit up to half a cell off the point a click on that spot would address.
   const minimapHoverChip = useMemo(
     () =>
       hover && (
         <span
           className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_8px_#fbbf24]"
           style={{
-            left: `${(hover.cellX / (map.width - 1)) * 100}%`,
-            top: `${(hover.cellZ / (map.height - 1)) * 100}%`,
+            left: `${(hover.worldX / worldW + 0.5) * 100}%`,
+            top: `${(hover.worldZ / worldD + 0.5) * 100}%`,
           }}
         />
       ),
-    [hover, map.width, map.height],
+    [hover, worldW, worldD],
   );
   const meta = PRESET_META[preset];
   const tileW = map.width / 2;
@@ -254,10 +257,16 @@ export default function App() {
               if ((e.buttons & 1) !== 0) jumpFromMinimap(e);
             }}
           >
+            {/* block: an inline img leaves a baseline strut gap, so the
+            wrapper would stand several px taller than the terrain image and
+            every click/dot fraction would stretch past the map southward
+            (worst at the south edge). ring (box-shadow) instead of border:
+            the hairline frame adds no layout box, so the image content box
+            stays exactly the box clicks and dots are measured against. */}
             <img
               src={miniUrl}
               alt="Minimap"
-              className="aspect-square w-full rounded-sm border border-white/10"
+              className="block aspect-square w-full rounded-sm ring-1 ring-white/10"
               draggable={false}
             />
             {minimapDots}
