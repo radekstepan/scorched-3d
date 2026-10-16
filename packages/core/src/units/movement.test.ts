@@ -32,7 +32,7 @@ import {
   type Mover,
   type RoutePoint,
 } from "./movement.js";
-import { addScorchMark, createDamageField, type DamageField } from "./destruction.js";
+import { addScorchMark, BLAST_RADIUS, createDamageField, type DamageField } from "./destruction.js";
 import {
   IMPACT_MAX_SHOVE,
   impactKick,
@@ -442,6 +442,22 @@ describe("spacingScale", () => {
     expect(spacingScale(0, [{ x: 0, z: 0 }, { x: 50, z: 0 }])).toBe(SLOW_SCALE);
   });
 
+  it("holds the splash-aware gap: stops inside 48, crawls on the boundary", () => {
+    // 40 sits inside every tank blast but outside the old 30 hold — the new
+    // stop must refuse to close it, while exactly-on-48 still crawls (the
+    // stop gate is strict, matching the blast boundary scoring zero).
+    expect(spacingScale(0, [{ x: 0, z: 0 }, { x: 40, z: 0 }])).toBe(0);
+    expect(spacingScale(0, [{ x: 0, z: 0 }, { x: STOP_RADIUS, z: 0 }])).toBe(SLOW_SCALE);
+  });
+
+  it("parks neighbours outside the heaviest bolt splash", () => {
+    // Doctrine pin: the mutual stop clears every bolt blast (commander 48),
+    // so a brawl shares hammer fringe at most — see STOP_RADIUS.
+    expect(STOP_RADIUS).toBeGreaterThanOrEqual(BLAST_RADIUS.commander);
+    expect(STOP_RADIUS).toBeGreaterThan(BLAST_RADIUS.stump);
+    expect(STOP_RADIUS).toBeGreaterThan(BLAST_RADIUS.flash);
+  });
+
   it("ignores the unit itself", () => {
     expect(spacingScale(0, [{ x: 0, z: 0 }])).toBe(1);
     expect(spacingScale(5, [{ x: 0, z: 0 }])).toBe(1);
@@ -602,6 +618,26 @@ describe("adjacent-unit deadlock", () => {
     }
     const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
     expect(gap).toBeGreaterThan(STOP_RADIUS * 0.8);
+  });
+
+  it("settles holders outside bolt splash instead of stacking", () => {
+    // Two holders parked 20 apart (a stand-off pair in a brawl): no drive,
+    // so separation alone must open them past every bolt blast — a shell
+    // landing on one should not splash the other at full share.
+    const field = openField();
+    const kinds = ["stump", "stump"] as const;
+    const routes: RoutePoint[][] = [[], []];
+    let movers: Mover[] = [
+      { x: -10, z: 0, hull: 0, leg: 0, hold: true },
+      { x: 10, z: 0, hull: 0, leg: 0, hold: true },
+    ];
+    const dt = 1 / 60;
+    for (let n = 0; n < 600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
+    expect(gap).toBeGreaterThanOrEqual(STOP_RADIUS);
+    expect(gap).toBeGreaterThan(BLAST_RADIUS.stump);
   });
 
   it("lets units parked inside scorch (brown-hole) cells drive out", () => {

@@ -105,8 +105,14 @@ export const ROUTE_WAYPOINTS = 4;
 export const ROUTE_RADIUS_CELLS = 45;
 /** Arrival radius around a waypoint, in world units. */
 export const ARRIVE_RADIUS = 14;
-/** Spacing: full stop inside this distance to another mover (world units). */
-export const STOP_RADIUS = 30;
+/**
+ * Spacing: full stop inside this distance to another mover (world units).
+ * Splash-aware (see `BLAST_RADIUS` in `destruction.ts`): 48 parks neighbours
+ * exactly outside the heaviest bolt splash (commander 48 — a boundary hit
+ * scores zero, see `applyBlastToUnits`), so a brawl shares hammer fringe at
+ * most — a neighbour at the hold eats a quarter of a shell instead of half.
+ */
+export const STOP_RADIUS = 48;
 /** Spacing: crawl at SLOW_SCALE inside this distance (world units). */
 export const SLOW_RADIUS = 72;
 /** Speed multiplier while inside SLOW_RADIUS of another mover. */
@@ -140,7 +146,7 @@ export const SEPARATION_RADIUS = STOP_RADIUS;
  * Separation push speed, world units per second. Faster than any hull's
  * floor drive (`MOVE_SPEED` ceiling is 80 × `ORDER_SPACING_FLOOR` 0.3 = 24)
  * so the nudge reads as jostling, not teleporting — but fast enough to
- * clear a 30-unit hold in ~1 s.
+ * clear a 48-unit hold in ~1.6 s.
  */
 export const SEPARATION_SPEED = 30;
 /**

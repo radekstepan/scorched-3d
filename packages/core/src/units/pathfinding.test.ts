@@ -7,6 +7,7 @@ import {
   holdMover,
   orderMover,
   planRoutes,
+  STOP_RADIUS,
   type Mover,
   type RoutePoint,
 } from "./movement.js";
@@ -288,6 +289,14 @@ describe("formation", () => {
         expect(d).toBeGreaterThanOrEqual(FORMATION_MIN_SEPARATION);
       }
     }
+  });
+
+  it("keeps formation goals outside the movers' mutual spacing stop", () => {
+    // Cross-module contract (pathfinding.ts cannot import movement.ts — the
+    // test pins it instead): arrived units must hold their fan without
+    // re-entering the spacing stop, so the minimum goal separation stays
+    // wider than STOP_RADIUS. See FORMATION_MIN_SEPARATION.
+    expect(FORMATION_MIN_SEPARATION).toBeGreaterThan(STOP_RADIUS);
   });
 
   it("seats shoreline water-click goals onto separated land", () => {

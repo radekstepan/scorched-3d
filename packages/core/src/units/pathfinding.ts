@@ -114,13 +114,15 @@ export const PATH_SNAP_RADIUS = 12;
 export const BLOCKED_KEEPOUT = 14;
 /**
  * Minimum separation between snapped formation goals, in world units.
- * Deliberately wider than the movers' `STOP_RADIUS` (30, see `movement.ts`;
+ * Deliberately wider than the movers' `STOP_RADIUS` (48, see `movement.ts`;
  * not imported — `pathfinding.ts` sits below `movement.ts` in the import
  * graph and a cycle would break the barrel) so arrived units hold their fan
  * instead of re-entering the mutual spacing stop and leaning on separation
- * to jostle free.
+ * to jostle free. Matches `PATH_FORMATION_SPACING`, so geometric ring
+ * neighbours already satisfy it and re-seating only fires when snaps
+ * collapse onto the same ground.
  */
-export const FORMATION_MIN_SEPARATION = 40;
+export const FORMATION_MIN_SEPARATION = 56;
 
 function idx(grid: PathGrid, x: number, z: number): number {
   return z * grid.width + x;
