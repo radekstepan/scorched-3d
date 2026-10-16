@@ -108,7 +108,7 @@ import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraS
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
-import { applyDayNight } from "./night";
+import { applyDayNight, dayNightLighting } from "./night";
 import { FIREFLY_COUNT, FireflyFx, placeFireflies } from "./fireflies";
 import { DAY_FOG_COUNT, DAY_FOG_SEED_XOR, DayFogFx, placeDayFog } from "./dayFog";
 
@@ -186,8 +186,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     controls.target.set(startPose.target.x, startPose.target.y, startPose.target.z);
 
     const fogColor = new THREE.Color(0x8eb4c8);
-    const fogNear = 3600;
-    const fogFar = 12400;
+    // Fog range comes from the active day/night preset (day runs denser);
+    // applyDayNight re-applies it below and on every toggle, so the ranges
+    // below only seed the opening frame.
+    const fogPreset = dayNightLighting(options.nightMode);
+    const fogNear = fogPreset.fogNear;
+    const fogFar = fogPreset.fogFar;
 
     const albedoData = composeAlbedo(map);
     const heightData = composeHeight(map);

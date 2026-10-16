@@ -27,8 +27,9 @@ function buildTargets(): DayNightTargets {
   const fogColor = new THREE.Color(DAY_LIGHTING.fog);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(DAY_LIGHTING.background);
-  scene.fog = new THREE.Fog(fogColor, 3600, 12400);
+  scene.fog = new THREE.Fog(fogColor, DAY_LIGHTING.fogNear, DAY_LIGHTING.fogFar);
   const colorUniform = (hex: number) => ({ value: new THREE.Color(hex) });
+  const floatUniform = (v: number) => ({ value: v });
   return {
     scene,
     fogColor,
@@ -39,9 +40,17 @@ function buildTargets(): DayNightTargets {
         sunColor: colorUniform(0xffffff),
         skyColor: colorUniform(0xffffff),
         groundColor: colorUniform(0xffffff),
+        fogNear: floatUniform(DAY_LIGHTING.fogNear),
+        fogFar: floatUniform(DAY_LIGHTING.fogFar),
       },
     }),
-    waterMat: new THREE.ShaderMaterial({ uniforms: { sunColor: colorUniform(0xffffff) } }),
+    waterMat: new THREE.ShaderMaterial({
+      uniforms: {
+        sunColor: colorUniform(0xffffff),
+        fogNear: floatUniform(DAY_LIGHTING.fogNear),
+        fogFar: floatUniform(DAY_LIGHTING.fogFar),
+      },
+    }),
     skyMat: new THREE.ShaderMaterial({ uniforms: { nightMix: { value: 0 } } }),
   };
 }
@@ -55,6 +64,11 @@ describe("day/night lighting presets", () => {
   it("pins the day preset to the pre-night canvas hardcodes (no day regression)", () => {
     expect(DAY_LIGHTING.background).toBe(0x6aa0c8);
     expect(DAY_LIGHTING.fog).toBe(0x8eb4c8);
+    // Deliberate exception: day fog runs denser than the old shared range.
+    expect(DAY_LIGHTING.fogNear).toBe(2800);
+    expect(DAY_LIGHTING.fogFar).toBe(9500);
+    expect(NIGHT_LIGHTING.fogNear).toBe(3600);
+    expect(NIGHT_LIGHTING.fogFar).toBe(12400);
     expect(DAY_LIGHTING.hemiSky).toBe(0xb8d4f0);
     expect(DAY_LIGHTING.hemiGround).toBe(0x3a3424);
     expect(DAY_LIGHTING.hemiIntensity).toBe(0.45);
@@ -115,6 +129,34 @@ describe("applyDayNight", () => {
     expect(targets.sun.color.getHex()).toBe(NIGHT_LIGHTING.sunColor);
     expect(targets.sun.intensity).toBe(NIGHT_LIGHTING.sunIntensity);
     expect(targets.skyMat.uniforms.nightMix!.value).toBe(1);
+  });
+
+  it("runs day fog denser than night (closer range, same ordering)", () => {
+    expect(DAY_LIGHTING.fogNear).toBeLessThan(NIGHT_LIGHTING.fogNear);
+    expect(DAY_LIGHTING.fogFar).toBeLessThan(NIGHT_LIGHTING.fogFar);
+    for (const p of [DAY_LIGHTING, NIGHT_LIGHTING]) {
+      expect(p.fogNear).toBeGreaterThan(0);
+      expect(p.fogFar).toBeGreaterThan(p.fogNear);
+    }
+  });
+
+  it("writes the fog range to scene fog and both shader materials", () => {
+    const targets = buildTargets();
+    applyDayNight(targets, true);
+    const fog = targets.scene.fog as THREE.Fog;
+    expect(fog.near).toBe(NIGHT_LIGHTING.fogNear);
+    expect(fog.far).toBe(NIGHT_LIGHTING.fogFar);
+    expect(targets.terrainMat.uniforms.fogNear!.value).toBe(NIGHT_LIGHTING.fogNear);
+    expect(targets.terrainMat.uniforms.fogFar!.value).toBe(NIGHT_LIGHTING.fogFar);
+    expect(targets.waterMat.uniforms.fogNear!.value).toBe(NIGHT_LIGHTING.fogNear);
+    expect(targets.waterMat.uniforms.fogFar!.value).toBe(NIGHT_LIGHTING.fogFar);
+    applyDayNight(targets, false);
+    expect(fog.near).toBe(DAY_LIGHTING.fogNear);
+    expect(fog.far).toBe(DAY_LIGHTING.fogFar);
+    expect(targets.terrainMat.uniforms.fogNear!.value).toBe(DAY_LIGHTING.fogNear);
+    expect(targets.terrainMat.uniforms.fogFar!.value).toBe(DAY_LIGHTING.fogFar);
+    expect(targets.waterMat.uniforms.fogNear!.value).toBe(DAY_LIGHTING.fogNear);
+    expect(targets.waterMat.uniforms.fogFar!.value).toBe(DAY_LIGHTING.fogFar);
   });
 
   it("writes the terrain/water shader triples and toggles back to day", () => {

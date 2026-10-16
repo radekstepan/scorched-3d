@@ -40,7 +40,7 @@ describe("placeDayFog", () => {
 
   it("scatters a sparse few banks inside the map, lifted off the surface", () => {
     // Here and there, not a blanket.
-    expect(DAY_FOG_COUNT).toBeLessThanOrEqual(16);
+    expect(DAY_FOG_COUNT).toBeLessThanOrEqual(24);
     const anchors = placeDayFog(mulberry32(7), WORLD_W, WORLD_D, DAY_FOG_COUNT, flatSurface);
     expect(anchors).toHaveLength(DAY_FOG_COUNT);
     for (const a of anchors) {
@@ -60,8 +60,8 @@ describe("placeDayFog", () => {
       expect(a.radius).toBeGreaterThan(0);
       expect(a.radius).toBeLessThanOrEqual(DAY_FOG_DRIFT_RADIUS * 1.4);
     }
-    // Subtle by contract: even the strongest bank stays translucent.
-    expect(DAY_FOG_MAX_PEAK).toBeLessThanOrEqual(0.25);
+    // Present but translucent by contract: even the strongest bank stays sheer.
+    expect(DAY_FOG_MAX_PEAK).toBeLessThanOrEqual(0.3);
   });
 
   it("holds banks apart so they read as individuals, not one mass", () => {
@@ -118,6 +118,12 @@ describe("dayFogDrift", () => {
       expect(Math.abs(d.z)).toBeLessThanOrEqual(DAY_FOG_DRIFT_RADIUS);
       expect(Math.abs(d.y)).toBeLessThanOrEqual(DAY_FOG_DRIFT_RADIUS * 0.1 + 1e-9);
     }
+  });
+
+  it("lifts every bank clear of its own vertical bob", () => {
+    // Max bob = max radius * 0.1; the lift floor must clear it or low-lift
+    // banks dip under the surface at the bottom of the wander.
+    expect(DAY_FOG_MIN_LIFT).toBeGreaterThan(DAY_FOG_DRIFT_RADIUS * 1.4 * 0.1);
   });
 
   it("drifts slowly: one second barely moves a bank", () => {

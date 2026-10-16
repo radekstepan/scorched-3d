@@ -14,8 +14,8 @@ import * as THREE from "three";
  */
 
 export const DAY_FOG_SEED_XOR = 0xd9f0;
-/** Mist banks per map (one sprite each — a sparse scatter, not a blanket). */
-export const DAY_FOG_COUNT = 12;
+/** Mist banks per map (one sprite each — a loose scatter, not a blanket). */
+export const DAY_FOG_COUNT = 18;
 /** Bank tint: plain white on a day map. */
 export const DAY_FOG_TINT = 0xffffff;
 /** Bank width band in world units. */
@@ -23,16 +23,16 @@ export const DAY_FOG_MIN_WIDTH = 220;
 export const DAY_FOG_MAX_WIDTH = 420;
 /** Banks lie low: sprite height is a fraction of the width. */
 export const DAY_FOG_HEIGHT_RATIO = 0.32;
-/** Height band above the surface the banks hover in. */
-export const DAY_FOG_MIN_LIFT = 6;
+/** Height band above the surface the banks hover in. Floor 8 clears the max vertical bob (6.72). */
+export const DAY_FOG_MIN_LIFT = 8;
 export const DAY_FOG_MAX_LIFT = 20;
-/** Peak sprite opacity — subtle by design, breathed down from here. */
-export const DAY_FOG_MIN_PEAK = 0.1;
-export const DAY_FOG_MAX_PEAK = 0.2;
+/** Peak sprite opacity — present but translucent, breathed down from here. */
+export const DAY_FOG_MIN_PEAK = 0.12;
+export const DAY_FOG_MAX_PEAK = 0.28;
 /** Slow wander radius around each anchor. */
 export const DAY_FOG_DRIFT_RADIUS = 48;
-/** Min pairwise separation so banks stay scattered individuals. */
-export const DAY_FOG_MIN_SEPARATION = 700;
+/** Min pairwise separation so banks stay loose individuals, not one mass. */
+export const DAY_FOG_MIN_SEPARATION = 520;
 /** Rejection-sample attempts per patch before accepting the last candidate. */
 export const DAY_FOG_PLACE_TRIES = 12;
 /** Candidates sampled per patch; the lowest surface wins (hollows first). */

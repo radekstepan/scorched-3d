@@ -7,12 +7,17 @@ import * as THREE from "three";
  * Fog/background go deep blue so the horizon still separates from the sky.
  *
  * DAY_LIGHTING pins the exact pre-night hardcodes from TerrainCanvas, so
- * day mode renders pixel-identical to before this feature existed.
+ * day mode renders pixel-identical to before this feature existed — except
+ * the fog range, which day deliberately runs denser than the old shared
+ * values (night keeps them).
  */
 
 export interface DayNightLighting {
   background: number;
   fog: number;
+  /** Distance-fog range: day runs denser (closer far plane) than night. */
+  fogNear: number;
+  fogFar: number;
   hemiSky: number;
   hemiGround: number;
   hemiIntensity: number;
@@ -30,6 +35,8 @@ export interface DayNightLighting {
 export const DAY_LIGHTING: DayNightLighting = {
   background: 0x6aa0c8,
   fog: 0x8eb4c8,
+  fogNear: 2800,
+  fogFar: 9500,
   hemiSky: 0xb8d4f0,
   hemiGround: 0x3a3424,
   hemiIntensity: 0.45,
@@ -44,6 +51,8 @@ export const DAY_LIGHTING: DayNightLighting = {
 export const NIGHT_LIGHTING: DayNightLighting = {
   background: 0x0a1626,
   fog: 0x18293f,
+  fogNear: 3600,
+  fogFar: 12400,
   hemiSky: 0x5a7fb0,
   hemiGround: 0x141a26,
   hemiIntensity: 0.45,
@@ -100,12 +109,22 @@ function setTriple(uniform: { value: THREE.Color } | undefined, triple: [number,
  * Apply the day or night preset to the live scene objects. Colors mutate in
  * place (the fog color is aliased by the fog + shader uniforms, so one
  * `.set()` retints all three) — no object identity changes, no recompile.
+ * Fog distances are plain values (not aliased), so each target is written.
  */
 export function applyDayNight(targets: DayNightTargets, night: boolean): void {
   const p = dayNightLighting(night);
   (targets.scene.background as THREE.Color).set(p.background);
   targets.fogColor.set(p.fog);
-  (targets.scene.fog as THREE.Fog | null)?.color.set(p.fog);
+  const sceneFog = targets.scene.fog as THREE.Fog | null;
+  sceneFog?.color.set(p.fog);
+  if (sceneFog) {
+    sceneFog.near = p.fogNear;
+    sceneFog.far = p.fogFar;
+  }
+  if (targets.terrainMat.uniforms.fogNear) targets.terrainMat.uniforms.fogNear.value = p.fogNear;
+  if (targets.terrainMat.uniforms.fogFar) targets.terrainMat.uniforms.fogFar.value = p.fogFar;
+  if (targets.waterMat.uniforms.fogNear) targets.waterMat.uniforms.fogNear.value = p.fogNear;
+  if (targets.waterMat.uniforms.fogFar) targets.waterMat.uniforms.fogFar.value = p.fogFar;
   targets.hemi.color.set(p.hemiSky);
   targets.hemi.groundColor.set(p.hemiGround);
   targets.hemi.intensity = p.hemiIntensity;
