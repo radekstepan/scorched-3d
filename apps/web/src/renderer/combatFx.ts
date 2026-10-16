@@ -204,7 +204,7 @@ interface Explosion {
  * the kill), and blasts never displace movers: this kick is renderer-side
  * only, restored exactly on expiry/clear, so drive/pathing/separation never
  * see it. The matching gameplay beat is drive hesitation (see
- * `onUnitStunned`) — the mover holds briefly, it never moves.
+ * `onUnitStunned`) — the mover recoils away from the blast over the beat.
  */
 interface Nudge {
   /** Seated body position the offsets decay back to (shifted by movement). */
@@ -701,13 +701,15 @@ export class CombatFx {
   onUnitKilled: ((index: number) => void) | null = null;
   /**
    * Fired once per surviving hull per splash with the dealt fractional
-   * damage, so the canvas can hesitate that hull's drive (see
-   * `UnitMovement.stunUnit`). The visual jerk back is already posed here
-   * through the nudge map; this hook carries only the gameplay beat.
-   * Assigned by the canvas; null in headless tests. Killing blows never
-   * fire it (the wreck holds instead) and wrecks never re-fire it.
+   * damage and the blast's world X/Z, so the canvas can recoil that hull
+   * away from the hit (see `UnitMovement.stunUnit`). The visual jerk back
+   * is already posed here through the nudge map; this hook carries the
+   * gameplay slide under it. Assigned by the canvas; null in headless
+   * tests. Killing blows never fire it (the wreck holds instead) and
+   * wrecks never re-fire it.
    */
-  onUnitStunned: ((index: number, damageAdd: number) => void) | null = null;
+  onUnitStunned: ((index: number, damageAdd: number, blastX: number, blastZ: number) => void) | null =
+    null;
   /**
    * Fired once per surviving hull per hostile splash with the shooter's
    * roster index, its live position, the dealt fractional damage, and whether
@@ -1196,9 +1198,10 @@ export class CombatFx {
    * plus a hull-frame pitch/roll rock that decays back to the grade seat
    * (flank hits rock harder, see core `impactKick`). Renderer-side only:
    * blasts never displace movers, so drive/pathing/separation never see the
-   * kick — but surviving hulls do hesitate: the splash also fires
-   * `onUnitStunned` with the dealt damage, and the canvas holds that hull's
-   * drive for a damage-scaled beat while the rock plays. On graded
+   * kick — but surviving hulls also recoil: the splash fires
+   * `onUnitStunned` with the dealt damage and the blast position, and the
+   * canvas slides that hull away from the hit over a damage-scaled beat
+   * while the rock plays. On graded
    * ground the wash stretches the splash downhill and shields uphill hulls
    * behind the rise. A hull crossing the kill threshold dies exactly once:
    * its nudge settles first (wrecks hold still), then an epic explosion at
@@ -1247,11 +1250,12 @@ export class CombatFx {
         }
         this.onUnitKilled?.(i);
       }
-      // Survivors hesitate: hesitate the drive for a damage-scaled beat while
-      // the nudge rock plays the visible jerk. Killing blows skip it (the
-      // wreck holds instead) and wrecks never re-fire it.
+      // Survivors recoil: slide the hull away from the hit over a
+      // damage-scaled beat while the nudge rock plays the visible jerk.
+      // Killing blows skip it (the wreck holds instead) and wrecks never
+      // re-fire it.
       if (added > 0 && !this.destroyed[i]) {
-        this.onUnitStunned?.(i, added);
+        this.onUnitStunned?.(i, added, at.x, at.z);
         // Survivors retaliate: point the victim at whoever shot it so idle
         // hulls turn and pursue while the memory is fresh (see
         // `onUnitThreatened`). Non-hostile bursts (a wreck going up) blame

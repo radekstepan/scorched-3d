@@ -197,23 +197,27 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    const { stun: _dropped, threat: _calmed, ...rest } = mover;
+    const { stun: _dropped, recoil: _absorbed, threat: _calmed, ...rest } = mover;
     this.movers[index] = { ...rest, order: undefined, hold: true };
   }
 
   /**
-   * Hesitate a live hull's drive from a splash dealing `damageAdd`
-   * fractional damage (core `stunMover`: refresh the countdown under the
-   * caps). The hull holds its drive while the renderer-side impact rock
-   * plays the visible jerk back, then resumes — it is never displaced, so
-   * spacing, separation, and slope gating never fight the pause. Wrecks
-   * refuse the stun (they hold forever); non-positive damage is a no-op.
+   * Recoil a live hull away from a splash dealing `damageAdd` fractional
+   * damage at world (`blastX`, `blastZ`) (core `stunMover`: refresh the beat
+   * under the caps and stack the blast's shove onto the slide). The hull
+   * recoils away from the hit while the renderer-side impact rock plays the
+   * visible jerk back, then resumes its drive — the slide is terrain-gated,
+   * so spacing, separation, and slope gating never fight it. Wrecks refuse
+   * the stun (they hold forever); non-positive damage is a no-op, and a hit
+   * without a blast position holds through the beat instead of sliding.
    * Idempotent per tick: re-hits refresh, they never stack past the cap.
    */
-  stunUnit(index: number, damageAdd: number): void {
+  stunUnit(index: number, damageAdd: number, blastX?: number, blastZ?: number): void {
     const mover = this.movers[index];
     if (!mover || this.destroyed[index]) return;
-    this.movers[index] = stunMover(mover, damageAdd);
+    const blast =
+      blastX !== undefined && blastZ !== undefined ? { x: blastX, z: blastZ } : undefined;
+    this.movers[index] = stunMover(mover, damageAdd, blast);
   }
 
   /**

@@ -32,7 +32,7 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import { addScorchMark, createDamageField, type DamageField } from "./destruction.js";
-import { STUN_MAX_DURATION } from "./impact.js";
+import { IMPACT_MAX_SHOVE, impactKick, STUN_MAX_DURATION } from "./impact.js";
 import { findWorldPath, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
 import { CRUSH_DRAG, TREE_DRAG, featureDrag, trunkBlockedAt } from "./terrain.js";
@@ -270,6 +270,153 @@ describe("hit-stun hesitation", () => {
     expect(gap).toBeGreaterThan(20);
     // And the stun clock still ticked down through the shove.
     expect(next[0]!.stun).toBeCloseTo(0.75, 12);
+  });
+});
+
+describe("hit recoil", () => {
+  it("recoils away from the blast over the beat, then resumes driving", () => {
+    const route = flatRoute();
+    // Blast 30 ahead (+Z) of a yaw-0 hull: the frontal shove pushes back (−Z).
+    let mover = stunMover({ x: 0, z: 0, hull: 0, leg: 1 }, 0.16, { x: 0, z: 30 });
+    expect(mover.stun).toBe(STUN_MAX_DURATION);
+    const want = impactKick(0, 30, 0, 0, 0, 0.16);
+    expect(mover.recoil!.x).toBeCloseTo(want.shoveX, 12);
+    expect(mover.recoil!.z).toBeCloseTo(want.shoveZ, 12);
+    expect(mover.recoil!.z).toBeLessThan(0);
+    // Drain the whole beat: the hull ends displaced away from the blast by
+    // the full shove, both keys drop, and the drive resumes from the new spot.
+    const dt = 0.05;
+    let ticks = 0;
+    while (mover.stun !== undefined && ticks < 30) {
+      mover = advanceMover("flash", mover, route, dt);
+      ticks++;
+    }
+    expect(mover.stun).toBeUndefined();
+    expect(mover.recoil).toBeUndefined();
+    expect(mover.x).toBeCloseTo(want.shoveX, 9);
+    expect(mover.z).toBeCloseTo(want.shoveZ, 9);
+    const parked = { x: mover.x, z: mover.z };
+    mover = advanceMover("flash", mover, route, dt);
+    expect(Math.hypot(mover.x - parked.x, mover.z - parked.z)).toBeGreaterThan(0);
+  });
+
+  it("slides at constant velocity (half the beat, half the shove)", () => {
+    const route = flatRoute();
+    let mover = stunMover({ x: 0, z: 0, hull: 0, leg: 1 }, 0.16, { x: 0, z: 30 });
+    const total = mover.recoil!.z;
+    mover = advanceMover("flash", mover, route, 0.4);
+    expect(mover.stun).toBeCloseTo(0.4, 12);
+    expect(mover.x).toBeCloseTo(0, 12);
+    expect(mover.z).toBeCloseTo(total / 2, 12);
+    expect(mover.recoil!.z).toBeCloseTo(total / 2, 12);
+    mover = advanceMover("flash", mover, route, 0.4);
+    expect(mover.stun).toBeUndefined();
+    expect(mover.recoil).toBeUndefined();
+    expect(mover.z).toBeCloseTo(total, 12);
+  });
+
+  it("leaves misses untouched and holds directionless hits in place", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+    // Misses still return the mover untouched, even with a blast pin.
+    expect(stunMover(mover, 0, { x: 0, z: 30 })).toEqual(mover);
+    expect(stunMover(mover, -0.2, { x: 0, z: 30 })).toEqual(mover);
+    // No blast, a non-finite blast, or a coincident overhead blast (no flank
+    // to push along): the clock ticks but no slide is set, so X/Z hold.
+    for (const blast of [undefined, null, { x: Number.NaN, z: 0 }, { x: 0, z: 0 }]) {
+      const held = stunMover(mover, 0.16, blast);
+      expect(held.stun).toBe(STUN_MAX_DURATION);
+      expect(held.recoil).toBeUndefined();
+      const stepped = advanceMover("flash", held, flatRoute(), 0.05);
+      expect(stepped.x).toBe(0);
+      expect(stepped.z).toBe(0);
+      expect(stepped.stun).toBeCloseTo(STUN_MAX_DURATION - 0.05, 12);
+    }
+  });
+
+  it("stacks re-hits under the shove cap and cancels opposing ones", () => {
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+    // Two flank heavies stack but pin at the shared cap, never past it.
+    let run = stunMover(mover, 0.16, { x: 30, z: 0 });
+    run = stunMover(run, 0.16, { x: 30, z: 0 });
+    expect(Math.hypot(run.recoil!.x, run.recoil!.z)).toBeLessThanOrEqual(
+      IMPACT_MAX_SHOVE + 1e-9,
+    );
+    expect(run.recoil!.x).toBeCloseTo(-IMPACT_MAX_SHOVE, 9);
+    expect(run.recoil!.z).toBeCloseTo(0, 9);
+    // A matching hit from the far flank cancels the standing slide.
+    const cancelled = stunMover(stunMover(mover, 0.16, { x: 30, z: 0 }), 0.16, { x: -30, z: 0 });
+    expect(Math.abs(cancelled.recoil?.x ?? 0)).toBeLessThan(1e-9);
+    expect(Math.abs(cancelled.recoil?.z ?? 0)).toBeLessThan(1e-9);
+  });
+
+  it("freezes the order cursor while recoiling (slide, don't drive)", () => {
+    let mover: Mover = orderMover({ x: 0, z: 0, hull: 0, leg: 0 }, [
+      { x: 0, z: 400 },
+      { x: 400, z: 400 },
+    ]);
+    mover = stunMover(mover, 0.16, { x: 0, z: 30 });
+    const at = mover.order!.at;
+    const stepped = advanceMover("flash", mover, [], 0.05);
+    expect(stepped.order!.at).toBe(at);
+    expect(hasOrder(stepped)).toBe(true);
+    // ...but the hull still slid away from the blast (−Z).
+    expect(stepped.z).toBeLessThan(0);
+    expect(stepped.x).toBeCloseTo(0, 12);
+  });
+
+  it("absorbs the slide against a wall while the clock still ticks", () => {
+    const field = walledField();
+    // Hull near the ramp foot, blast due west: the full recoil points east
+    // into the wall grade, so every slide step refuses and X/Z pin.
+    const hx = worldX(field, 16) + 7;
+    let mover = stunMover({ x: hx, z: 0, hull: 0, leg: 1 }, 0.16, { x: hx - 30, z: 0 });
+    expect(mover.recoil!.x).toBeGreaterThan(0);
+    const dt = 0.05;
+    let ticks = 0;
+    while (mover.stun !== undefined && ticks < 30) {
+      mover = advanceMover("flash", mover, flatRoute(), dt, 1, field);
+      expect(mover.x).toBe(hx);
+      expect(mover.z).toBe(0);
+      ticks++;
+    }
+    // The beat ran out (keys dropped) without ever entering the wall.
+    expect(mover.stun).toBeUndefined();
+    expect(mover.recoil).toBeUndefined();
+  });
+
+  it("degrades a diagonal slide to the open axis at a wall", () => {
+    // Dry plateau with open water east of column 8; the hull sits 0.1 short
+    // of the column-7 line, so east steps land unwalkable while north steps
+    // stay on dry cells. (A walledField won't do: the column hugging the
+    // ramp is itself unwalkable, refusing every axis at once.)
+    const w = 12;
+    const h = 12;
+    const heights = new Uint8Array(w * h).fill(100);
+    for (let z = 0; z < h; z++) {
+      for (let x = 8; x < w; x++) heights[z * w + x] = 0;
+    }
+    const field: SeatField = { width: w, height: h, heights, seaLevel: 0 };
+    // Blast to the southwest: the recoil points east-north, the east half
+    // refuses at the water line, and the hull slides north only.
+    const hx = worldX(field, 6) + 7.9;
+    let mover = stunMover({ x: hx, z: 0, hull: 0, leg: 1 }, 0.16, { x: hx - 30, z: 30 });
+    expect(mover.recoil!.x).toBeGreaterThan(0);
+    expect(mover.recoil!.z).toBeLessThan(0);
+    const north = mover.recoil!.z;
+    mover = advanceMover("flash", mover, flatRoute(), 0.05, 1, field);
+    expect(mover.x).toBe(hx);
+    expect(mover.z).toBeLessThan(0);
+    expect(mover.stun).toBeCloseTo(STUN_MAX_DURATION - 0.05, 12);
+    // Drain the beat: the full north component lands, the east half absorbs.
+    let ticks = 1;
+    while (mover.stun !== undefined && ticks < 30) {
+      mover = advanceMover("flash", mover, flatRoute(), 0.05, 1, field);
+      expect(mover.x).toBe(hx);
+      ticks++;
+    }
+    expect(mover.stun).toBeUndefined();
+    expect(mover.recoil).toBeUndefined();
+    expect(mover.z).toBeCloseTo(north, 9);
   });
 });
 

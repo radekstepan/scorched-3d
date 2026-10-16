@@ -154,6 +154,45 @@ describe("UnitMovement", () => {
     movement.dispose();
   });
 
+  it("recoils a hit hull away from the blast — wrecks refuse", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // Hull 0 sits at (0, 0) yawed 0; a blast 30 ahead (+Z) recoils it back (−Z).
+    movement.stunUnit(0, 0.16, 0, 30);
+    const struck = movement.moverState(0)!;
+    expect(struck.stun).toBeCloseTo(0.8, 9);
+    expect(struck.recoil).toBeDefined();
+    expect(struck.recoil!.z).toBeLessThan(0);
+    // Mid-beat ticks slide the mover and the posed body away from the blast
+    // while the clock drains.
+    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    const sliding = movement.moverState(0)!;
+    expect(sliding.stun).toBeGreaterThan(0);
+    expect(sliding.stun).toBeLessThan(struck.stun!);
+    expect(sliding.z).toBeLessThan(0);
+    expect(sliding.x).toBeCloseTo(0, 9);
+    expect((units.children[0] as THREE.Group).position.z).toBeLessThan(0);
+    // Past the beat both keys drop and the drive resumes from the new spot.
+    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    const free = movement.moverState(0)!;
+    expect(free.stun).toBeUndefined();
+    expect(free.recoil).toBeUndefined();
+    // A miss with a blast pin is still a no-op (no keys appear).
+    movement.stunUnit(1, 0, 600, 630);
+    expect(movement.moverState(1)!.stun).toBeUndefined();
+    expect(movement.moverState(1)!.recoil).toBeUndefined();
+    // Wrecks refuse the recoil and stay frozen.
+    movement.markDestroyed(0);
+    const seat = { x: free.x, z: free.z };
+    movement.stunUnit(0, 0.16, seat.x, seat.z + 30);
+    expect(movement.moverState(0)!.stun).toBeUndefined();
+    expect(movement.moverState(0)!.recoil).toBeUndefined();
+    movement.update(1 / 60);
+    expect(movement.moverState(0)!.x).toBe(seat.x);
+    expect(movement.moverState(0)!.z).toBe(seat.z);
+    movement.dispose();
+  });
+
   it("drives ordered units to their target and holds on arrival", () => {
     const units = makeGroup();
     const movement = new UnitMovement(units, routes(), { groundY: () => 100 });

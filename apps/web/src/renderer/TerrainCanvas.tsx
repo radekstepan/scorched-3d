@@ -588,11 +588,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         applySelection(selection.filter((s) => s !== index));
       }
     };
-    // Hit-stun: a surviving splash hesitates that hull's drive for a
-    // damage-scaled beat (the visible jerk back is the combat nudge rock;
-    // this is the gameplay beat under it). Wrecks refuse the stun.
-    combat.onUnitStunned = (index, damageAdd) => {
-      movement.stunUnit(index, damageAdd);
+    // Hit recoil: a surviving splash recoils that hull away from the blast
+    // over a damage-scaled beat (the visible jerk back is the combat nudge
+    // rock; this is the gameplay slide under it). Wrecks refuse the stun.
+    combat.onUnitStunned = (index, damageAdd, blastX, blastZ) => {
+      movement.stunUnit(index, damageAdd, blastX, blastZ);
     };
     // Retaliation: a surviving splash points the victim at its live shooter
     // so idle/patrolling hulls turn and pursue while the memory is fresh

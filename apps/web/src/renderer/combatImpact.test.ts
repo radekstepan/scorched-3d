@@ -162,18 +162,21 @@ describe("CombatFx hit reaction", () => {
     fx.dispose();
   });
 
-  it("hesitates survivors (stun hook with dealt damage) but never the kill", () => {
+  it("recoils survivors (stun hook with dealt damage + blast pos) but never the kill", () => {
     const scene = new THREE.Scene();
     const units = makePair();
     const fx = new CombatFx(scene, units, mulberry32(21));
     fx.update(1 / 60);
-    const stunned: { index: number; damageAdd: number }[] = [];
-    fx.onUnitStunned = (index, damageAdd) => stunned.push({ index, damageAdd });
-    // A fringe splash on hull 0 hesitates it with its dealt damage...
+    const stunned: { index: number; damageAdd: number; blastX: number; blastZ: number }[] = [];
+    fx.onUnitStunned = (index, damageAdd, blastX, blastZ) =>
+      stunned.push({ index, damageAdd, blastX, blastZ });
+    // A fringe splash on hull 0 recoils it with its dealt damage + blast pin...
     splash(fx, 5, 100, 0, "flash");
     expect(stunned.length).toBeGreaterThan(0);
     expect(stunned[0]!.index).toBe(0);
     expect(stunned[0]!.damageAdd).toBeGreaterThan(0);
+    expect(stunned[0]!.blastX).toBe(5);
+    expect(stunned[0]!.blastZ).toBe(0);
     expect(fx.isDestroyedAt(0)).toBe(false);
     // ...but the finishing blow stuns nothing: the wreck holds instead.
     stunned.length = 0;

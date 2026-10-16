@@ -1,7 +1,7 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
-import { accumulateStun, tickStun } from "./impact.js";
+import { accumulateStun, IMPACT_MAX_SHOVE, impactKick, tickStun } from "./impact.js";
 import {
   THREAT_LEASH_RADIUS,
   clearThreat,
@@ -59,16 +59,22 @@ import type { UnitField } from "./place.js";
  * - `internal/content/compile_unit.go` unit-record fields (`MaxVelocity`,
  *   `TurnRate`) become per-kind `MOVE_SPEED` plus the shared hull turn-rate
  *   caps, instead of fixed-point yard-map stamping.
- * - Hit-stun hesitation (core `impact.ts` `stunDuration`, owned here as the
- *   mover `stun` countdown): a splashed hull holds its forward drive for a
- *   damage-scaled beat (0.25–0.8 s, re-hits refresh under the cap) while the
- *   renderer-side impact rock plays the visible jerk back away from the
- *   blast. The hull still turns and the crowd still jostles it — only its
- *   own drive pauses — so stuns compose with spacing, separation, and the
- *   slope clamp instead of fighting them. Firing is deliberately untouched:
- *   the ambient scheduler owns aim/fire per attacker/target pair, and a
- *   per-victim fire pause would fight traverse without reading any clearer
- *   than the drive beat plus the rock.
+ * - Hit recoil (core `impact.ts` `stunDuration`, owned here as the mover
+ *   `stun` countdown plus the `recoil` displacement): a splashed hull slides
+ *   away from the blast over a damage-scaled beat (0.25–0.8 s, re-hits
+ *   refresh under the cap) instead of freezing in place — the same
+ *   side-biased, capped shove the renderer poses as the visible jerk
+ *   (`impactKick`) also becomes gameplay displacement, drained at constant
+ *   velocity while the rock plays. The hull still turns toward its frozen
+ *   target and the crowd still jostles it; only its own drive is overridden,
+ *   and the slide is terrain-gated (a hull slammed against a cliff keeps the
+ *   beat but loses the slide), so recoils compose with spacing, separation,
+ *   and the slope clamp instead of fighting them. Directionless hits (no
+ *   blast position, or a coincident overhead blast with no flank to push
+ *   along) keep the old hold: the clock ticks with no slide. Firing is
+ *   deliberately untouched: the ambient scheduler owns aim/fire per
+ *   attacker/target pair, and a per-victim fire pause would fight traverse
+ *   without reading any clearer than the recoil plus the rock.
  * - Retaliation pursuit (core `retaliation.ts`, threat memory owned here as
  *   the mover `threat` field): a splashed idle/patrolling hull steers toward
  *   its attacker's last-known position through the same drive — freezing its
@@ -179,16 +185,28 @@ export interface Mover {
    */
   stuck?: number;
   /**
-   * Seconds of hit-stun hesitation remaining (core `stunDuration`): a hull
-   * splashed by a blast holds its drive while the renderer-side rock plays,
-   * then resumes. The hull still turns toward its target and the crowd can
-   * still jostle it via separation — only forward drive pauses — so stuns
-   * never fight spacing, separation, or slope gating. Absent (not zero)
-   * when unstunned, matching the `stuck` convention. Wrecks never carry it
-   * (the renderer refuses stuns for destroyed hulls and freezes their
-   * movers), and firing is untouched — see the module docstring.
+   * Seconds of hit-recoil beat remaining (core `stunDuration`): a hull
+   * splashed by a blast slides away from it (see `recoil`) while the
+   * renderer-side rock plays, then resumes its drive. The hull still turns
+   * toward its target and the crowd can still jostle it via separation —
+   * only forward drive is overridden — so recoils never fight spacing,
+   * separation, or slope gating. Absent (not zero) when unrecoiled, matching
+   * the `stuck` convention. Wrecks never carry it (the renderer refuses
+   * stuns for destroyed hulls and freezes their movers), and firing is
+   * untouched — see the module docstring.
    */
   stun?: number;
+  /**
+   * Remaining recoil displacement in world units (the `impactKick` shove for
+   * the blast, stacked under `IMPACT_MAX_SHOVE`): drained at constant
+   * velocity over the `stun` beat in `tickStunned`, so the hull recoils away
+   * from the blast instead of freezing. Terrain-gated per tick (blocked
+   * slides degrade to axis slides, then absorb), and dropped with the clock
+   * on expiry. Absent — never zero — when there is nothing left to slide,
+   * matching the `stun` convention; directionless hits never set it (the
+   * clock ticks as a pure hold).
+   */
+  recoil?: { x: number; z: number };
   /**
    * Player-issued move order: a smoothed world-space waypoint list with a
    * cursor. Present while the unit drives to an ordered destination;
@@ -384,17 +402,56 @@ export function hasOrder(mover: Mover): boolean {
 
 /**
  * Stun a mover from a splash dealing `damageAdd` fractional damage: refresh
- * the hesitation countdown under the stun caps (re-hits extend, never park).
- * Pure: returns a new mover. Non-positive damage leaves the mover untouched
- * (same move, same keys — unstunned stays key-absent); wreck callers must
- * refuse stuns themselves (see `UnitMovement.stunUnit`).
+ * the recoil-beat countdown under the stun caps (re-hits extend, never
+ * park) and — when `blast` pins the splash in world X/Z — stack the blast's
+ * `impactKick` shove onto the standing recoil slide, so the hull recoils
+ * away from the hit instead of freezing. Pure: returns a new mover.
+ * Non-positive damage leaves the mover untouched (same move, same keys —
+ * unrecoiled stays key-absent); directionless hits (no `blast`, a
+ * non-finite blast, or a coincident overhead blast with no flank to push
+ * along) set the clock alone and the hull holds through the beat. Wreck
+ * callers must refuse stuns themselves (see `UnitMovement.stunUnit`).
  */
-export function stunMover(mover: Mover, damageAdd: number): Mover {
+export function stunMover(
+  mover: Mover,
+  damageAdd: number,
+  blast?: { x: number; z: number } | null,
+): Mover {
   const current = mover.stun ?? 0;
   const next = accumulateStun(current, damageAdd);
   if (!(next > 0)) return mover;
-  if (next === current && mover.stun !== undefined) return mover;
-  return { ...mover, stun: next };
+  let recoil = mover.recoil;
+  if (blast && Number.isFinite(blast.x) && Number.isFinite(blast.z)) {
+    const kick = impactKick(blast.x, blast.z, mover.x, mover.z, mover.hull, damageAdd);
+    if (kick.shoveX !== 0 || kick.shoveZ !== 0) {
+      recoil = stackRecoil(recoil, { x: kick.shoveX, z: kick.shoveZ });
+    }
+  }
+  if (next === current && mover.stun !== undefined && recoil === mover.recoil) return mover;
+  const out: Mover = { ...mover, stun: next };
+  if (recoil && (recoil.x !== 0 || recoil.z !== 0)) out.recoil = recoil;
+  else delete out.recoil;
+  return out;
+}
+
+/**
+ * Stack a fresh recoil shove onto the standing slide, clamped to the shared
+ * shove cap: sustained fire keeps pushing the hull instead of restarting
+ * the slide, and a volley never launches it past `IMPACT_MAX_SHOVE`.
+ * Mirrors `accumulateImpact`'s shove clamp (same cap, same magnitude
+ * pinning) without the tilt the mover never poses. Pure.
+ */
+function stackRecoil(
+  current: { x: number; z: number } | undefined,
+  kick: { x: number; z: number },
+): { x: number; z: number } {
+  const x = (current?.x ?? 0) + kick.x;
+  const z = (current?.z ?? 0) + kick.z;
+  const mag = Math.hypot(x, z);
+  if (mag > IMPACT_MAX_SHOVE && mag > 0) {
+    return { x: (x / mag) * IMPACT_MAX_SHOVE, z: (z / mag) * IMPACT_MAX_SHOVE };
+  }
+  return { x, z };
 }
 
 /**
@@ -486,13 +543,13 @@ export function advanceMover(
   tactics?: PursuitTactics | null,
 ): Mover {
   if (!(dt > 0)) return mover;
-  // Hit-stunned: hold the drive while the renderer-side rock plays (the hull
-  // still turns toward its current target and the clock ticks down, but no
-  // order cursor advances, no step is taken, and no blocked time accrues —
-  // so the pause never fights orders, patrol legs, or the slope clamp).
+  // Hit-stunned: recoil away from the blast while the renderer-side rock
+  // plays (the hull still turns toward its current target and the clock
+  // ticks down, but no order cursor advances and no blocked time accrues —
+  // so the slide never fights orders, patrol legs, or the slope clamp).
   // Separation still applies afterward in `advanceMovers`: the crowd can
-  // jostle a stunned hull, it just cannot drive itself.
-  if ((mover.stun ?? 0) > 0) return tickStunned(kind, mover, route, dt);
+  // jostle a recoiling hull, it just cannot drive itself.
+  if ((mover.stun ?? 0) > 0) return tickStunned(kind, mover, route, dt, terrain);
   const order = mover.order;
   if (order && order.at < order.points.length) {
     let at = order.at;
@@ -544,12 +601,19 @@ export function advanceMover(
 /**
  * Tick a hit-stunned mover by `dt` seconds: turn the hull toward its current
  * target (order cursor or patrol leg, frozen — never advanced) at the kind's
- * turn rate, count the clock down, and hold X/Z. The key drops when the
- * clock expires so stunned-then-free snapshots compare equal with
- * never-stunned ones. Pure: returns a new mover.
+ * turn rate, count the clock down, and drain the standing recoil slide so
+ * the hull recoils away from the blast instead of freezing. Both keys drop
+ * when the clock expires so recoiled-then-free snapshots compare equal with
+ * never-hit ones. Pure: returns a new mover.
  */
-function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: number): Mover {
-  // The threat clock keeps ticking under stun (a hesitating hull does not
+function tickStunned(
+  kind: UnitKind,
+  mover: Mover,
+  route: RoutePoint[],
+  dt: number,
+  terrain?: SeatField | null,
+): Mover {
+  // The threat clock keeps ticking under stun (a recoiling hull does not
   // get extra memory) — pursuit itself waits until the drive resumes.
   const awake = tickThreat(mover, dt);
   const order = awake.order;
@@ -562,12 +626,48 @@ function tickStunned(kind: UnitKind, mover: Mover, route: RoutePoint[], dt: numb
   }
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const hull = target ? stepAngle(awake.hull, yawToTarget(awake, target), rate * dt) : awake.hull;
-  const remain = tickStun(awake.stun ?? 0, dt);
-  if (!(remain > 0)) {
-    const { stun: _dropped, ...rest } = awake;
-    return { ...rest, hull };
+  const clock = awake.stun ?? 0;
+  const remain = tickStun(clock, dt);
+  // Recoil slide: drain the standing knockback over the beat at constant
+  // velocity (fraction dt/clock per tick). Terrain-gated like separation —
+  // the full step degrades to axis slides, then absorbs — so a hull slammed
+  // against a cliff or the shoreline keeps the beat but loses the slide,
+  // while the order cursor stays frozen and no blocked time accrues: recoil
+  // is involuntary, never driving. Directionless hits carry no slide and
+  // hold through the beat exactly as before.
+  let x = awake.x;
+  let z = awake.z;
+  let recoil = awake.recoil;
+  const standing = recoil ? Math.hypot(recoil.x, recoil.z) : 0;
+  if (standing > 0 && clock > 0) {
+    const frac = Math.min(dt / clock, 1);
+    const sx = recoil!.x * frac;
+    const sz = recoil!.z * frac;
+    const blocked = (nx: number, nz: number): boolean =>
+      terrain ? stepBlocked(terrain, x, z, nx, nz, kind) : false;
+    let mx = 0;
+    let mz = 0;
+    if (!blocked(x + sx, z + sz)) {
+      mx = sx;
+      mz = sz;
+    } else if (sx !== 0 && !blocked(x + sx, z)) {
+      mx = sx;
+    } else if (sz !== 0 && !blocked(x, z + sz)) {
+      mz = sz;
+    }
+    x += mx;
+    z += mz;
+    const left = { x: recoil!.x - mx, z: recoil!.z - mz };
+    recoil = Math.hypot(left.x, left.z) > 1e-9 ? left : undefined;
   }
-  return { ...awake, hull, stun: remain };
+  if (!(remain > 0)) {
+    const { stun: _dropped, recoil: _absorbed, ...rest } = awake;
+    return { ...rest, hull, x, z };
+  }
+  const out: Mover = { ...awake, hull, x, z, stun: remain };
+  if (recoil) out.recoil = recoil;
+  else delete out.recoil;
+  return out;
 }
 
 /**
