@@ -17,9 +17,9 @@ describe("rebased height scale (old 2x is the new 1x)", () => {
     expect(worldHeight(100, 1.0)).toBe(200);
   });
 
-  it("preserves the previous 3.0x opening view at the new default", () => {
-    expect(DEFAULT_EXAGGERATION).toBe(1.5);
-    expect(worldHeight(100, DEFAULT_EXAGGERATION)).toBe(300);
+  it("opens at the 1x slider stop (old 2x view)", () => {
+    expect(DEFAULT_EXAGGERATION).toBe(1.0);
+    expect(worldHeight(100, DEFAULT_EXAGGERATION)).toBe(200);
   });
 
   it("keeps the default inside the rebased slider range (0.5–3)", () => {
@@ -32,7 +32,7 @@ describe("rebased height scale (old 2x is the new 1x)", () => {
   it("maps the rebased slider back onto the old 1–6 shader scale", () => {
     expect(effectiveExaggeration(MIN_EXAGGERATION)).toBe(1.0);
     expect(effectiveExaggeration(1.0)).toBe(2.0);
-    expect(effectiveExaggeration(DEFAULT_EXAGGERATION)).toBe(3.0);
+    expect(effectiveExaggeration(DEFAULT_EXAGGERATION)).toBe(2.0);
     expect(effectiveExaggeration(MAX_EXAGGERATION)).toBe(6.0);
   });
 

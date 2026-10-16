@@ -143,10 +143,10 @@ export const MAX_EXAGGERATION = 3.0;
 
 /**
  * Default render-time height exaggeration (height-scale slider start).
- * 1.5x renders exactly the previous 3.0x opening view (2 * 1.5), inside the
- * rebased 0.5–3 slider range.
+ * 1x renders exactly the old 2x opening view (2 * 1), inside the rebased
+ * 0.5–3 slider range.
  */
-export const DEFAULT_EXAGGERATION = 1.5;
+export const DEFAULT_EXAGGERATION = 1.0;
 
 /**
  * Rendered world height of a raw heightfield unit under an exaggeration:
