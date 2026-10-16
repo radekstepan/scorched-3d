@@ -9,8 +9,10 @@ import {
   BARREL_MOUNT,
   clampElevation,
   disperseAim,
+  ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_MIN,
+  ELEVATION_SLEW_RATE,
   flightClearsTerrain,
   flightClearsTrees,
   flightStickChance,
@@ -38,6 +40,7 @@ import {
   solveDirect,
   solveShot,
   solveShotClearing,
+  stepElevation,
   TERRAIN_GRAZE,
   treesOnSegment,
   treeStickChance,
@@ -307,10 +310,39 @@ describe("ranges", () => {
     expect(inRange("flash", 1000)).toBe(false);
   });
 
-  it("clamps barrel elevation to the mount limits", () => {
-    expect(clampElevation(0.3)).toBe(0.3);
-    expect(clampElevation(99)).toBe(ELEVATION_MAX);
-    expect(clampElevation(-99)).toBe(ELEVATION_MIN);
+  it("clamps barrel elevation to the per-kind mount limits", () => {
+    expect(clampElevation(0.3, "hammer")).toBe(0.3);
+    // Artillery mount refuses near-vertical lays (70° howitzer band).
+    expect(ELEVATION_MAX.hammer).toBeCloseTo((7 * Math.PI) / 18, 12);
+    expect(clampElevation(99, "hammer")).toBe(ELEVATION_MAX.hammer);
+    expect(clampElevation(99, "hammer")).toBeLessThan(1.25);
+    expect(clampElevation(-99, "hammer")).toBe(ELEVATION_MIN);
+    // Other mounts keep the legacy near-vertical ceiling.
+    for (const kind of UNIT_KINDS) {
+      if (kind === "hammer") continue;
+      expect(ELEVATION_MAX[kind]).toBe(1.45);
+      expect(clampElevation(99, kind)).toBe(1.45);
+      expect(clampElevation(-99, kind)).toBe(ELEVATION_MIN);
+    }
+  });
+
+  it("cranks heavy barrels slowest (elevation slew trails turret yaw)", () => {
+    for (const kind of UNIT_KINDS) {
+      expect(ELEVATION_SLEW_RATE[kind]).toBeGreaterThan(0);
+    }
+    // The howitzer lays slowest; the infantry hand-cannon flicks fastest.
+    expect(ELEVATION_SLEW_RATE.hammer).toBeLessThan(ELEVATION_SLEW_RATE.stump);
+    expect(ELEVATION_SLEW_RATE.stump).toBeLessThan(ELEVATION_SLEW_RATE.peewee);
+    expect(ELEVATION_AIM_TOLERANCE).toBeGreaterThan(0);
+    expect(ELEVATION_AIM_TOLERANCE).toBeLessThan(0.1);
+  });
+
+  it("steps elevation linearly toward the goal without wrapping", () => {
+    expect(stepElevation(0, 1, 0.4)).toBeCloseTo(0.4, 12);
+    expect(stepElevation(0, 1, 5)).toBe(1);
+    expect(stepElevation(1, 0, 0.25)).toBeCloseTo(0.75, 12);
+    expect(stepElevation(0.7, 0.1, 0.01)).toBeCloseTo(0.69, 12);
+    expect(stepElevation(-0.1, -0.15, 1)).toBe(-0.15);
   });
 });
 
@@ -416,12 +448,17 @@ describe("tree interception", () => {
     expect(flightClearsTrees(a, low.velocity, GRAVITY, low.duration, [])).toBe(true);
   });
 
-  it("lobs shells over blocked canopy while bolts stay flat", () => {
+  it("refuses beyond-mount lobs: artillery fires flat into blocked canopy", () => {
     const trees = copse;
+    // The 400-unit high root is near-vertical (~84°) — past the hammer's 70°
+    // mount — so the lob is refused and the flat round leaves instead (the
+    // interception roll may catch it in the branches).
+    const high = solveBallisticHigh(a, b, 520, GRAVITY)!;
+    expect(high.elevation).toBeGreaterThan(ELEVATION_MAX.hammer);
     const shell = solveShotClearing("hammer", a, b, trees)!;
     expect(shell).not.toBeNull();
-    expect(shell.elevated).toBe(true);
-    expect(shell.solution.elevation).toBeGreaterThan(Math.PI / 4);
+    expect(shell.elevated).toBe(false);
+    expect(shell.solution.elevation).toBeLessThan(Math.PI / 4);
     // Open ground keeps the flat low root (no gratuitous mortar fire).
     const open = solveShotClearing("hammer", a, b, [])!;
     expect(open.elevated).toBe(false);
@@ -431,6 +468,15 @@ describe("tree interception", () => {
     const bolt = solveShotClearing("flash", a, b, trees);
     expect(bolt).not.toBeNull();
     expect(bolt!.elevated).toBe(false);
+  });
+
+  it("holds fire when even the flat root exceeds the mount (extreme up-cliff)", () => {
+    // 500 above the muzzle at 150 out: the low root needs ~76°, past the
+    // hammer's 70° mount — no solution, the gun holds fire.
+    const cliff = { x: 150, y: 530, z: 0 };
+    const low = solveBallistic(a, cliff, 520, GRAVITY)!;
+    expect(low.elevation).toBeGreaterThan(ELEVATION_MAX.hammer);
+    expect(solveShotClearing("hammer", a, cliff, [])).toBeNull();
   });
 
   it("fires the flat shell through when even the lob clips (interception may catch it)", () => {

@@ -16,6 +16,9 @@ import {
   craterDepthForIntensity,
   createUnitDamage,
   disperseAim,
+  ELEVATION_AIM_TOLERANCE,
+  ELEVATION_MAX,
+  ELEVATION_SLEW_RATE,
   flightClearsTerrain,
   flightClearsTrees,
   flightTerrainHit,
@@ -52,6 +55,7 @@ import {
   solveBallisticHigh,
   solveShotClearing,
   stepAngle,
+  stepElevation,
   THREAT_ENGAGE_RADIUS,
   treesOnSegment,
   trunksOnBarrel,
@@ -66,7 +70,7 @@ import {
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
-import { muzzleWorld, getTurret, barrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
+import { muzzleWorld, getBarrel, getTurret, barrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 
@@ -559,6 +563,14 @@ export class CombatFx {
   private pending = new Map<number, number>();
   /** Attacker → HQ-team traverse goals for ambient structure fire. */
   private pendingHq = new Map<number, number>();
+  /**
+   * Attacker → barrel elevation goal (radians), set by the launch path from
+   * the firing solution and slewed toward every frame at the kind's
+   * `ELEVATION_SLEW_RATE` — the pitch twin of the yaw traverse. Shots only
+   * leave once the tube is on the goal (see `aimBarrel`), so a lay from rest
+   * to a flat solution visibly cranks instead of snapping.
+   */
+  private elevGoal = new Map<number, number>();
   private boltGeo = new THREE.BoxGeometry(3, 3, 18);
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
@@ -1529,12 +1541,15 @@ export class CombatFx {
    * refine — so traverse motion is visible even before any shot fires. In
    * external-hull mode (patrol movement) the hull stays on its travel
    * heading and only the turret slews the clamped remainder. Structure
-   * goals slew the same way, against the live HQ position by team.
+   * goals slew the same way, against the live HQ position by team. Barrels
+   * crank toward their elevation goals alongside (see `slewBarrel`), so the
+   * tube visibly lays before the round leaves.
    */
   private slewPending(dt: number): void {
     for (const [attacker, target] of this.pending) {
       if (this.destroyed[attacker] || this.destroyed[target]) {
         this.pending.delete(attacker);
+        this.elevGoal.delete(attacker);
         continue;
       }
       const body = this.units.children[attacker] as THREE.Group | undefined;
@@ -1542,6 +1557,7 @@ export class CombatFx {
       const want = this.bearing(attacker, target);
       if (!body || !kind || want === null) {
         this.pending.delete(attacker);
+        this.elevGoal.delete(attacker);
         continue;
       }
       const pose = this.aim[attacker];
@@ -1556,10 +1572,12 @@ export class CombatFx {
         pose.turret = next.turret;
       }
       setUnitAim(body, pose.hull, pose.turret);
+      this.slewBarrel(attacker, body, kind, dt);
     }
     for (const [attacker, hqTeam] of this.pendingHq) {
       if (this.destroyed[attacker]) {
         this.pendingHq.delete(attacker);
+        this.elevGoal.delete(attacker);
         continue;
       }
       const hq = this.hqTargetOf(hqTeam);
@@ -1568,6 +1586,7 @@ export class CombatFx {
       const want = hq ? this.bearingToPoint(attacker, hq.x, hq.z) : null;
       if (!body || !kind || want === null) {
         this.pendingHq.delete(attacker);
+        this.elevGoal.delete(attacker);
         continue;
       }
       const pose = this.aim[attacker];
@@ -1582,7 +1601,35 @@ export class CombatFx {
         pose.turret = next.turret;
       }
       setUnitAim(body, pose.hull, pose.turret);
+      this.slewBarrel(attacker, body, kind, dt);
     }
+  }
+
+  /**
+   * Crank one attacker's barrel toward its recorded elevation goal at the
+   * kind's `ELEVATION_SLEW_RATE`. No-op without a goal or without an
+   * elevating barrel (commanders, legacy headless bodies): those aim poses
+   * never gate fire.
+   */
+  private slewBarrel(attacker: number, body: THREE.Group, kind: UnitKind, dt: number): void {
+    const goal = this.elevGoal.get(attacker);
+    if (goal === undefined || !getBarrel(body)) return;
+    const rate = ELEVATION_SLEW_RATE[kind] ?? 1.0;
+    setBarrelElevation(body, stepElevation(barrelElevation(body), goal, rate * dt));
+  }
+
+  /**
+   * Record the barrel goal from a firing solution and report whether the
+   * tube is on it (within `ELEVATION_AIM_TOLERANCE`). The launch path calls
+   * this instead of snapping the barrel: while it reports false the pending
+   * pair keeps traversing (`slewBarrel` cranks every frame) and the
+   * scheduler retries, so fire waits for the lay the way it waits for the
+   * yaw traverse. Barrel-less bodies always read aimed.
+   */
+  private aimBarrel(attacker: number, body: THREE.Group, goal: number): boolean {
+    this.elevGoal.set(attacker, goal);
+    if (!getBarrel(body)) return true;
+    return Math.abs(barrelElevation(body) - goal) <= ELEVATION_AIM_TOLERANCE;
   }
 
   /**
@@ -1809,11 +1856,12 @@ export class CombatFx {
 
   /**
    * Shared launch path for hull and structure volleys: seed the muzzle from
-   * the flat math, aim the barrel at the firing solution, re-solve from the
-   * live barrel-tip muzzle, and spawn the analytic shot. `target` is the
-   * roster index (-1 for a structure — downstream only the shooter is ever
-   * read back). Returns true when the round left, false while still
-   * traversing or out of admitted range (retry on a new pair).
+   * the flat math, lay the barrel onto the firing solution at its limited
+   * elevation rate, re-solve from the live barrel-tip muzzle, and spawn the
+   * analytic shot. `target` is the roster index (-1 for a structure —
+   * downstream only the shooter is ever read back). Returns true when the
+   * round left, false while still traversing (yaw or barrel lay), past the
+   * mount limits, or out of admitted range (retry on a new pair).
    */
   private launchShot(
     attackerIdx: number,
@@ -1861,7 +1909,14 @@ export class CombatFx {
       attack,
     );
     if (!seedClearing) return false;
-    setBarrelElevation(attacker, clampElevation(seedClearing.solution.elevation));
+    // Lay the tube onto the seed solution at its limited rate instead of
+    // snapping: while the barrel is still cranking the pair keeps traversing
+    // and the scheduler retries, the pitch twin of the yaw aim gate.
+    const seedGoal = clampElevation(seedClearing.solution.elevation, kind);
+    if (!this.aimBarrel(attackerIdx, attacker, seedGoal)) return false;
+    // On the lay: seat the tube exactly (≤tolerance away, an invisible seat)
+    // so the live muzzle re-read below matches the fired solution.
+    setBarrelElevation(attacker, seedGoal);
     attacker.updateMatrixWorld(true);
     const live = muzzleWorld(attacker);
     const start = live
@@ -1893,12 +1948,18 @@ export class CombatFx {
       if (!flightClearsTerrain(from, sol.velocity, gravity, sol.duration, this.env.groundY)) {
         if (roundShell && !clearing.elevated) {
           const high = solveBallisticHigh(from, to, profile.speed, GRAVITY);
+          const mountMax = ELEVATION_MAX[kind] ?? 1.45;
           if (
-            high && high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
+            high && high.elevation <= mountMax &&
+            high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
             flightClearsTrees(from, high.velocity, GRAVITY, high.duration, stands) &&
             flightClearsTerrain(from, high.velocity, GRAVITY, high.duration, this.env.groundY)
           ) {
-            setBarrelElevation(attacker, clampElevation(high.elevation));
+            // A within-mount lob still lays at the limited rate: crank up
+            // first, fire on a later retry once the tube is on the high root.
+            const highGoal = clampElevation(high.elevation, kind);
+            if (!this.aimBarrel(attackerIdx, attacker, highGoal)) return false;
+            setBarrelElevation(attacker, highGoal);
             sol = high;
           } else {
             this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);

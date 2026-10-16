@@ -102,16 +102,61 @@ export const FLIGHT_MAX_TIME = 3.0;
  */
 export const MIN_RANGE = 50;
 
-/** Barrel elevation clamp, radians: slight depression to near-vertical lob. */
+/**
+ * Barrel elevation clamp, radians: slight depression for every mount, and a
+ * per-kind ceiling. The hammer's 70° cap is the realistic self-propelled
+ * howitzer band (retail-adjacent pieces span 65–75°): it still makes every
+ * flat low-root shot inside doctrine range (≤16° level, ≤~67° up extreme
+ * cliffs) but refuses the near-vertical 80°+ high roots, so artillery answers
+ * blocked canopy with flat fire into the branches instead of mortar-lobbing
+ * over it, and ridge-blocked guns hold fire for a reposition. Other mounts
+ * keep the legacy near-vertical ceiling — bolts aim near-flat anyway, and the
+ * peewee's steep toss is a hand-thrown grenade, not a cannon lay.
+ */
 export const ELEVATION_MIN = -0.15;
-export const ELEVATION_MAX = 1.45;
+export const ELEVATION_MAX: Record<UnitKind, number> = {
+  flash: 1.45,
+  stump: 1.45,
+  hammer: (7 * Math.PI) / 18,
+  commander: 1.45,
+  peewee: 1.45,
+};
+
+/** Clamp a barrel elevation into the kind's physical mount range. */
+export function clampElevation(elevation: number, kind: UnitKind): number {
+  const max = ELEVATION_MAX[kind] ?? 1.45;
+  return Math.min(Math.max(elevation, ELEVATION_MIN), max);
+}
+
+/**
+ * Barrel elevation rate per kind, radians per second. Elevating gears trail
+ * the turret yaw slew (cf. `TURRET_SLEW_RATE` in facing.ts): the heavy
+ * howitzer cranks slowest, so a lay from rest to a flat solution takes ~1 s
+ * of visible traverse instead of snapping there in one frame, while the
+ * infantry hand-cannon flicks fast. Shots only leave once the tube is on the
+ * solution (see `ELEVATION_AIM_TOLERANCE`), the pitch twin of the yaw
+ * traverse-then-fire gate.
+ */
+export const ELEVATION_SLEW_RATE: Record<UnitKind, number> = {
+  flash: 1.1,
+  stump: 0.9,
+  hammer: 0.5,
+  // Torso-aimed walker: no elevating barrel, rate unused (kept for table shape).
+  commander: 1.0,
+  peewee: 1.6,
+};
+
+/** Barrel error under which a shot may leave the muzzle, radians (~2.9°). */
+export const ELEVATION_AIM_TOLERANCE = 0.05;
+
+/** Step `current` toward `target` linearly (no angle wrap), at most `maxStep`. */
+export function stepElevation(current: number, target: number, maxStep: number): number {
+  const d = target - current;
+  if (Math.abs(d) <= maxStep) return target;
+  return current + Math.sign(d) * maxStep;
+}
 /** Longest allowed canopy-lob flight, seconds (high roots hang ~7.4s). */
 export const LOBBED_MAX_TIME = 8;
-
-/** Clamp a barrel elevation into the physical mount range. */
-export function clampElevation(elevation: number): number {
-  return Math.min(Math.max(elevation, ELEVATION_MIN), ELEVATION_MAX);
-}
 
 /**
  * Max engagement range per kind, world units (retail's admission range
@@ -782,13 +827,16 @@ export function solvePeeweeGrenade(
 }
 
 /**
- * Firing solution that respects the woods. Shells prefer the flat low root,
- * but when it clips wood they lob the high root over the canopy when that
- * clears (and fits the flight-time safety net); when neither root clears,
- * the flat round still leaves — the interception roll below may catch it in
- * the branches. Bolts fly flat and cannot lob: they stay on the target line
- * and accept the stick risk, which is what makes tracers get stuck in
- * forests while artillery answers by shooting higher.
+ * Firing solution that respects the woods and the gun mount. Shells prefer
+ * the flat low root, but when it clips wood they lob the high root over the
+ * canopy when that clears, fits the flight-time safety net, and stays inside
+ * the kind's `ELEVATION_MAX` mount; when the lob is blocked — or the mount
+ * refuses it (the hammer's 70° cap rejects every near-vertical high root at
+ * doctrine ranges) — the flat round still leaves, and the interception roll
+ * below may catch it in the branches. A low root the mount cannot make (only
+ * extreme up-cliff shots) is no solution at all: the gun holds fire. Bolts
+ * fly flat and cannot lob: they stay on the target line and accept the stick
+ * risk, which is what makes tracers get stuck in forests.
  */
 export function solveShotClearing(
   kind: UnitKind,
@@ -809,14 +857,18 @@ export function solveShotClearing(
     return { solution: lob, elevated: true };
   }
   if (profile.shot === "shell") {
+    const mountMax = ELEVATION_MAX[kind] ?? 1.45;
     const low = solveBallistic(from, to, profile.speed, GRAVITY);
-    if (!low) return null;
+    // No root, or a flat root the mount cannot lay (extreme up-cliff shots):
+    // hold fire rather than launch a round the barrel cannot match.
+    if (!low || low.elevation > mountMax) return null;
     if (flightClearsTrees(from, low.velocity, GRAVITY, low.duration, trees)) {
       return { solution: low, elevated: false };
     }
     const high = solveBallisticHigh(from, to, profile.speed, GRAVITY);
     if (
-      high && high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
+      high && high.elevation <= mountMax &&
+      high.duration > 0 && high.duration <= LOBBED_MAX_TIME &&
       flightClearsTrees(from, high.velocity, GRAVITY, high.duration, trees)
     ) {
       return { solution: high, elevated: true };

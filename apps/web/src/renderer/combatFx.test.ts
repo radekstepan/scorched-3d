@@ -5,6 +5,9 @@ import {
   HUSK_SMOKE_END,
   MAX_SCORCH_MARKS,
   ballisticPosition,
+  ELEVATION_AIM_TOLERANCE,
+  ELEVATION_MAX,
+  ELEVATION_SLEW_RATE,
   GRAVITY,
   mulberry32,
   TURRET_LIMIT,
@@ -1311,23 +1314,80 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     );
   }
 
-  it("lobs shells over blocked canopy (near-vertical barrel) instead of firing flat", () => {
+  it("fires flat into blocked canopy (mount refuses the near-vertical lob)", () => {
     const scene = new THREE.Scene();
     const units = makeArtilleryDuel();
     const fx = new CombatFx(scene, units, mulberry32(21), {
       groundY: () => 100,
       blastFeatures: () => {},
-      // Crown centered on the flat arc between the hulls (x≈16 world).
-      treeStands: () => [{ x: 16, z: 8, groundY: 91, standing: true }],
+      // Crown centered on the flat arc between the hulls: the seated hulls
+      // ride at y≈200, so the crown center sits at y≈226 (x≈16 world).
+      treeStands: () => [{ x: 16, z: 8, groundY: 202, standing: true }],
       strikeTree: () => {},
     });
-    let lobbed = false;
-    for (let n = 0; n < 6000 && !lobbed; n++) {
+    let flat = false;
+    let peak = 0;
+    for (let n = 0; n < 6000; n++) {
       fx.update(1 / 60);
-      lobbed = hammerBarrels(units).some((e) => e > 1.0);
+      for (const e of hammerBarrels(units)) {
+        if (Number.isNaN(e)) continue;
+        if (e < 0.5) flat = true;
+        peak = Math.max(peak, e);
+      }
     }
     expect(fx.totalFired).toBeGreaterThan(0);
-    expect(lobbed).toBe(true);
+    // The tube lays flat onto the low root instead of mortar-lobbing — and
+    // never climbs past the artillery mount, not even toward the old lob.
+    expect(flat).toBe(true);
+    expect(peak).toBeLessThanOrEqual(ELEVATION_MAX.hammer + 1e-9);
+    expect(peak).toBeLessThan(1.0);
+    fx.dispose();
+  });
+
+  it("lays the barrel at the limited elevation rate instead of snapping", () => {
+    // Flat open hammer-vs-hammer duel, both tubes pre-aimed in yaw: the only
+    // wind-up is the barrel crank from rest (0.7) down to the flat solution
+    // (~0.1), so any first round must wait out the full crank.
+    const scene = new THREE.Scene();
+    const width = 64;
+    const height = 64;
+    const map = {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      units: [
+        { kind: "hammer", cellX: 20, cellZ: 32, rotation: Math.PI / 2 },
+        { kind: "hammer", cellX: 45, cellZ: 32, rotation: -Math.PI / 2 },
+      ],
+    } as unknown as TNTMap;
+    const units = buildUnits(map, 1);
+    const fx = new CombatFx(scene, units, mulberry32(21), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    const tubes = () => hammerBarrels(units).filter((e) => !Number.isNaN(e));
+    let prev = tubes();
+    let maxStep = 0;
+    let firedTick = -1;
+    for (let n = 0; n < 3000 && firedTick < 0; n++) {
+      fx.update(1 / 60);
+      const now = tubes();
+      for (let i = 0; i < now.length; i++) {
+        maxStep = Math.max(maxStep, Math.abs(now[i]! - prev[i]!));
+      }
+      prev = now;
+      if (fx.totalFired > 0) firedTick = n;
+    }
+    expect(firedTick).toBeGreaterThan(0);
+    // No frame ever snaps the tube: per-tick motion stays within one slew
+    // step plus the final invisible seat (≤ aim tolerance), far below the
+    // ~0.6 rad rest-to-solution lay a snap would cover in one tick.
+    expect(maxStep).toBeLessThanOrEqual(
+      Math.max(ELEVATION_SLEW_RATE.hammer / 60, ELEVATION_AIM_TOLERANCE) + 1e-9,
+    );
+    // And the lay is a visible wind-up, not an instant pose: the crank alone
+    // needs dozens of ticks before the first round leaves.
+    expect(firedTick).toBeGreaterThan(30);
     fx.dispose();
   });
 
@@ -1338,12 +1398,14 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
       groundY: () => 100,
       blastFeatures: () => {},
     });
+    // Full budget, no early exit: the barrel now poses flat while cranking
+    // toward the lay, so a flat barrel no longer implies a round has left.
     let flat = false;
-    for (let n = 0; n < 6000 && !flat; n++) {
+    for (let n = 0; n < 6000; n++) {
       fx.update(1 / 60);
       // Low root for ~400 units sits near 0.1 rad — far below the rest
-      // pose (0.7) and the lob (>1.0).
-      flat = hammerBarrels(units).some((e) => e < 0.5);
+      // pose (0.7).
+      flat = flat || hammerBarrels(units).some((e) => e < 0.5);
     }
     expect(fx.totalFired).toBeGreaterThan(0);
     expect(flat).toBe(true);
@@ -1427,7 +1489,7 @@ describe("CombatFx terrain collision (no shooting through hills)", () => {
     fx.dispose();
   });
 
-  it("lobs shells over the ridge that blocks their flat root", () => {
+  it("holds fire when only a beyond-mount lob clears the ridge", () => {
     const scene = new THREE.Scene();
     const width = 64;
     const height = 64;
@@ -1444,32 +1506,33 @@ describe("CombatFx terrain collision (no shooting through hills)", () => {
     const blasts: number[] = [];
     const obstructed: unknown[] = [];
     const fx = new CombatFx(scene, units, mulberry32(21), {
-      // Ridge between the hulls (world x≈16): the flat root digs in, the
-      // high root sails over.
-      groundY: (x) => (Math.abs(x - 16) < 60 ? 170 : 100),
+      // Ridge between the hulls (world x≈16): the seated hulls ride at
+      // y≈200 with the flat arc peaking ~227, so a 260 crest genuinely digs
+      // the flat root in while the high root that would sail over is past
+      // the artillery mount.
+      groundY: (x) => (Math.abs(x - 16) < 60 ? 260 : 200),
       blastFeatures: (x) => {
         blasts.push(x);
       },
     });
     fx.onObstructedShot = (...args: unknown[]) => obstructed.push(args);
     const kinds = (units.userData.units as { kind: UnitKind }[]).map((u) => u.kind);
-    let lobbed = false;
-    for (let k = 0; k < 9000 && !(lobbed && blasts.length > 0); k++) {
+    let peak = 0;
+    for (let k = 0; k < 3000; k++) {
       fx.update(1 / 60);
-      lobbed =
-        lobbed ||
-        (units.children as THREE.Group[]).some(
-          (body, i) => kinds[i] === "hammer" && getBarrel(body) && barrelElevation(body) > 1.0,
-        );
+      for (let i = 0; i < units.children.length; i++) {
+        const body = units.children[i] as THREE.Group;
+        if (kinds[i] === "hammer" && getBarrel(body)) {
+          peak = Math.max(peak, barrelElevation(body));
+        }
+      }
     }
-    expect(fx.totalFired).toBeGreaterThan(0);
-    expect(lobbed).toBe(true);
-    // Lobbed rounds arrive past the ridge (never into it), so no hold-fire.
-    expect(obstructed).toHaveLength(0);
-    expect(blasts.length).toBeGreaterThan(0);
-    // Every arrival seats near a hull (x≈∓184/216), never on the ridge
-    // face (world x 16±60): no round flew through the hill.
-    for (const x of blasts) expect(Math.abs(x - 16)).toBeGreaterThan(60);
+    // No round ever leaves into (or over) the hill — the guns hold fire and
+    // ask for a reposition, and the tubes never crank past the mount.
+    expect(fx.totalFired).toBe(0);
+    expect(blasts).toHaveLength(0);
+    expect(obstructed.length).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(ELEVATION_MAX.hammer + 1e-9);
     fx.dispose();
   });
 });
