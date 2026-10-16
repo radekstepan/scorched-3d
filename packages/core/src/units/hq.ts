@@ -146,21 +146,31 @@ export const HQ_HALL_CELLS = 12;
  * Construction pad around the works: this many cells behind the anchor
  * (under the back wall plus an apron), `HQ_PAD_HALF_WIDTH` each side of the
  * anchor row, and `HQ_PAD_FRONT_EXTRA` past `HQ_HALL_CELLS` toward the map
- * center (mouth margin). The pad is leveled to the anchor height so the
- * slab and the hall floor sit ON the ground instead of buried in it, then
- * cleared of features and painted dirt so the works reads seated.
+ * center (mouth margin). The pad is leveled UP to the highest ground it
+ * covers (see `levelHqPads`) so the slab and the hall floor sit ON the
+ * ground instead of buried in it, then cleared of features and painted dirt
+ * so the works reads seated.
  */
 export const HQ_PAD_REAR = 4;
 export const HQ_PAD_HALF_WIDTH = 3;
 export const HQ_PAD_FRONT_EXTRA = 1;
 /**
- * Exit-lane cells past the hall corridor toward the map center (cleared of
- * features only — terrain and natural tiles kept, never painted dirt — so
- * the lane out to the reinforcement staging point reads as open ground).
- * Half-width each side of the anchor row.
+ * Exit-lane cells past the hall corridor toward the map center: graded to a
+ * drivable profile (see `gradeHqExits`), cleared of features, but never
+ * painted dirt — tiles keep their natural classification so the lane out to
+ * the reinforcement staging point reads as open ground. Half-width each
+ * side of the anchor row.
  */
 export const HQ_ROAD_EXTRA = 20;
 export const HQ_ROAD_HALF_WIDTH = 2;
+/**
+ * Steepest single-cell height step the graded HQ exit driveway may take, up
+ * or down. Well inside the shared climb gate (`PATH_MAX_SLOPE` = 15, the
+ * same gate `stepBlocked` drives) and at the edge of pathfinding's free
+ * tier (slope ≤ 5 costs nothing), so reinforcements always walk the mouth
+ * out onto open ground instead of holding against a pass wall.
+ */
+export const HQ_EXIT_MAX_STEP = 5;
 /**
  * World units the concrete footing extends below the lowest ground sampled
  * under the works footprint. Covers bilinear ripple between sampled cells
@@ -279,17 +289,80 @@ export interface HqGroundField extends HqField {
 }
 
 /**
- * Level every site's construction pad to its anchor height (cut-and-fill in
- * place): the slab and the hall floor sit on flat ground at the anchor, so
- * uphill soil never buries the works and the road out stays visible. The
- * anchor cell itself is untouched by construction, so siting guards (dry
- * margin, hall-clear corridor) still hold afterwards. Deterministic.
+ * Level every site's construction pad UP to the highest ground it covers —
+ * pad cells plus their immediate apron ring (the exit road excluded: the
+ * mouth wall is a ramp job for `gradeHqExits`, not a reason to raise the
+ * whole fort). Cut-and-fill in place: siting picks low valley-floor
+ * anchors, so leveling down to the anchor dug the works into a pit with
+ * the driveway staring at a pass wall (Dust Plains rim forts sat ~15 below
+ * their mouth). Leveling up seats the slab and the hall floor ON the ground
+ * at the local top instead — the anchor cell itself rises with the pad, so
+ * dry margin and hall-clear siting guards still hold afterwards (raising
+ * ground can only dry it). Deterministic.
  */
 export function levelHqPads(field: HqField, sites: readonly HqSite[]): void {
   for (const site of sites) {
-    const anchor = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
-    for (const cell of hqPadCells(site, field.width, field.height)) {
-      field.heights[cell.cellZ * field.width + cell.cellX] = anchor;
+    const cells = hqPadCells(site, field.width, field.height);
+    const road = new Set(hqRoadCells(site, field.width, field.height).map((c) => c.cellZ * field.width + c.cellX));
+    let top = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
+    const consider = (x: number, z: number): void => {
+      if (x < 0 || z < 0 || x >= field.width || z >= field.height) return;
+      if (road.has(z * field.width + x)) return;
+      const h = field.heights[z * field.width + x] ?? 0;
+      if (h > top) top = h;
+    };
+    for (const cell of cells) {
+      consider(cell.cellX, cell.cellZ);
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dz === 0) continue;
+          consider(cell.cellX + dx, cell.cellZ + dz);
+        }
+      }
+    }
+    for (const cell of cells) {
+      field.heights[cell.cellZ * field.width + cell.cellX] = top;
+    }
+  }
+}
+
+/**
+ * Grade every site's exit driveway from the pad mouth out to the road end
+ * so reinforcements can always climb out. Walks the corridor outward from
+ * the pad-front seam (flat pad height after `levelHqPads`), following the
+ * center row's natural ground but clamping each step to `HQ_EXIT_MAX_STEP`
+ * up or down, and benches the full road width to that one profile — flat
+ * across, gentle along, like a graded dirt road. Cuts cliff walls down to a
+ * ramp, fills drops and wet dips up to a causeway; flat ground passes
+ * through untouched. Runs after `levelHqPads`, before tile classification,
+ * so tiles and units see the finished driveway. Deterministic.
+ *
+ * Nanolathe inspiration (adapted): `docs/DESIGN_ECONOMY_CONSTRUCTION.md`
+ * C17 validates the factory exit with the same per-cell gates (water,
+ * depth, height, slope) as a chosen site — here the exit is *graded* to
+ * the same climb gate the movers drive (`PATH_MAX_SLOPE`), with margin.
+ */
+export function gradeHqExits(field: HqField, sites: readonly HqSite[]): void {
+  for (const site of sites) {
+    const dir = site.team === 0 ? 1 : -1;
+    const seamX = Math.min(
+      Math.max(site.cellX + dir * (HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA), 0),
+      field.width - 1,
+    );
+    let prev = field.heights[site.cellZ * field.width + seamX] ?? 0;
+    for (let i = HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+      const x = site.cellX + dir * i;
+      if (x < 0 || x >= field.width) break;
+      const natural = field.heights[site.cellZ * field.width + x] ?? 0;
+      const lo = prev - HQ_EXIT_MAX_STEP;
+      const hi = prev + HQ_EXIT_MAX_STEP;
+      const graded = Math.min(Math.max(natural < lo ? lo : natural > hi ? hi : natural, 0), 255);
+      for (let dz = -HQ_ROAD_HALF_WIDTH; dz <= HQ_ROAD_HALF_WIDTH; dz++) {
+        const z = site.cellZ + dz;
+        if (z < 0 || z >= field.height) continue;
+        field.heights[z * field.width + x] = graded;
+      }
+      prev = graded;
     }
   }
 }

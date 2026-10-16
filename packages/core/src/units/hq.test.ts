@@ -5,6 +5,7 @@ import {
   createHqDamage,
   createHqSpawns,
   HQ_DRY_MARGIN,
+  HQ_EXIT_MAX_STEP,
   HQ_FALLBACK_DRY_MARGIN,
   HQ_FALLBACK_SLOPE,
   HQ_FOUNDATION_MARGIN,
@@ -22,6 +23,7 @@ import {
   HQ_SPAWN_MAX_INTERVAL,
   HQ_SPAWN_MIN_INTERVAL,
   HQ_SPAWN_ROSTER,
+  gradeHqExits,
   hqAnchor,
   hqCellSlope,
   hqCellX,
@@ -42,9 +44,10 @@ import {
   HQ_HIT_DAMAGE,
 } from "./hq.js";
 import { BLAST_RADIUS } from "./destruction.js";
+import { PATH_MAX_SLOPE } from "./pathfinding.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
 import { mulberry32 } from "../terrain/noise.js";
-import { classifyTile, generateMap } from "../terrain/generate.js";
+import { classifyTile, generateMap, sampleHeightField } from "../terrain/generate.js";
 import { FEATURE_EMPTY, FEATURE_FRINGE, worldHeight, type MapPreset } from "../terrain/types.js";
 
 function flatField(width = 64, height = 64, h = 40, seaLevel = 10) {
@@ -155,43 +158,47 @@ describe("placeHqs", () => {
     ];
     for (const preset of presets) {
       for (const seed of [1, 7, 42]) {
-        const map = generateMap(preset, seed);
-        const cap = hqMaxAboveSea(map);
-        // The shipped forts: the ground works were built for exactly these.
-        const sites = map.hqs;
+        // Siting invariants are measured on the raw pre-construction
+        // heightfield — the ground the siter saw — because construction
+        // raises pads UP to their local top afterwards.
+        const raw = sampleHeightField(preset, seed);
+        const cap = hqMaxAboveSea(raw);
+        const sites = placeHqs(raw, seed);
         expect(sites).toHaveLength(2);
+        // The shipped map builds its forts from exactly these sites.
+        expect(generateMap(preset, seed).hqs).toEqual(sites);
         for (const site of sites) {
-          const h = map.heights[site.cellZ * map.width + site.cellX] ?? 0;
+          const h = raw.heights[site.cellZ * raw.width + site.cellX] ?? 0;
           // Dry with margin (strict) or at worst the relaxed shore
           // margin — never beached, never submerged.
           expect(
             h,
-            `${preset} seed ${seed} team ${site.team} in water (h=${h} sea=${map.seaLevel})`,
-          ).toBeGreaterThan(map.seaLevel + HQ_FALLBACK_DRY_MARGIN);
+            `${preset} seed ${seed} team ${site.team} in water (h=${h} sea=${raw.seaLevel})`,
+          ).toBeGreaterThan(raw.seaLevel + HQ_FALLBACK_DRY_MARGIN);
           // Below the high-ground cap (with headroom) — or, on all-high
           // halves like Ashen Pass east, within 10 of the lowest dry
           // hall-clear ground in the team's half (valley floor, not peak).
-          const halfLo = site.team === 0 ? 0 : Math.floor(map.width / 2);
-          const halfHi = site.team === 0 ? Math.ceil(map.width / 2) : map.width - 1;
+          const halfLo = site.team === 0 ? 0 : Math.floor(raw.width / 2);
+          const halfHi = site.team === 0 ? Math.ceil(raw.width / 2) : raw.width - 1;
           let halfMin = Infinity;
           for (let x = halfLo; x <= halfHi; x++) {
-            for (let z = 0; z < map.height; z++) {
-              const hh = map.heights[z * map.width + x] ?? 0;
-              if (hh <= map.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
-              if (!hqHallClear(map, x, z, site.team)) continue;
+            for (let z = 0; z < raw.height; z++) {
+              const hh = raw.heights[z * raw.width + x] ?? 0;
+              if (hh <= raw.seaLevel + HQ_FALLBACK_DRY_MARGIN) continue;
+              if (!hqHallClear(raw, x, z, site.team)) continue;
               if (hh < halfMin) halfMin = hh;
             }
           }
           expect(
             h,
-            `${preset} seed ${seed} team ${site.team} on a peak (h=${h} cap=${map.seaLevel + cap + 20} halfMin=${halfMin})`,
+            `${preset} seed ${seed} team ${site.team} on a peak (h=${h} cap=${raw.seaLevel + cap + 20} halfMin=${halfMin})`,
           ).toSatisfy(
-            (v) => v <= map.seaLevel + cap + 20 || v <= halfMin + 10,
+            (v) => v <= raw.seaLevel + cap + 20 || v <= halfMin + 10,
           );
-          expect(hqCellSlope(map, site.cellX, site.cellZ)).toBeLessThanOrEqual(
+          expect(hqCellSlope(raw, site.cellX, site.cellZ)).toBeLessThanOrEqual(
             HQ_FALLBACK_SLOPE,
           );
-          expect(hqHallClear(map, site.cellX, site.cellZ, site.team)).toBe(true);
+          expect(hqHallClear(raw, site.cellX, site.cellZ, site.team)).toBe(true);
         }
       }
     }
@@ -451,29 +458,120 @@ describe("hq exit lanes", () => {
     }
   });
 
-  it("levels pads to the anchor height and leaves the rest alone", () => {
+  it("levels pads UP to the pad-plus-apron top and leaves the rest alone", () => {
     const width = 64;
     const height = 32;
-    // A steady uphill grade toward the map center: the pad must cut it flat.
+    // A steady uphill grade toward the map center: the low anchor must rise
+    // to the top of its pad + apron ring instead of digging the works into
+    // a pit at the anchor height.
     const heights = new Uint8Array(width * height);
     for (let z = 0; z < height; z++) {
       for (let x = 0; x < width; x++) heights[z * width + x] = 40 + x;
     }
     const field = { heights, width, height, seaLevel: 10 };
     const site = { team: 0 as const, cellX: 5, cellZ: 16 };
-    const anchor = 40 + 5;
+    // One past the pad's front column: the apron cell just past the front
+    // corner counts (it sits beside the road mouth, outside the road's
+    // half-width) — only the driveway columns themselves are excluded as
+    // the mouth-wall ramp job, not pad fill.
+    const top = 40 + 5 + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1;
     levelHqPads(field, [site]);
     for (const c of hqPadCells(site, width, height)) {
-      expect(field.heights[c.cellZ * width + c.cellX]).toBe(anchor);
+      expect(field.heights[c.cellZ * width + c.cellX]).toBe(top);
     }
+    // The anchor cell itself rises with the pad.
+    expect(field.heights[16 * width + 5]).toBe(top);
     // Outside the pad the grade survives (a cell past the road end).
     const farX = 5 + HQ_HALL_CELLS + HQ_ROAD_EXTRA + 1;
     expect(field.heights[16 * width + farX]).toBe(40 + farX);
     // Leveling is a no-op on an already-flat pad.
     levelHqPads(field, [site]);
     for (const c of hqPadCells(site, width, height)) {
-      expect(field.heights[c.cellZ * width + c.cellX]).toBe(anchor);
+      expect(field.heights[c.cellZ * width + c.cellX]).toBe(top);
     }
+  });
+
+  it("grades the exit driveway to capped steps: ramps walls, fills drops", () => {
+    const width = 64;
+    const height = 32;
+    const seaLevel = 10;
+    const site = { team: 0 as const, cellX: 5, cellZ: 16 };
+    // Flat pad at 60, then a cliff wall (+30 in one cell) past the mouth.
+    const heights = new Uint8Array(width * height).fill(60);
+    const mouth = 5 + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA;
+    for (let x = mouth + 1; x < width; x++) heights[16 * width + x] = 90;
+    const field = { heights, width, height, seaLevel };
+    gradeHqExits(field, [site]);
+    // The wall becomes a ramp: every step out capped at HQ_EXIT_MAX_STEP.
+    let prev = 60;
+    for (let i = HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+      const h = field.heights[16 * width + 5 + i] ?? 0;
+      expect(h - prev).toBeLessThanOrEqual(HQ_EXIT_MAX_STEP);
+      expect(h - prev).toBeGreaterThanOrEqual(-HQ_EXIT_MAX_STEP);
+      prev = h;
+    }
+    expect(prev).toBe(90); // the ramp rejoins flat high ground within the road.
+    // The full road width benches to the one center profile (flat across).
+    for (let dz = -HQ_ROAD_HALF_WIDTH; dz <= HQ_ROAD_HALF_WIDTH; dz++) {
+      expect(field.heights[(16 + dz) * width + mouth + 1]).toBe(field.heights[16 * width + mouth + 1]);
+    }
+    // The pad itself is untouched by grading.
+    for (const c of hqPadCells(site, width, height)) {
+      expect(field.heights[c.cellZ * width + c.cellX]).toBe(60);
+    }
+    // Grading is idempotent: a second pass changes nothing.
+    const snap = Uint8Array.from(field.heights);
+    gradeHqExits(field, [site]);
+    expect(field.heights).toEqual(snap);
+  });
+
+  it("fills a wet dip past the mouth up to a causeway, never below", () => {
+    const width = 64;
+    const height = 32;
+    const seaLevel = 10;
+    const site = { team: 0 as const, cellX: 5, cellZ: 16 };
+    // Flat pad at 60, then a plunge to water (8) past the mouth.
+    const heights = new Uint8Array(width * height).fill(60);
+    const mouth = 5 + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA;
+    for (let x = mouth + 1; x < mouth + 6; x++) heights[16 * width + x] = 8;
+    const field = { heights, width, height, seaLevel };
+    gradeHqExits(field, [site]);
+    let prev = 60;
+    for (let i = HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+      const h = field.heights[16 * width + 5 + i] ?? 0;
+      expect(Math.abs(h - prev)).toBeLessThanOrEqual(HQ_EXIT_MAX_STEP);
+      prev = h;
+    }
+    // The dip is an embankment now (dry): down at the cap, then back up
+    // at the cap once natural ground returns, rejoining 60 five cells on.
+    expect(field.heights[16 * width + mouth + 1]).toBe(60 - HQ_EXIT_MAX_STEP);
+    expect(field.heights[16 * width + mouth + 6]).toBe(40);
+    expect(field.heights[16 * width + mouth + 10]).toBe(60);
+  });
+
+  it("grades the mirrored east driveway toward the map center", () => {
+    const width = 64;
+    const height = 32;
+    const site = { team: 1 as const, cellX: 58, cellZ: 16 };
+    // Flat pad at 60, then a cliff wall (+30) west of the mouth.
+    const heights = new Uint8Array(width * height).fill(60);
+    const mouth = 58 - HQ_HALL_CELLS - HQ_PAD_FRONT_EXTRA;
+    for (let x = mouth - 1; x >= 0; x--) heights[16 * width + x] = 90;
+    const field = { heights, width, height, seaLevel: 10 };
+    gradeHqExits(field, [site]);
+    let prev = 60;
+    for (let i = HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+      const h = field.heights[16 * width + 58 - i] ?? 0;
+      expect(Math.abs(h - prev)).toBeLessThanOrEqual(HQ_EXIT_MAX_STEP);
+      prev = h;
+    }
+    expect(prev).toBe(90);
+  });
+
+  it("keeps the driveway step inside the climb gate the movers drive", () => {
+    // The contract with terrain.ts/pathfinding.ts: a graded step must read
+    // walkable, with wide margin (half the hard gate or better).
+    expect(HQ_EXIT_MAX_STEP).toBeLessThanOrEqual(PATH_MAX_SLOPE / 2);
   });
 
   it("clears lanes of every feature word and leaves the rest alone", () => {
@@ -522,6 +620,44 @@ describe("hq exit lanes", () => {
               map.heights[c.cellZ * map.width + c.cellX],
               `${preset} seed ${seed} team ${site.team} pad not level`,
             ).toBe(anchor);
+          }
+          // The works clears its local ground: no non-road neighbor of the
+          // pad stands above the pad top (the mouth wall is the graded
+          // ramp's job, asserted below, not a burial).
+          const padKeys = new Set(pad.map((c) => c.cellZ * map.width + c.cellX));
+          const roadKeys = new Set(road.map((c) => c.cellZ * map.width + c.cellX));
+          for (const key of padKeys) {
+            const cx = key % map.width;
+            const cz = Math.floor(key / map.width);
+            for (let dz = -1; dz <= 1; dz++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const nx = cx + dx;
+                const nz = cz + dz;
+                if (nx < 0 || nz < 0 || nx >= map.width || nz >= map.height) continue;
+                const nk = nz * map.width + nx;
+                if (padKeys.has(nk) || roadKeys.has(nk)) continue;
+                expect(
+                  map.heights[nk] ?? 0,
+                  `${preset} seed ${seed} team ${site.team} ground above the pad at (${nx},${nz})`,
+                ).toBeLessThanOrEqual(anchor);
+              }
+            }
+          }
+          // The driveway out is always climbable: every centerline step from
+          // the pad seam to the road end stays within the graded cap.
+          {
+            const dir = site.team === 0 ? 1 : -1;
+            let prev = anchor;
+            for (let i = HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+              const x = site.cellX + dir * i;
+              if (x < 0 || x >= map.width) break;
+              const h = map.heights[site.cellZ * map.width + x] ?? 0;
+              expect(
+                Math.abs(h - prev),
+                `${preset} seed ${seed} team ${site.team} driveway wall at +${i}`,
+              ).toBeLessThanOrEqual(HQ_EXIT_MAX_STEP);
+              prev = h;
+            }
           }
           for (const c of lane) {
             expect(

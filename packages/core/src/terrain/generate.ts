@@ -1,7 +1,7 @@
 import { buildPalette, TILE_RAMPS } from "./palette";
 import { clamp, fbm, hash2, lerp, mulberry32, ridged, smoothstep, warpFbm } from "./noise";
 import { placeUnits, startingUnitCount } from "../units/place.js";
-import { clearHqLanes, hqPadCells, levelHqPads, placeHqs } from "../units/hq.js";
+import { clearHqLanes, gradeHqExits, hqPadCells, levelHqPads, placeHqs } from "../units/hq.js";
 import {
   CELL_PIXELS,
   FEATURE_EMPTY,
@@ -31,29 +31,48 @@ export const MAP_WIDTH = 320;
 /** Attribute-grid height in 16-pixel cells (world extent 255 × 16 = 4080 units). */
 export const MAP_HEIGHT = 256;
 
-export function generateMap(preset: MapPreset, seed: number): TNTMap {
+/**
+ * Raw pre-construction heightfield for a preset + seed: the ground exactly
+ * as the height sampler leaves it, before HQ pads, driveways, features, or
+ * tiles. `generateMap` builds on this; tests site forts against it so
+ * siting invariants (low valley-floor anchors under the high-ground cap)
+ * are measured on the ground the siter saw, not the raised pads.
+ */
+export function sampleHeightField(preset: MapPreset, seed: number): {
+  heights: Uint8Array;
+  width: number;
+  height: number;
+  seaLevel: number;
+} {
   const width = MAP_WIDTH;
   const height = MAP_HEIGHT;
   const seaLevel = preset === "highpass" ? 0 : 75;
   const heights = new Uint8Array(width * height);
-  const features = new Uint16Array(width * height);
-  features.fill(FEATURE_EMPTY);
-
   for (let z = 0; z < height; z++) {
     for (let x = 0; x < width; x++) {
       heights[z * width + x] = sampleHeight(preset, x, z, width, height, seed, seaLevel);
     }
   }
+  return { heights, width, height, seaLevel };
+}
+
+export function generateMap(preset: MapPreset, seed: number): TNTMap {
+  const { heights, width, height, seaLevel } = sampleHeightField(preset, seed);
+  const features = new Uint16Array(width * height);
+  features.fill(FEATURE_EMPTY);
 
   stampFeatures(preset, heights, features, width, height, seaLevel, seed);
 
-  // HQ ground works: site the forts, level their construction pads to the
-  // anchor height (cut-and-fill, so the slab and hall floor sit on the
-  // ground instead of buried in it), and clear the pads + exit roads of
-  // features (trees, rocks, metal) so reinforcements drive out onto an
-  // open lane. Runs before tile classification so the pad reads flat.
+  // HQ ground works: site the forts, level their construction pads UP to
+  // the highest ground they cover (cut-and-fill, so the slab and hall floor
+  // sit on the ground instead of buried in it), grade each exit driveway
+  // out to the road end (capped steps, so reinforcements can always climb
+  // out of the mouth), and clear the pads + exit roads of features (trees,
+  // rocks, metal) so reinforcements drive out onto an open lane. Runs
+  // before tile classification so the pad reads flat and the road graded.
   const hqs = placeHqs({ heights, width, height, seaLevel }, seed);
   levelHqPads({ heights, width, height, seaLevel }, hqs);
+  gradeHqExits({ heights, width, height, seaLevel }, hqs);
   clearHqLanes({ heights, width, height, seaLevel, features }, hqs);
 
   const kinds: TileKind[] = [];
