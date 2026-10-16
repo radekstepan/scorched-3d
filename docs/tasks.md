@@ -16,24 +16,18 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-The red light on HQ, it looks like a red circle is on top of the light. Improve it, make sure it's moving inside, in the center, radiating out.
+don't zoom in so close to fly through actual ground/water etc.
 
-When a unit leaves the hq it needs to walk along the "tracks"/road from the HQ. Right now the units spawn at the end of the bridge. Commander is a bit too tall so maybe make the HQ taller.
+the red light on HQ should show circulating red light, like on a lighthouse, it's not radiating in and out, it's circling inside directing the cone of light in a particular angle that's moving.
 
-the starting view of the map should naturally match the minimap. So if I go right on the minimap the view should pan right as well.
+Greenreach. At some point each army just creates a line and nobody moves. Very stationary, it shouldn't be like that. On Dust Plains that's how they all start.
 
-pan speed 1x should be old 0.3x
+Looking at the water, the very last tile by the edge has lighter color and there is a visible hard line separating the last tiles from the rest.
 
-If I view the world from the top it's almost all brown. I don't get the brown. It's not clouds. Extra mud texture? But then fix it so it's applied on the tiles and doesn't keep changing based on which angle we look at.
+Can the reflection of a projectile flying against the ground match somewhat the actual projectile? Right now it's a circle.
 
-When you make road outside of HQ so it's cleared out for leaving units, you don't have to make it all brown. Just devoid of trees.
+Some fireflies look "stuck" in a tree and illuminte an area too much. I want gentle illumination of a small area fading away from all the fireflies.
 
-if a unit keeps firing through forest and cannot shoot through, it needs to leave the forest.
+On Dust Plains one of the HQ is set in the ground such that the driveway out is in a "pass" that's hard for units to climb out of. Make the building sit higher up to clear local terrain or adjust the terrain.
 
-Make the recoil when hit shorter, faster, with a faster recoil back. It should tilt back and forward is what I am after. But being physically pushed back a bit is nice too.
-
-At night different lights should be more noticeable, illuminate more. the "moonlight" should be a bit darker. The little flying lights should actually illuminate the area around them.
-
-A firing unit should always thinka bout getting to a better position to attack enemy, so away from trees, flanking enemy when another friendly is hitting it from another side etc. stationary is weird. But don't overdo it.
-
-peewee and commander should also have a "reloading" animation or shooting from their weapon animation.
+Add subtle fog here and there, white fog on a day map.
