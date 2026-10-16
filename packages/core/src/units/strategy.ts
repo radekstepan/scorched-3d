@@ -1,6 +1,7 @@
 import { HUNT_ENGAGE_RADIUS, HUNT_LEASH_RADIUS, THREAT_DISENGAGE_RADIUS, THREAT_MEMORY_DURATION } from "./retaliation.js";
 import type { ThreatMemory } from "./retaliation.js";
 import type { UnitKind } from "./types.js";
+import { canSpot, type SightContext } from "./visibility.js";
 
 /**
  * Strategic skirmish layer: the "when / whom / with whom" above the
@@ -313,6 +314,16 @@ export interface TargetOptions {
    * Explicit `maxDist`/`leash` still win when provided.
    */
   scout?: boolean;
+  /**
+   * Seeing surface (see `visibility.ts`): candidates must be *spotted*,
+   * not just near — terrain between the eyes hides at any range, high
+   * ground extends the gate, wood on the line shrinks it. The notice gate
+   * in force (`maxDist`, scout-aware) is the spot base. Absent, the
+   * legacy distance gate resolves exactly as before.
+   */
+  sight?: SightContext | null;
+  /** Roster kinds (eye-height fallback when `sight` carries none). */
+  kinds?: readonly (UnitKind | undefined)[] | null;
 }
 
 /**
@@ -322,7 +333,8 @@ export interface TargetOptions {
  * self/mates/wrecks/unknown sides, inside the notice gate and the anchor
  * leash), so this drops into the hunt pipeline byte-compatibly for even
  * fights while steering mismatches sensibly. Ties break to the lowest
- * roster index.
+ * roster index. With `opts.sight`, the notice gate is the spot gate
+ * (terrain hides, high ground extends, forest shrinks — see `canSpot`).
  */
 export function chooseTarget(
   self: number,
@@ -343,6 +355,8 @@ export function chooseTarget(
   const leash = opts?.leash ?? (opts?.scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS);
   const focus = opts?.focus ?? -1;
   const threatAttacker = opts?.threatAttacker ?? -1;
+  const sight = opts?.sight ?? null;
+  const kinds = opts?.kinds ?? sight?.kinds ?? null;
   let best = -1;
   let bestScore = Number.POSITIVE_INFINITY;
   for (let i = 0; i < positions.length; i++) {
@@ -353,7 +367,12 @@ export function chooseTarget(
     const foe = positions[i];
     if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
     const dist = Math.hypot(foe.x - me.x, foe.z - me.z);
-    if (!(dist <= maxDist)) continue;
+    // Spotted, not just near: the sight gate replaces the distance gate
+    // (each pair carries its own high-ground reach and forest shade), so
+    // the spot test runs instead of — never after — the `maxDist` check.
+    if (sight) {
+      if (!canSpot(self, i, positions, maxDist, sight, kinds)) continue;
+    } else if (!(dist <= maxDist)) continue;
     if (anchor && !(Math.hypot(foe.x - anchor.x, foe.z - anchor.z) <= leash)) continue;
     const score = targetScore(
       dist,
@@ -387,7 +406,9 @@ export function chooseTarget(
  * `SCOUT_LEASH_RADIUS`); every other kind resolves exactly like before.
  * The memory carries the matching leash. Pure: no rng,
  * no clocks. Even fights resolve exactly like `acquireHunt` (nearest live
- * enemy inside both gates).
+ * enemy inside both gates). With `sight`, the quarry must be spotted
+ * (see `chooseTarget` + `canSpot`); without it the legacy distance gate
+ * resolves exactly as before.
  */
 export function acquireStrategicHunt<
   M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean },
@@ -401,6 +422,7 @@ export function acquireStrategicHunt<
   threats?: readonly (ThreatMemory | undefined)[] | null,
   hp?: readonly number[] | null,
   kinds?: readonly (UnitKind | undefined)[] | null,
+  sight?: SightContext | null,
 ): M {
   if (!Number.isInteger(self) || self < 0 || self >= foes.length) return mover;
   if (alive[self] === false) return mover;
@@ -426,6 +448,8 @@ export function acquireStrategicHunt<
     anchor: anchor ?? null,
     leash: scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS,
     scout,
+    sight: sight ?? null,
+    kinds: kinds ?? null,
   });
   if (pick < 0) return mover;
   const target = foes[pick]!;

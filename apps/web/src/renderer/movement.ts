@@ -3,7 +3,9 @@ import {
   acquireStrategicHunt,
   advanceMemory,
   advanceMovers,
+  canSpotPoint,
   clearThreat,
+  eyeHeight,
   findWorldPath,
   formationTargets,
   groupSpeedCap,
@@ -21,6 +23,7 @@ import {
   slewTilt,
   snappedFormationTargets,
   squadFocus,
+  STRUCTURE_SIGHT_LIFT,
   stunMover,
   TEAM_ADVANCE_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
@@ -30,7 +33,9 @@ import {
   type PlacedUnit,
   type RoutePoint,
   type SeatField,
+  type SightContext,
   type ThreatMemory,
+  type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
 import { advanceLocomotion, applyIdleTremble, clearIdleTremble } from "./units";
@@ -64,6 +69,13 @@ export interface MovementEnv {
    * follow (otherwise the kick restore would snap the hull backward).
    */
   onShift?: (index: number, dx: number, dz: number) => void;
+  /**
+   * Live tree stands for visibility: wood on the eye-to-eye line shrinks
+   * the hunt notice gate (see `visibility.ts`). Optional so headless tests
+   * can hunt on open ground; live play shares the canvas per-tick stands
+   * snapshot with combat interception and the occlusion x-ray.
+   */
+  treeStands?: () => TreeStand[];
 }
 
 export class UnitMovement {
@@ -340,6 +352,8 @@ export class UnitMovement {
     * below, so the rest of the side engages what the scout found) — and
     * quarries are chosen, not just nearest: hulls
     * join their squad's focus and prefer wounded enemies (see `strategy.ts`).
+    * Quarries must be *spotted* through the live sight picture (see
+    * `visibility.ts`): ridges hide, high ground extends, wood shrinks.
     * Memories pointing at wrecks clear first (survivors stop guarding corpses
     * and may acquire a live enemy the same tick); position memories
     * (attacker -1: HQ seeks and team advances) survive the clear — a
@@ -386,6 +400,11 @@ export class UnitMovement {
       m.threat && m.threat.ttl > 0 ? { ...m.threat } : undefined,
     );
     const hp = this.health();
+    // Seeing surface for the sweep: hunts acquire spotted enemies, not just
+    // near ones — ridges hide, high ground extends, wood shrinks (see
+    // `visibility.ts`). One snapshot per sweep (eye heights + the shared
+    // per-tick stands), so every pair in the tick reads the same picture.
+    const sight = this.sightFor(foes);
     // Record what each side has found: the squad focus names the live enemy
     // most teammates pursue, so its position is the enemy direction. Sticky
     // — a side keeps pushing there after contact is lost. A hit already
@@ -406,10 +425,12 @@ export class UnitMovement {
         }
       }
     }
-    // Fort spotting: a hull inside its notice gate of a live enemy HQ shares
-    // the works with its whole side (team-wide HQ-known) — scouts range far
-    // enough to be the usual spotters. Live grudges win: a side already
-    // focused on a hull keeps that contact instead of turning for the fort.
+    // Fort spotting: a hull that *spots* a live enemy HQ (same sight gate
+    // as hulls — the bunker roof over the ridge line, through the wood)
+    // shares the works with its whole side (team-wide HQ-known) — scouts
+    // range far enough to be the usual spotters. Live grudges win: a side
+    // already focused on a hull keeps that contact instead of turning for
+    // the fort.
     const hqs = this.hqProvider?.() ?? [];
     if (hqs.length > 0) {
       for (let i = 0; i < this.movers.length; i++) {
@@ -422,7 +443,8 @@ export class UnitMovement {
         for (const hq of hqs) {
           if (hq.team === team) continue;
           if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
-          if (Math.hypot(hq.x - at.x, hq.z - at.z) <= notice) {
+          const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
+          if (canSpotPoint(i, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) {
             this.teamContact.set(team, { x: hq.x, z: hq.z });
             focused.add(team);
             break;
@@ -451,12 +473,12 @@ export class UnitMovement {
       const assault =
         mover.threat?.attacker === -1 && mover.threat.structure === true ? mover.threat : undefined;
       const free = mover.threat?.attacker === -1 ? clearThreat(mover) : mover;
-      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds);
+      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds, sight);
       if (!next.threat || next.threat.ttl <= 0) {
         next =
           assault !== undefined
             ? mover
-            : (this.assaultSpottedHq(next, i, teams, foes, alive, anchor) ??
+            : (this.assaultSpottedHq(next, i, teams, foes, alive, anchor, sight) ??
               this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined));
         // Active recon: a side with no contact yet still sends its scouts —
         // a free peewee ranges toward the enemy anchors instead of guarding
@@ -534,11 +556,27 @@ export class UnitMovement {
   }
 
   /**
-   * Assault a spotted fort: a free hull inside its notice gate of a live
-   * enemy HQ pushes the works as a structure assault (attacker -1 with the
-   * `structure` flag, so the sweep never clobbers it with a team advance
-   * and consistent challengers preempt through the threat hook). Returns the
-   * mover with the assault memory, or null when no enemy fort is in notice.
+   * Seeing surface for one sweep tick: per-hull eye heights on the live
+   * ground plus the shared tree stands, so hunts and fort spotting read
+   * the same picture. Pure per tick: returns a fresh context, or one with
+   * no wood when the env carries no stands (headless open ground).
+   */
+  private sightFor(foes: readonly { x: number; z: number }[]): SightContext {
+    const groundY = this.env.groundY;
+    return {
+      groundY,
+      trees: this.env.treeStands?.() ?? null,
+      eyeY: foes.map((p, i) => groundY(p.x, p.z) + eyeHeight(this.kinds[i])),
+      kinds: this.kinds,
+    };
+  }
+
+  /**
+   * Assault a spotted fort: a free hull that spots a live enemy HQ pushes
+   * the works as a structure assault (attacker -1 with the `structure`
+   * flag, so the sweep never clobbers it with a team advance and
+   * consistent challengers preempt through the threat hook). Returns the
+   * mover with the assault memory, or null when no enemy fort is spotted.
    * The assault rides the wide team-advance leash — a scout spotting the far
    * works must be allowed to march on it, not refused at the tight anchor
    * guard.
@@ -550,6 +588,7 @@ export class UnitMovement {
     foes: readonly { x: number; z: number }[],
     alive: readonly boolean[],
     anchor: { x: number; z: number } | null,
+    sight: SightContext,
   ): Mover | null {
     if (mover.threat && mover.threat.ttl > 0) return null;
     if (mover.hold || hasOrder(mover)) return null;
@@ -564,7 +603,8 @@ export class UnitMovement {
     for (const hq of hqs) {
       if (hq.team === team) continue;
       if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
-      if (Math.hypot(hq.x - at.x, hq.z - at.z) > notice) continue;
+      const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
+      if (!canSpotPoint(self, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) continue;
       if (anchor && Math.hypot(hq.x - anchor.x, hq.z - anchor.z) > TEAM_ADVANCE_LEASH_RADIUS) continue;
       return {
         ...mover,

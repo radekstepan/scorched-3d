@@ -1,4 +1,5 @@
 import type { UnitKind } from "./types.js";
+import { canSpot, type SightContext } from "./visibility.js";
 
 /**
  * AAA RTS retaliation AI: threat memory + pursuit with hysteresis and a
@@ -533,6 +534,10 @@ export function clearThreat<M extends { threat?: ThreatMemory }>(mover: M): M {
  * - The nearest such enemy inside `HUNT_ENGAGE_RADIUS` of the victim *and*
  *   inside `HUNT_LEASH_RADIUS` of `anchor` takes the memory; anything farther
  *   is beneath notice and the patrol continues.
+ * - With `sight`, candidates must also be *spotted* (see `canSpot`): terrain
+ *   between the eyes hides at any range, high ground extends the gate, and
+ *   wood on the line shrinks it. Without it the legacy distance gate
+ *   resolves exactly as before.
  */
 export function acquireHunt<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
   mover: M,
@@ -541,6 +546,7 @@ export function acquireHunt<M extends { threat?: ThreatMemory; order?: unknown; 
   foes: readonly { x: number; z: number }[],
   alive: readonly boolean[],
   anchor?: ThreatAnchor | null,
+  sight?: SightContext | null,
 ): M {
   if (!Number.isInteger(self) || self < 0 || self >= foes.length) return mover;
   if (alive[self] === false) return mover;
@@ -561,6 +567,20 @@ export function acquireHunt<M extends { threat?: ThreatMemory; order?: unknown; 
     const foe = foes[i];
     if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
     const d = Math.hypot(foe.x - me.x, foe.z - me.z);
+    if (sight) {
+      // Nearest spotted enemy: the gate is per-candidate (each pair has
+      // its own sight line and its own high-ground reach), so the spot
+      // test runs before the nearest-wins compare — a pre-check against
+      // `bestDist` would cut off elevated sight past the base gate. A
+      // farther spotted foe beats a nearer hidden one, and ties keep the
+      // legacy later-index pick.
+      if (!canSpot(self, i, foes, HUNT_ENGAGE_RADIUS, sight)) continue;
+      if (best < 0 || d <= bestDist) {
+        bestDist = d;
+        best = i;
+      }
+      continue;
+    }
     if (d <= bestDist) {
       bestDist = d;
       best = i;

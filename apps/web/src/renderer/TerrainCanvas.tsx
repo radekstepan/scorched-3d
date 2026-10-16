@@ -423,6 +423,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       groundY,
       seat,
       onShift: (index, dx, dz) => combat.shiftRecoilBase(index, dx, dz),
+      // Hunt visibility reads the same per-tick stands as projectile
+      // interception and the occlusion x-ray: sight-blocking wood and
+      // round-blocking wood can never disagree.
+      treeStands: getStands,
     }, map, {
       field: damage,
       points: allTrees,
