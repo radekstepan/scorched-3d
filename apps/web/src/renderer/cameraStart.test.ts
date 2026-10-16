@@ -24,7 +24,6 @@ function field(over: Partial<StartField> = {}): StartField {
 }
 
 const CELL = 16;
-const HW = ((160 - 1) / 2) * CELL;
 const HD = ((128 - 1) / 2) * CELL;
 
 describe("pickStartUnit", () => {
@@ -61,33 +60,27 @@ describe("commanderCameraPose", () => {
     expect(pose.target.y).toBeCloseTo(worldHeight(100, 1), 10);
   });
 
-  it("places the camera outside the map, behind the commander", () => {
+  it("places the camera outside the map, due south of the commander", () => {
     const f = field({ units: [commander] });
     const pose = commanderCameraPose(f, 1);
-    // Outside the rectangle: past at least one edge.
-    const outside = Math.abs(pose.position.x) > HW || Math.abs(pose.position.z) > HD;
-    expect(outside).toBe(true);
-    // Collinear with the center-through-commander ray (cross product ~0).
-    const cross =
-      pose.position.x * pose.target.z - pose.position.z * pose.target.x;
-    expect(Math.abs(cross)).toBeLessThan(1e-6 * Math.max(HW, HD) ** 2 + 1e-3);
-    // Camera is farther from the center than the commander (behind it).
-    const camDist = Math.hypot(pose.position.x, pose.position.z);
-    const cmdDist = Math.hypot(pose.target.x, pose.target.z);
-    expect(camDist).toBeGreaterThan(cmdDist + START_BEYOND_EDGE - 1);
+    // Outside the rectangle: past the south edge (task 139 replaced the
+    // center-through-commander ray — whose yaw varied with the spawn side
+    // and misaligned the view with the minimap — with a fixed south yaw).
+    expect(pose.position.x).toBeCloseTo(pose.target.x, 10);
+    expect(pose.position.z).toBeCloseTo(HD + START_BEYOND_EDGE, 10);
+    // South of the commander, which sits inside the map.
+    expect(pose.position.z).toBeGreaterThan(pose.target.z);
+    expect(Math.abs(pose.target.z)).toBeLessThanOrEqual(HD);
   });
 
-  it("looks inward: the commander sits between camera and map center", () => {
+  it("looks inward: due-north view from outside the south edge", () => {
     const f = field({ units: [commander] });
     const pose = commanderCameraPose(f, 1);
-    // Project the commander onto the camera->center segment: t in (0,1).
-    const cx = 0 - pose.position.x;
-    const cz = 0 - pose.position.z;
-    const ux = pose.target.x - pose.position.x;
-    const uz = pose.target.z - pose.position.z;
-    const t = (ux * cx + uz * cz) / (cx * cx + cz * cz);
-    expect(t).toBeGreaterThan(0);
-    expect(t).toBeLessThan(1);
+    // View direction has no east/west component and points north (−Z).
+    expect(pose.target.x - pose.position.x).toBeCloseTo(0, 10);
+    expect(pose.target.z - pose.position.z).toBeLessThan(0);
+    // The whole map interior lies ahead of the camera.
+    expect(pose.position.z).toBeGreaterThan(HD);
   });
 
   it("lifts the camera above the anchor", () => {
@@ -144,6 +137,55 @@ describe("commanderCameraPose", () => {
     const f = field({ units: [commander] });
     expect(commanderCameraPose(f, 1)).toEqual(commanderCameraPose(f, 1));
   });
+});
+
+describe("start view matches the minimap (task 139)", () => {
+  // Minimap mapping: u left→right is world −X→+X, v top→bottom is world
+  // −Z→+Z (minimap.ts). The opening frame must share that orientation:
+  // screen-right is world +X and away-from-viewer is world −Z, so moving
+  // right on the minimap pans the main view right. That means the camera
+  // always starts due south of its target, wherever the commander spawned.
+  /** Screen-right unit vector of a lookAt-style pose (camera up is +Y). */
+  function screenRightOf(pose: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } }) {
+    const fx = pose.target.x - pose.position.x;
+    const fz = pose.target.z - pose.position.z;
+    // right = normalize(forward × up) with up = (0,1,0): (-fz, 0, fx).
+    const cx = -fz;
+    const cz = fx;
+    const len = Math.hypot(cx, cz);
+    return { x: cx / len, y: 0, z: cz / len };
+  }
+
+  const spots = {
+    north: { kind: "commander", cellX: 80, cellZ: 10 },
+    south: { kind: "commander", cellX: 80, cellZ: 117 },
+    east: { kind: "commander", cellX: 150, cellZ: 64 },
+    west: { kind: "commander", cellX: 9, cellZ: 64 },
+    corner: { kind: "commander", cellX: 150, cellZ: 10 },
+  } as const;
+
+  for (const [name, commander] of Object.entries(spots)) {
+    it(`starts due south of a ${name}-spawned commander, outside the map`, () => {
+      const f = field({ units: [{ ...commander }] });
+      const pose = commanderCameraPose(f, 1);
+      // Target stays on the commander ground anchor.
+      expect(pose.target.x).toBeCloseTo((commander.cellX - (160 - 1) / 2) * CELL, 10);
+      expect(pose.target.z).toBeCloseTo((commander.cellZ - (128 - 1) / 2) * CELL, 10);
+      // Camera due south of the target: same X, past the south map edge.
+      expect(pose.position.x).toBeCloseTo(pose.target.x, 10);
+      expect(pose.position.z).toBeCloseTo(HD + START_BEYOND_EDGE, 10);
+      expect(pose.position.y).toBeGreaterThan(pose.target.y);
+    });
+
+    it(`screen-right is world +X (minimap right) for a ${name} spawn`, () => {
+      const f = field({ units: [{ ...commander }] });
+      const pose = commanderCameraPose(f, 1);
+      const right = screenRightOf(pose);
+      expect(right.x).toBeCloseTo(1, 9);
+      expect(right.y).toBeCloseTo(0, 9);
+      expect(right.z).toBeCloseTo(0, 9);
+    });
+  }
 });
 
 describe("startGroundY / resnapHeightDelta", () => {

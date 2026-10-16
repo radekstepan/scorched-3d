@@ -1,10 +1,14 @@
-// Initial camera pose: start behind a command unit, outside the map looking in.
+// Initial camera pose: start due south of a command unit, outside the map
+// looking north in.
 //
 // Pure, framework-free pose computation: given the placed units and the map
 // dimensions, pick the start unit (first commander, else the first unit, else
-// the map center) and put the camera on the ray from the map center through
-// the unit, past the map edge, looking back inward. Kept free of three.js so
-// it stays unit-testable in a node environment, mirroring cameraPan.ts.
+// the map center) and put the camera due south of it, past the south map
+// edge, looking north. The fixed south-behind yaw matches the minimap
+// orientation (u left→right is world −X→+X, v top→bottom is world −Z→+Z),
+// so minimap-right pans the main view right from the opening frame. Kept
+// free of three.js so it stays unit-testable in a node environment,
+// mirroring cameraPan.ts.
 import { worldHeight } from "@scorched-3d/core";
 
 export interface Vec3 {
@@ -77,10 +81,11 @@ function cellToWorldZ(field: StartField, cellZ: number, cellSize: number): numbe
 
 /**
  * Compute the initial camera pose for a map. The orbit target sits on the
- * start unit's ground anchor; the camera sits further out along the
- * center-through-unit ray, past the map edge, so the opening frame looks
- * through the commander toward the map interior. With no units the target is
- * the map center and the camera sits south of the edge.
+ * start unit's ground anchor; the camera sits due south of it, past the
+ * south map edge, so the opening frame looks due north through the
+ * commander toward the map interior with screen-right on world +X —
+ * matching the minimap orientation. With no units the target is the map
+ * center and the camera sits south of the edge (same pose family).
  */
 export function commanderCameraPose(
   field: StartField,
@@ -104,29 +109,12 @@ export function commanderCameraPose(
   const uz = cellToWorldZ(field, unit.cellZ, cellSize);
   const uy = worldHeight(cellGround(field, unit.cellX, unit.cellZ), exaggeration);
 
-  let dx = ux;
-  let dz = uz;
-  let len = Math.hypot(dx, dz);
-  if (len < 1e-6) {
-    // Unit dead center: default to looking in from the south.
-    dx = 0;
-    dz = 1;
-    len = 1;
-  }
-  dx /= len;
-  dz /= len;
-
-  // Ray parameter where center + dir*t exits the map rectangle.
-  const hw = worldW / 2;
-  const hd = worldD / 2;
-  const tx = Math.abs(dx) < 1e-9 ? Infinity : hw / Math.abs(dx);
-  const tz = Math.abs(dz) < 1e-9 ? Infinity : hd / Math.abs(dz);
-  const tEdge = Math.min(tx, tz);
-  const tCam = tEdge + START_BEYOND_EDGE;
-
+  // Due south of the anchor, past the south map edge: the anchor's X is
+  // always within the map, so the camera is always outside the rectangle,
+  // and the fixed yaw (looking due north) matches the minimap orientation.
   return {
     target: { x: ux, y: uy, z: uz },
-    position: { x: dx * tCam, y: uy + height, z: dz * tCam },
+    position: { x: ux, y: uy + height, z: worldD / 2 + START_BEYOND_EDGE },
   };
 }
 

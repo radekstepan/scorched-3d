@@ -155,7 +155,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     const camera = new THREE.PerspectiveCamera(48, 1, 2, 14000);
     const { worldW, worldD } = worldSize(map);
-    // Opening frame: behind a command unit, outside the map looking in.
+    // Opening frame: due south of a command unit, outside the map looking
+    // north in (fixed yaw matches the minimap orientation).
     const startPose = commanderCameraPose(map, options.exaggeration);
     const startUnit = pickStartUnit(map.units);
     camera.position.set(startPose.position.x, startPose.position.y, startPose.position.z);
