@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "../terrain/generate.js";
 import { FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
-import { placeUnits, teamOf, teamSpan, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
+import { placeUnits, PRESET_UNIT_COUNTS, startingUnitCount, teamOf, teamSpan, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
 import { TEAM_DEFS, TEAM_IDS, UNIT_DEFS, UNIT_KINDS } from "./types.js";
 
 const PRESETS = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"] as const;
@@ -99,7 +99,7 @@ describe("generateMap units", () => {
     const a = generateMap("caldera", 555);
     const b = generateMap("caldera", 555);
     expect(a.units).toEqual(b.units);
-    expect(a.units).toHaveLength(UNIT_COUNT);
+    expect(a.units).toHaveLength(startingUnitCount("caldera"));
   });
 
   it("re-places units when the seed changes", () => {
@@ -168,8 +168,8 @@ describe("placeUnits even teams", () => {
         const map = generateMap(preset, seed);
         const west = map.units.filter((u) => u.team === 0);
         const east = map.units.filter((u) => u.team === 1);
-        expect(west).toHaveLength(UNIT_COUNT / 2);
-        expect(east).toHaveLength(UNIT_COUNT / 2);
+        expect(west).toHaveLength(startingUnitCount(preset) / 2);
+        expect(east).toHaveLength(startingUnitCount(preset) / 2);
         const mid = map.width / 2;
         for (const u of west) expect(u.cellX).toBeLessThan(mid);
         for (const u of east) expect(u.cellX).toBeGreaterThanOrEqual(mid);
@@ -187,5 +187,38 @@ describe("placeUnits even teams", () => {
     const field = fieldOf("greenreach", 9);
     expect(placeUnits(field, 9, 2).map((u) => u.team)).toEqual([0, 1]);
     expect(placeUnits(field, 9, 5).map((u) => u.team)).toEqual([0, 0, 0, 1, 1]);
+  });
+});
+
+describe("startingUnitCount", () => {
+  it("covers every preset with an even roster of at least 2v2", () => {
+    expect(Object.keys(PRESET_UNIT_COUNTS).sort()).toEqual([...PRESETS].sort());
+    for (const preset of PRESETS) {
+      const count = startingUnitCount(preset);
+      expect(count).toBeGreaterThanOrEqual(4);
+      expect(count % 2).toBe(0);
+    }
+  });
+
+  it("doubles the baseline on Ashen Pass and scales the rest by open land", () => {
+    expect(startingUnitCount("highpass")).toBe(UNIT_COUNT * 2);
+    expect(startingUnitCount("dustplains")).toBe(10);
+    expect(startingUnitCount("rivercross")).toBe(10);
+    expect(startingUnitCount("greenreach")).toBe(UNIT_COUNT);
+    expect(startingUnitCount("caldera")).toBe(UNIT_COUNT);
+    // Cramped isles muster the smallest battle.
+    expect(startingUnitCount("archipelago")).toBeLessThan(startingUnitCount("greenreach"));
+  });
+
+  it("falls back to the baseline for unknown presets", () => {
+    expect(startingUnitCount("faraway" as never)).toBe(UNIT_COUNT);
+  });
+
+  it("is the roster every generated map ships", () => {
+    for (const preset of PRESETS) {
+      for (const seed of SEEDS) {
+        expect(generateMap(preset, seed).units).toHaveLength(startingUnitCount(preset));
+      }
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "./generate.js";
 import { findCellPath, isWalkable } from "../units/pathfinding.js";
+import { startingUnitCount } from "../units/place.js";
 import { FEATURE_EMPTY } from "./types.js";
 
 /** Battle-map guards: rivers must be fordable, plains must stay open. */
@@ -110,7 +111,7 @@ describe("battle maps", () => {
     for (const preset of ["rivercross", "dustplains"] as const) {
       for (const seed of [1, 7, 0xa11ce]) {
         const map = generateMap(preset, seed);
-        expect(map.units).toHaveLength(6);
+        expect(map.units).toHaveLength(startingUnitCount(preset));
         for (const u of map.units) {
           expect(map.heights[u.cellZ * map.width + u.cellX]).toBeGreaterThan(map.seaLevel + 4);
         }

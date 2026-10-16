@@ -1,6 +1,6 @@
 import { buildPalette, TILE_RAMPS } from "./palette";
 import { clamp, fbm, hash2, lerp, mulberry32, ridged, smoothstep, warpFbm } from "./noise";
-import { placeUnits } from "../units/place.js";
+import { placeUnits, startingUnitCount } from "../units/place.js";
 import { clearHqLanes, hqPadCells, hqRoadCells, levelHqPads, placeHqs } from "../units/hq.js";
 import {
   CELL_PIXELS,
@@ -86,7 +86,7 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
   paintHqRoads(tileMap, kinds, hqs, width, height, seed);
 
   const minimap = buildMinimap(heights, tileMap, tiles, width, height, seaLevel);
-  const units = placeUnits({ heights, features, width, height, seaLevel }, seed);
+  const units = placeUnits({ heights, features, width, height, seaLevel }, seed, startingUnitCount(preset));
 
   return {
     name: PRESET_META[preset].name,

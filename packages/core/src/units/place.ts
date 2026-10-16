@@ -1,9 +1,28 @@
-import { CELL_PIXELS, FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
+import { CELL_PIXELS, FEATURE_EMPTY, worldHeight, type MapPreset } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { TEAM_IDS, UNIT_KINDS, type PlacedUnit, type TeamId, type UnitKind } from "./types.js";
 
 /** Demo roster size: a couple of units per side, two sides. */
 export const UNIT_COUNT = 6;
+/**
+ * Starting roster per map, scaled by accessible (dry, gentle) land measured
+ * across seeds — Ashen Pass is ~100% open ground, Dust Plains ~86%, River
+ * Crossing ~80%, Glass Caldera and Greenreach ~38%, Gods Channel ~13%.
+ * Ashen Pass musters double the baseline; every entry stays even so the
+ * west/east split in `teamOf` is always exact.
+ */
+export const PRESET_UNIT_COUNTS: Record<MapPreset, number> = {
+  greenreach: 6,
+  archipelago: 4,
+  highpass: 12,
+  caldera: 6,
+  rivercross: 10,
+  dustplains: 10,
+};
+/** Roster size a map musters: its scaled count, or the baseline fallback. */
+export function startingUnitCount(preset: MapPreset): number {
+  return PRESET_UNIT_COUNTS[preset] ?? UNIT_COUNT;
+}
 /** Sides in the demo battle (Blue west, Orange east). */
 export const TEAM_COUNT = TEAM_IDS.length;
 /** Keep units away from the map edge so they never clip the skirt. */
