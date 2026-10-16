@@ -1,3 +1,7 @@
+// NOTE: the `exaggeration` uniforms below take the *effective* (rebased)
+// value — `effectiveExaggeration(slider)` from core — so the GLSL math is
+// unchanged by the height-scale rebase (new 1x = old 2x). The canvas passes
+// the converted uniform; never feed the raw slider value here.
 export const terrainVertex = /* glsl */ `
   varying vec2 vUv;
   varying vec3 vWorld;

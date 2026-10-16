@@ -1,4 +1,4 @@
-import { CELL_PIXELS, FEATURE_EMPTY } from "../terrain/types.js";
+import { CELL_PIXELS, FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { TEAM_IDS, UNIT_KINDS, type PlacedUnit, type TeamId, type UnitKind } from "./types.js";
 
@@ -178,7 +178,7 @@ export interface WorldAnchor {
 export function unitAnchor(field: UnitField, unit: PlacedUnit, exaggeration: number): WorldAnchor {
   return {
     x: (unit.cellX - (field.width - 1) / 2) * CELL_PIXELS,
-    y: (field.heights[unit.cellZ * field.width + unit.cellX] ?? 0) * exaggeration,
+    y: worldHeight(field.heights[unit.cellZ * field.width + unit.cellX] ?? 0, exaggeration),
     z: (unit.cellZ - (field.height - 1) / 2) * CELL_PIXELS,
   };
 }

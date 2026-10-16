@@ -7,6 +7,7 @@ import {
   pathWorldToCell,
   sampleHeightBilinear,
   seatHull,
+  worldHeight,
   yawToTarget,
   type RoutePoint,
   type TNTMap,
@@ -295,7 +296,7 @@ describe("terrain seating", () => {
 
   function rampEnv(field: ReturnType<typeof rampField>, ex: { v: number }) {
     return {
-      groundY: (x: number, z: number) => sampleHeightBilinear(field, x, z) * ex.v,
+      groundY: (x: number, z: number) => worldHeight(sampleHeightBilinear(field, x, z), ex.v),
       seat: (x: number, z: number, hull: number, kind: UnitKind) => seatHull(field, kind, x, z, hull, ex.v),
     };
   }

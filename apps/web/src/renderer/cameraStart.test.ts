@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { worldHeight } from "@scorched-3d/core";
 import {
   START_BEYOND_EDGE,
   commanderCameraPose,
@@ -57,7 +58,7 @@ describe("commanderCameraPose", () => {
     const pose = commanderCameraPose(f, 1);
     expect(pose.target.x).toBeCloseTo((120 - (160 - 1) / 2) * CELL, 10);
     expect(pose.target.z).toBeCloseTo((90 - (128 - 1) / 2) * CELL, 10);
-    expect(pose.target.y).toBeCloseTo(100, 10);
+    expect(pose.target.y).toBeCloseTo(worldHeight(100, 1), 10);
   });
 
   it("places the camera outside the map, behind the commander", () => {
@@ -106,7 +107,7 @@ describe("commanderCameraPose", () => {
   it("falls back to the map center viewed from the south with no units", () => {
     const f = field({ units: [] });
     const pose = commanderCameraPose(f, 2);
-    expect(pose.target).toEqual({ x: 0, y: 75 * 2, z: 0 });
+    expect(pose.target).toEqual({ x: 0, y: worldHeight(75, 2), z: 0 });
     expect(pose.position.x).toBeCloseTo(0, 10);
     expect(pose.position.z).toBeCloseTo(HD + START_BEYOND_EDGE, 10);
     expect(pose.position.y).toBeGreaterThan(pose.target.y);
@@ -148,14 +149,14 @@ describe("commanderCameraPose", () => {
 describe("startGroundY / resnapHeightDelta", () => {
   it("tracks the anchor height across exaggeration", () => {
     const f = field({ units: [{ kind: "commander", cellX: 120, cellZ: 90 }] });
-    expect(startGroundY(f, f.units[0]!, 1)).toBeCloseTo(100, 10);
-    expect(startGroundY(f, f.units[0]!, 2)).toBeCloseTo(200, 10);
-    expect(resnapHeightDelta(f, f.units[0]!, 1, 2)).toBeCloseTo(100, 10);
+    expect(startGroundY(f, f.units[0]!, 1)).toBeCloseTo(worldHeight(100, 1), 10);
+    expect(startGroundY(f, f.units[0]!, 2)).toBeCloseTo(worldHeight(100, 2), 10);
+    expect(resnapHeightDelta(f, f.units[0]!, 1, 2)).toBeCloseTo(worldHeight(100, 1), 10);
   });
 
   it("falls back to sea level without a unit", () => {
     const f = field({ units: [] });
-    expect(startGroundY(f, null, 2)).toBeCloseTo(150, 10);
-    expect(resnapHeightDelta(f, null, 1, 2)).toBeCloseTo(75, 10);
+    expect(startGroundY(f, null, 2)).toBeCloseTo(worldHeight(75, 2), 10);
+    expect(resnapHeightDelta(f, null, 1, 2)).toBeCloseTo(worldHeight(75, 1), 10);
   });
 });

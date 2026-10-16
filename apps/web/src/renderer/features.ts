@@ -4,6 +4,7 @@ import {
   fallenDecay,
   fallenSink,
   FEATURE_EMPTY,
+  worldHeight,
   type DamageField,
   type RockDamage,
   type TNTMap,
@@ -33,7 +34,7 @@ function tint(mesh: THREE.InstancedMesh, index: number, r: number, g: number, b:
 export function cellWorld(map: TNTMap, x: number, z: number, exaggeration: number): THREE.Vector3 {
   return new THREE.Vector3(
     (x - (map.width - 1) / 2) * CELL_PIXELS,
-    (map.heights[z * map.width + x] ?? 0) * exaggeration,
+    worldHeight(map.heights[z * map.width + x] ?? 0, exaggeration),
     (z - (map.height - 1) / 2) * CELL_PIXELS,
   );
 }
@@ -167,7 +168,7 @@ export function placeFeatures(
     const p = (fid < round.length ? round[fid] : pines[fid - round.length])!;
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
+    const y = worldHeight(map.heights[z * map.width + x] ?? 0, exaggeration);
     const state = field?.trees[fid] ?? "intact";
     writeTreePose(trees, dummy, fid, y, state, decaySink(state, field?.treeAge[fid] ?? 0));
   }
@@ -176,7 +177,7 @@ export function placeFeatures(
   pts.forEach((p, i) => {
     const x = Math.round(p.x / CELL_PIXELS + (map.width - 1) / 2);
     const z = Math.round(p.z / CELL_PIXELS + (map.height - 1) / 2);
-    const y = (map.heights[z * map.width + x] ?? 0) * exaggeration;
+    const y = worldHeight(map.heights[z * map.width + x] ?? 0, exaggeration);
     writeRockPose(rocks, dummy, i, y, field?.rocks[i] ?? 0);
   });
 }

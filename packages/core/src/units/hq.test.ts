@@ -35,7 +35,7 @@ import { BLAST_RADIUS } from "./destruction.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { generateMap } from "../terrain/generate.js";
-import type { MapPreset } from "../terrain/types.js";
+import { worldHeight, type MapPreset } from "../terrain/types.js";
 
 function flatField(width = 64, height = 64, h = 40, seaLevel = 10) {
   return {
@@ -81,8 +81,8 @@ describe("placeHqs", () => {
     expect(a.x).toBeLessThan(0);
     const b = hqAnchor(field, sites[1]!, 2);
     expect(b.x).toBeGreaterThan(0);
-    expect(a.y).toBe(80);
-    expect(b.y).toBe(80);
+    expect(a.y).toBe(worldHeight(40, 2));
+    expect(b.y).toBe(worldHeight(40, 2));
   });
 
   it("caps high ground relative to the map instead of preferring peaks", () => {
@@ -199,9 +199,9 @@ describe("hqFoundationDrop", () => {
     const site = { team: 0 as const, cellX: hqCellX(64, 0), cellZ: 32 };
     // Downhill dip inside the hall corridor (8 cells toward the center).
     field.heights[32 * 64 + site.cellX + 8] = 20;
-    expect(hqFoundationDrop(field, site, 2)).toBeCloseTo(20 * 2 + HQ_FOUNDATION_MARGIN, 9);
+    expect(hqFoundationDrop(field, site, 2)).toBeCloseTo(worldHeight(20, 2) + HQ_FOUNDATION_MARGIN, 9);
     // Steeper exaggeration needs a deeper skirt for the same hill.
-    expect(hqFoundationDrop(field, site, 6)).toBeCloseTo(20 * 6 + HQ_FOUNDATION_MARGIN, 9);
+    expect(hqFoundationDrop(field, site, 6)).toBeCloseTo(worldHeight(20, 6) + HQ_FOUNDATION_MARGIN, 9);
   });
 
   it("ignores ground outside the footprint and never goes above the margin", () => {

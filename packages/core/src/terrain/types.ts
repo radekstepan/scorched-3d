@@ -127,8 +127,43 @@ export interface ViewOptions {
 }
 
 /**
- * Default render-time height exaggeration (height-scale slider start).
- * 3.0x = 1.5x the previous 2.0x default for more dramatic relief; the
- * slider range (1–6) is unchanged so users can still dial it back.
+ * Base world-units-per-height-unit baked into the terrain mesh: the old
+ * slider's 2x look is the new 1x baseline, so every raw height unit renders
+ * `BASE_HEIGHT_SCALE * exaggeration` world units tall. The slider
+ * (`MIN_EXAGGERATION`–`MAX_EXAGGERATION`) now speaks in these rebased units:
+ * 1x matches the old 2x view exactly, and the full old 1–6 range maps to
+ * the new 0.5–3.
  */
-export const DEFAULT_EXAGGERATION = 3.0;
+export const BASE_HEIGHT_SCALE = 2.0;
+
+/** Lowest height-scale slider stop (renders the old 1x view). */
+export const MIN_EXAGGERATION = 0.5;
+/** Highest height-scale slider stop (renders the old 6x view). */
+export const MAX_EXAGGERATION = 3.0;
+
+/**
+ * Default render-time height exaggeration (height-scale slider start).
+ * 1.5x renders exactly the previous 3.0x opening view (2 * 1.5), inside the
+ * rebased 0.5–3 slider range.
+ */
+export const DEFAULT_EXAGGERATION = 1.5;
+
+/**
+ * Rendered world height of a raw heightfield unit under an exaggeration:
+ * the rebase factor times the slider value. Single source of truth for the
+ * raw→world mapping — geometry, water, anchors, seating, and shaders all
+ * go through here (or `effectiveExaggeration`) so the slider can't drift
+ * between subsystems.
+ */
+export function worldHeight(rawHeight: number, exaggeration: number): number {
+  return rawHeight * BASE_HEIGHT_SCALE * exaggeration;
+}
+
+/**
+ * Effective legacy-scale exaggeration for shader `exaggeration` uniforms
+ * and other code that multiplies raw heights directly: the slider value
+ * rebased back onto the old 1–6 scale the shaders were tuned against.
+ */
+export function effectiveExaggeration(exaggeration: number): number {
+  return BASE_HEIGHT_SCALE * exaggeration;
+}

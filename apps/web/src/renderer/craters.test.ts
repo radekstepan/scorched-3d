@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { CELL_PIXELS, type TNTMap } from "@scorched-3d/core";
+import { CELL_PIXELS, worldHeight, type TNTMap } from "@scorched-3d/core";
 import {
   applyCraters,
   bakeScorchBytes,
@@ -117,20 +117,20 @@ describe("applyCraters (tiny visual dents)", () => {
   it("leaves flat ground untouched with no craters", () => {
     const { map, geo } = makeGrid(5, 5, 100);
     applyCraters(geo, map, [], 3.6);
-    for (let i = 0; i < 25; i++) expect(yAt(geo, i)).toBeCloseTo(360, 9);
+    for (let i = 0; i < 25; i++) expect(yAt(geo, i)).toBeCloseTo(worldHeight(100, 3.6), 9);
   });
 
   it("dents the bowl center and spares distant vertices", () => {
     const { map, geo } = makeGrid(9, 9, 100);
     // Center vertex sits at world (0, 0); radius covers ~2 cells.
     applyCraters(geo, map, [{ x: 0, z: 0, radius: 2 * CELL_PIXELS, depth: 1 }], 2);
-    expect(yAt(geo, 40)).toBeCloseTo((100 - 1) * 2, 9);
+    expect(yAt(geo, 40)).toBeCloseTo(worldHeight(100 - 1, 2), 9);
     // Corner vertex (~5.6 cells out) is past the rim: untouched.
-    expect(yAt(geo, 0)).toBeCloseTo(200, 9);
+    expect(yAt(geo, 0)).toBeCloseTo(worldHeight(100, 2), 9);
     // Midway vertex is partially dented.
     const mid = yAt(geo, 39);
-    expect(mid).toBeLessThan(200);
-    expect(mid).toBeGreaterThan(198);
+    expect(mid).toBeLessThan(worldHeight(100, 2));
+    expect(mid).toBeGreaterThan(worldHeight(99, 2));
   });
 
   it("scales dents with exaggeration and re-runs deterministically", () => {
@@ -140,13 +140,13 @@ describe("applyCraters (tiny visual dents)", () => {
     const b = makeGrid(7, 7, 80);
     applyCraters(b.geo, b.map, [crater], 3);
     // Same dent, triple the exaggeration: triple the world depth.
-    const dropA = 80 - yAt(a.geo, 24);
-    const dropB = 240 - yAt(b.geo, 24);
+    const dropA = worldHeight(80, 1) - yAt(a.geo, 24);
+    const dropB = worldHeight(80, 3) - yAt(b.geo, 24);
     expect(dropB).toBeCloseTo(dropA * 3, 9);
     // Re-running over the same inputs reproduces the exact mesh (re-snaps
     // never accumulate: the dent is recomputed from the map, not the mesh).
     applyCraters(a.geo, a.map, [crater], 1);
-    expect(yAt(a.geo, 24)).toBeCloseTo(80 - dropA, 12);
+    expect(yAt(a.geo, 24)).toBeCloseTo(worldHeight(80, 1) - dropA, 12);
   });
 });
 
@@ -182,8 +182,8 @@ describe("applyCraters (washed bowls on gradients)", () => {
     );
     const down = yAt(geo, 41); // +16 world x, downhill
     const up = yAt(geo, 39); // −16 world x, uphill
-    expect(down).toBeLessThan(200);
-    expect(up).toBeLessThan(200);
+    expect(down).toBeLessThan(worldHeight(100, 2));
+    expect(up).toBeLessThan(worldHeight(100, 2));
     // Same plan distance, but the downhill flank digs visibly deeper.
     expect(down).toBeLessThan(up - 0.5);
   });

@@ -6,6 +6,7 @@ import {
   createDamageField,
   FALLEN_DECAY_DURATION,
   FALLEN_SINK_DEPTH,
+  worldHeight,
   type TNTMap,
 } from "@scorched-3d/core";
 import {
@@ -196,8 +197,9 @@ describe("fallen-tree decay posing", () => {
     field.trees[1] = "gone";
     placeFeatures(trees, rocks, map, 2, field);
     const sunk = trunkPose(trees, 0).pos.y;
-    // Fell seat at 2× exaggeration is 200 + 4, sunk by half the depth (3).
-    expect(sunk).toBeCloseTo(200 + 4 - FALLEN_SINK_DEPTH / 2, 9);
+    // Fell seat at 2× exaggeration is worldHeight(100, 2) + 4, sunk by half
+    // the depth (3).
+    expect(sunk).toBeCloseTo(worldHeight(100, 2) + 4 - FALLEN_SINK_DEPTH / 2, 9);
     const m = new THREE.Matrix4();
     (trees.children[0] as THREE.InstancedMesh).getMatrixAt(1, m);
     expect(m.elements[0]).toBe(0);

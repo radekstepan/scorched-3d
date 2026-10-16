@@ -3,6 +3,7 @@ import {
   craterDepthAt,
   SCORCH_CORE_RGB,
   SCORCH_RIM_RGB,
+  worldHeight,
   type Crater,
   type TNTMap,
 } from "@scorched-3d/core";
@@ -116,7 +117,7 @@ export function disposeScorchTexture(): void {
 
 /**
  * Recompute terrain vertex heights from the static map minus the visual
- * crater bowls: `y = h * exaggeration - dent * exaggeration`. Deterministic
+ * crater bowls: `y = worldHeight(h - dent, exaggeration)`. Deterministic
  * (pure function of map + craters + exaggeration), so exaggeration re-snaps
  * just re-run it. Normals are left alone per blast — the bowl is ≤0.6 height
  * unit deep and the dark char decal on top carries the shading; the canvas
@@ -136,7 +137,7 @@ export function applyCraters(
     const z = pos.getZ(i);
     const base = map.heights[i] ?? 0;
     const dent = craters.length > 0 ? craterDepthAt(craters, x, z) : 0;
-    pos.setY(i, (base - dent) * exaggeration);
+    pos.setY(i, worldHeight(base - dent, exaggeration));
   }
   pos.needsUpdate = true;
 }

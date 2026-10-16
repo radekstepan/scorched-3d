@@ -3,6 +3,8 @@ import {
   APP_NAME,
   CELL_PIXELS,
   DEFAULT_EXAGGERATION,
+  MAX_EXAGGERATION,
+  MIN_EXAGGERATION,
   PRESET_META,
   TEAM_DEFS,
   TILE_PIXELS,
@@ -274,9 +276,9 @@ export default function App() {
           <Slider
             label="Height scale"
             value={options.exaggeration}
-            min={1}
-            max={6}
-            step={0.1}
+            min={MIN_EXAGGERATION}
+            max={MAX_EXAGGERATION}
+            step={0.05}
             onChange={(v) => patch({ exaggeration: v })}
           />
           <Slider

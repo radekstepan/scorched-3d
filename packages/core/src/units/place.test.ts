@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "../terrain/generate.js";
-import { FEATURE_EMPTY } from "../terrain/types.js";
+import { FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
 import { placeUnits, teamOf, teamSpan, unitAnchor, UNIT_COUNT, type UnitField } from "./place.js";
 import { TEAM_DEFS, TEAM_IDS, UNIT_DEFS, UNIT_KINDS } from "./types.js";
 
@@ -87,9 +87,9 @@ describe("placeUnits", () => {
       const anchor = unitAnchor(map, u, 3.6);
       expect(anchor.x).toBeCloseTo((u.cellX - (map.width - 1) / 2) * 16);
       expect(anchor.z).toBeCloseTo((u.cellZ - (map.height - 1) / 2) * 16);
-      expect(anchor.y).toBe((map.heights[u.cellZ * map.width + u.cellX] ?? 0) * 3.6);
+      expect(anchor.y).toBe(worldHeight(map.heights[u.cellZ * map.width + u.cellX] ?? 0, 3.6));
       // Never underwater: anchor height clears the exaggerated waterline.
-      expect(anchor.y).toBeGreaterThan(map.seaLevel * 3.6);
+      expect(anchor.y).toBeGreaterThan(worldHeight(map.seaLevel, 3.6));
     }
   });
 });

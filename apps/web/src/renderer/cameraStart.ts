@@ -5,6 +5,7 @@
 // the map center) and put the camera on the ray from the map center through
 // the unit, past the map edge, looking back inward. Kept free of three.js so
 // it stays unit-testable in a node environment, mirroring cameraPan.ts.
+import { worldHeight } from "@scorched-3d/core";
 
 export interface Vec3 {
   x: number;
@@ -62,8 +63,8 @@ export function cellGround(field: StartField, cellX: number, cellZ: number): num
 
 /** Exaggerated ground height of the start anchor (or sea level fallback). */
 export function startGroundY(field: StartField, unit: StartUnit | null, exaggeration: number): number {
-  if (!unit) return field.seaLevel * exaggeration;
-  return cellGround(field, unit.cellX, unit.cellZ) * exaggeration;
+  if (!unit) return worldHeight(field.seaLevel, exaggeration);
+  return worldHeight(cellGround(field, unit.cellX, unit.cellZ), exaggeration);
 }
 
 function cellToWorldX(field: StartField, cellX: number, cellSize: number): number {
@@ -92,7 +93,7 @@ export function commanderCameraPose(
   const unit = pickStartUnit(field.units);
 
   if (!unit) {
-    const y = field.seaLevel * exaggeration;
+    const y = worldHeight(field.seaLevel, exaggeration);
     return {
       target: { x: 0, y, z: 0 },
       position: { x: 0, y: y + height, z: worldD / 2 + START_BEYOND_EDGE },
@@ -101,7 +102,7 @@ export function commanderCameraPose(
 
   const ux = cellToWorldX(field, unit.cellX, cellSize);
   const uz = cellToWorldZ(field, unit.cellZ, cellSize);
-  const uy = cellGround(field, unit.cellX, unit.cellZ) * exaggeration;
+  const uy = worldHeight(cellGround(field, unit.cellX, unit.cellZ), exaggeration);
 
   let dx = ux;
   let dz = uz;

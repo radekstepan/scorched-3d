@@ -1,4 +1,4 @@
-import { CELL_PIXELS } from "../terrain/types.js";
+import { CELL_PIXELS, worldHeight } from "../terrain/types.js";
 import type { UnitField } from "./place.js";
 import type { BlastPoint, BlastSlope, TreeDamage } from "./destruction.js";
 import { blastSkewForGrade } from "./destruction.js";
@@ -140,7 +140,7 @@ export function sampleHeightBilinear(field: SeatField, x: number, z: number): nu
 
 /** Rendered (exaggerated) surface height at world (x, z). */
 export function groundHeight(field: SeatField, x: number, z: number, exaggeration: number): number {
-  return sampleHeightBilinear(field, x, z) * exaggeration;
+  return worldHeight(sampleHeightBilinear(field, x, z), exaggeration);
 }
 
 /** Downhill fall-line sample: unit vector plus raw grade (rise/run). */

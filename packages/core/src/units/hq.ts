@@ -1,6 +1,6 @@
 import { BLAST_RADIUS, PEEWEE_GRENADE_BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
-import { CELL_PIXELS } from "../terrain/types.js";
+import { CELL_PIXELS, worldHeight } from "../terrain/types.js";
 import { TEAM_IDS } from "./types.js";
 import type { AttackMode, TeamId, UnitKind } from "./types.js";
 
@@ -349,7 +349,7 @@ export function hqFoundationDrop(field: HqField, site: HqSite, exaggeration: num
   for (let i = 0; i <= HQ_HALL_CELLS; i++) {
     for (let dz = -2; dz <= 2; dz++) at(site.cellX + dir * i, site.cellZ + dz);
   }
-  return Math.max(0, anchorH - low) * exaggeration + HQ_FOUNDATION_MARGIN;
+  return worldHeight(Math.max(0, anchorH - low), exaggeration) + HQ_FOUNDATION_MARGIN;
 }
 
 function cellSlope(field: HqField, x: number, z: number): number {
@@ -374,7 +374,7 @@ export interface HqAnchor {
 export function hqAnchor(field: HqField, site: HqSite, exaggeration: number): HqAnchor {
   return {
     x: (site.cellX - (field.width - 1) / 2) * CELL_PIXELS,
-    y: (field.heights[site.cellZ * field.width + site.cellX] ?? 0) * exaggeration,
+    y: worldHeight(field.heights[site.cellZ * field.width + site.cellX] ?? 0, exaggeration),
     z: (site.cellZ - (field.height - 1) / 2) * CELL_PIXELS,
   };
 }

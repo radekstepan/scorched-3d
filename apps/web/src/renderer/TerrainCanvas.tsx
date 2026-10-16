@@ -9,6 +9,7 @@ import {
   createDamageField,
   craterDepthAt,
   crushTree,
+  effectiveExaggeration,
   FEATURE_EMPTY,
   FEATURE_FRINGE,
   composeAlbedo,
@@ -22,6 +23,7 @@ import {
   seatHull,
   THREAT_ENGAGE_RADIUS,
   tickDamage,
+  worldHeight,
   worldSize,
   type BlastSlope,
   type Crater,
@@ -188,7 +190,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         mapTex: { value: albedoTex },
         heightTex: { value: heightTex },
         seaLevel: { value: map.seaLevel },
-        exaggeration: { value: options.exaggeration },
+        exaggeration: { value: effectiveExaggeration(options.exaggeration) },
         showContours: { value: 0 },
         time: { value: 0 },
         sunDir: { value: SUN.clone() },
@@ -212,7 +214,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       uniforms: {
         heightTex: { value: heightTex },
         seaLevel: { value: map.seaLevel },
-        exaggeration: { value: options.exaggeration },
+        exaggeration: { value: effectiveExaggeration(options.exaggeration) },
         time: { value: 0 },
         sunDir: { value: SUN.clone() },
         sunColor: { value: new THREE.Color(1.0, 0.95, 0.8) },
@@ -228,7 +230,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const waterGeo = new THREE.PlaneGeometry(worldW, worldD, 192, 144);
     waterGeo.rotateX(-Math.PI / 2);
     const water = new THREE.Mesh(waterGeo, waterMat);
-    water.position.y = map.seaLevel * options.exaggeration + 0.6;
+    water.position.y = worldHeight(map.seaLevel, options.exaggeration) + 0.6;
     water.renderOrder = 1;
     scene.add(water);
     scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
@@ -272,8 +274,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // the live exaggeration slider, minus the accumulated crater bowls.
     const craters: Crater[] = [];
     const groundY = (x: number, z: number): number =>
-      (sampleHeightBilinear(map, x, z) - craterDepthAt(craters, x, z)) *
-      optsRef.current.exaggeration;
+      worldHeight(sampleHeightBilinear(map, x, z) - craterDepthAt(craters, x, z), optsRef.current.exaggeration);
     const seat = (x: number, z: number, hull: number, kind: UnitKind) =>
       seatHull(map, kind, x, z, hull, optsRef.current.exaggeration);
     // Graduated collateral state: caller-owned core DamageField indexed by
@@ -878,7 +879,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         lastExag = opt.exaggeration;
         applyCraters(geometry, map, craters, lastExag);
         geometry.computeVertexNormals();
-        water.position.y = map.seaLevel * lastExag + 0.6;
+        water.position.y = worldHeight(map.seaLevel, lastExag) + 0.6;
         // Damage survives: re-seat from the persistent field, drop in-flight
         // endpoints (sampled at old heights), re-seat patrol hulls, re-seat
         // scorch, and blank the transient flames — the next tick rebuilds
@@ -898,10 +899,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         markHoverDirty();
       }
 
-      terrainMat.uniforms.exaggeration!.value = opt.exaggeration;
+      terrainMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       terrainMat.uniforms.showContours!.value = opt.showContours ? 1 : 0;
       terrainMat.uniforms.time!.value = t;
-      waterMat.uniforms.exaggeration!.value = opt.exaggeration;
+      waterMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       waterMat.uniforms.time!.value = t;
       water.visible = opt.showWater && map.seaLevel > 0;
       trees.visible = opt.showFeatures;
@@ -1131,7 +1132,7 @@ function buildTerrainGeometry(map: TNTMap, exaggeration: number): THREE.BufferGe
     for (let x = 0; x < w; x++) {
       const i = z * w + x;
       positions[i * 3] = (x - (w - 1) / 2) * CELL_PIXELS;
-      positions[i * 3 + 1] = (map.heights[i] ?? 0) * exaggeration;
+      positions[i * 3 + 1] = worldHeight(map.heights[i] ?? 0, exaggeration);
       positions[i * 3 + 2] = (z - (h - 1) / 2) * CELL_PIXELS;
       uvs[i * 2] = x / (w - 1);
       uvs[i * 2 + 1] = 1 - z / (h - 1);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CELL_PIXELS } from "../terrain/types.js";
+import { CELL_PIXELS, worldHeight } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
 import { isWalkable } from "./pathfinding.js";
 import {
@@ -108,7 +108,10 @@ describe("hullPitchRoll", () => {
   it("scales with exaggeration and clamps on cliffs", () => {
     const field = rampField(8);
     const { x, z } = worldOf(field, 16, 16);
-    const gentle = hullPitchRoll(field, "stump", x, z, Math.PI / 2, 1);
+    // Gentle at the 0.5x slider floor (old 1x relief, below the tilt clamp);
+    // steep at 3.6x (clamped). The rebase doubles relief, so exag 1 would
+    // already saturate this ramp — the floor stop is the honest comparison.
+    const gentle = hullPitchRoll(field, "stump", x, z, Math.PI / 2, 0.5);
     const steep = hullPitchRoll(field, "stump", x, z, Math.PI / 2, 3.6);
     expect(Math.abs(steep.pitch)).toBeGreaterThan(Math.abs(gentle.pitch));
     // Step cliff: 0 west, 200 east — unclamped atan would read ~85°.
@@ -131,7 +134,7 @@ describe("seatHull", () => {
     const field = flatField();
     for (const kind of Object.keys(HULL_FOOTPRINT) as (keyof typeof HULL_FOOTPRINT)[]) {
       const seat = seatHull(field, kind, 5, -7, 1.1, 3.6);
-      expect(seat.y).toBeCloseTo(100 * 3.6 + HULL_CLEARANCE, 9);
+      expect(seat.y).toBeCloseTo(worldHeight(100, 3.6) + HULL_CLEARANCE, 9);
       expect(seat.pitch).toBeCloseTo(0, 12);
       expect(seat.roll).toBeCloseTo(0, 12);
     }
