@@ -330,6 +330,40 @@ describe("spawnIntervalFor", () => {
   });
 });
 
+describe("faster production cadence", () => {
+  it("pins the doubled cadence in absolute seconds", () => {
+    // Reinforcements must arrive about twice as fast as the legacy 40 s /
+    // 30–70 s pacing: first release at 20 s, per-kind builds 15–35 s.
+    expect(HQ_SPAWN_INTERVAL).toBe(20);
+    expect(HQ_SPAWN_MIN_INTERVAL).toBe(15);
+    expect(HQ_SPAWN_MAX_INTERVAL).toBe(35);
+    expect(spawnIntervalFor("peewee")).toBe(15);
+    expect(spawnIntervalFor("hammer")).toBe(35);
+    for (const kind of ["flash", "stump"] as const) {
+      expect(spawnIntervalFor(kind)).toBeGreaterThan(15);
+      expect(spawnIntervalFor(kind)).toBeLessThan(35);
+    }
+  });
+
+  it("fields the full cap well inside the old worst case", () => {
+    // Old pacing needed up to 40 + 3 × 70 = 250 s for all 4 releases; the
+    // doubled cadence caps at 20 + 3 × 35 = 125 s for every seed.
+    for (const seed of [1, 7, 42, 99, 1234]) {
+      const [state] = createHqSpawns();
+      const rng = mulberry32(seed);
+      let clock = 0;
+      let lastRelease = -1;
+      for (let n = 0; n < 400 && state!.spawned < HQ_MAX_SPAWNS; n++) {
+        if (tickHqSpawn(state!, 1, true, rng) !== null) lastRelease = clock + 1;
+        clock += 1;
+      }
+      expect(state!.spawned).toBe(HQ_MAX_SPAWNS);
+      expect(lastRelease).toBeGreaterThan(0);
+      expect(lastRelease).toBeLessThanOrEqual(HQ_SPAWN_INTERVAL + 3 * HQ_SPAWN_MAX_INTERVAL);
+    }
+  });
+});
+
 describe("pickNextSpawnUnit", () => {
   it("pins roster bands with stub rolls", () => {
     // Weights peewee 1 / flash ≈0.58 / stump ≈0.32 / hammer ≈0.12 read

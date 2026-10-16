@@ -28,7 +28,7 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  */
 
 /** Seconds from battle start to the first reinforcement (also the unknown-kind fallback). */
-export const HQ_SPAWN_INTERVAL = 40;
+export const HQ_SPAWN_INTERVAL = 20;
 /** Reinforcements one HQ may ever release (per-team pop cap). */
 export const HQ_MAX_SPAWNS = 4;
 /** Kinds an HQ may release, weakest first (no commanders — factories build line units). */
@@ -77,16 +77,16 @@ export function pickNextSpawnUnit(rng: () => number): UnitKind {
 }
 
 /** Build time of the weakest roster member (fast scout reinforcements). */
-export const HQ_SPAWN_MIN_INTERVAL = 30;
+export const HQ_SPAWN_MIN_INTERVAL = 15;
 /** Build time of the strongest roster member (artillery takes a while). */
-export const HQ_SPAWN_MAX_INTERVAL = 70;
+export const HQ_SPAWN_MAX_INTERVAL = 35;
 
 /**
  * Seconds to build one `kind`: linear in strength from the weakest roster
- * member (30 s) to the strongest (70 s), so stronger units take more time to
- * make (peewee 30, flash ≈ 34, stump ≈ 42, hammer 70 — weighted mean ≈ 35 s,
- * near the legacy 40 s cadence). Unknown kinds fall back to
- * `HQ_SPAWN_INTERVAL`.
+ * member (15 s) to the strongest (35 s), so stronger units take more time to
+ * make (peewee 15, flash ≈ 17, stump ≈ 21, hammer 35 — weighted mean ≈ 17.5 s,
+ * twice the legacy cadence so reinforcements join the fight sooner).
+ * Unknown kinds fall back to `HQ_SPAWN_INTERVAL`.
  */
 export function spawnIntervalFor(kind: UnitKind): number {
   if (!HQ_SPAWN_ROSTER.includes(kind)) return HQ_SPAWN_INTERVAL;
