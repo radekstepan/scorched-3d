@@ -11,9 +11,12 @@ import {
   ELEVATION_SLEW_RATE,
   GRAVITY,
   mulberry32,
+  muzzleYaw,
   solveBallistic,
   solveDirect,
   TURRET_LIMIT,
+  wrapAngle,
+  yawToTarget,
   type TNTMap,
   type UnitKind,
 } from "@scorched-3d/core";
@@ -2424,5 +2427,212 @@ describe("CombatFx projectile warp tail", () => {
     expect(tailCones(scene)).toHaveLength(fx.shotCount);
     fx.dispose();
     expect(tailCones(scene)).toHaveLength(0);
+  });
+});
+
+describe("CombatFx proactive engagement", () => {
+  /** Teamed bodies with turrets (mirrors buildUnits traverse groups). */
+  function makeTeamed(
+    specs: { kind: UnitKind; team: number; x: number; z: number; rot: number }[],
+  ): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = specs.map((s, n) => ({
+      kind: s.kind,
+      cellX: n + 1,
+      cellZ: n + 1,
+      rotation: s.rot,
+      team: s.team,
+    }));
+    for (const s of specs) {
+      const body = new THREE.Group();
+      body.rotation.y = s.rot;
+      body.position.set(s.x, 100, s.z);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  /** Unteamed bodies (legacy headless groups: every hull is a valid target). */
+  function makeUnteamed(specs: { kind: UnitKind; x: number; z: number; rot: number }[]): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = specs.map((s, n) => ({
+      kind: s.kind,
+      cellX: n + 1,
+      cellZ: n + 1,
+      rotation: s.rot,
+    }));
+    for (const s of specs) {
+      const body = new THREE.Group();
+      body.rotation.y = s.rot;
+      body.position.set(s.x, 100, s.z);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  function pendingOf(fx: CombatFx): Map<number, number> {
+    return (fx as unknown as { pending: Map<number, number> }).pending;
+  }
+
+  function gunError(fx: CombatFx, from: number, to: number, units: THREE.Group): number {
+    const a = units.children[from] as THREE.Group;
+    const b = units.children[to] as THREE.Group;
+    const want = yawToTarget({ x: a.position.x, z: a.position.z }, { x: b.position.x, z: b.position.z });
+    const pose = fx.aimState(from)!;
+    return Math.abs(wrapAngle(muzzleYaw(pose.hull, pose.turret) - want));
+  }
+
+  it("aims in-range enemies before any shot is fired", () => {
+    const scene = new THREE.Scene();
+    // Two flashes 500 apart (admission 950), facing away from each other.
+    const units = makeTeamed([
+      { kind: "flash", team: 0, x: 0, z: 0, rot: Math.PI },
+      { kind: "flash", team: 1, x: 0, z: 500, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    // One tick: the ambient timer (≥0.35s) cannot have fired yet.
+    fx.update(1 / 60);
+    expect(fx.totalFired).toBe(0);
+    // Both guns already acquired across team lines — reaction without fire.
+    expect(pendingOf(fx).get(0)).toBe(1);
+    expect(pendingOf(fx).get(1)).toBe(0);
+    fx.dispose();
+  });
+
+  it("traverses turrets onto in-range enemies without being fired upon", () => {
+    const scene = new THREE.Scene();
+    // Two hammers 500 apart (admission 1050), dead off boresight both ways.
+    const units = makeTeamed([
+      { kind: "hammer", team: 0, x: 0, z: 0, rot: Math.PI },
+      { kind: "hammer", team: 1, x: 0, z: 500, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    fx.update(1 / 60); // size the aim roster; one tick barely traverses
+    const before0 = gunError(fx, 0, 1, units);
+    const before1 = gunError(fx, 1, 0, units);
+    expect(before0).toBeGreaterThan(2);
+    expect(before1).toBeGreaterThan(2);
+    // Half a second of traverse: both guns visibly turn, neither has fired
+    // (a PI turn at 1.1 rad/s needs ~2.9s — silence is the aim gate working).
+    for (let n = 0; n < 30; n++) fx.update(1 / 60);
+    expect(gunError(fx, 0, 1, units)).toBeLessThan(before0);
+    expect(gunError(fx, 1, 0, units)).toBeLessThan(before1);
+    expect(fx.totalFired).toBe(0);
+    fx.dispose();
+  });
+
+  it("ignores enemies past admitted range", () => {
+    const scene = new THREE.Scene();
+    // Two hammers 2500 apart: past the 1050 admission, so no reaction.
+    const units = makeTeamed([
+      { kind: "hammer", team: 0, x: 0, z: 0, rot: Math.PI },
+      { kind: "hammer", team: 1, x: 2500, z: 0, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    fx.update(1 / 60);
+    expect(pendingOf(fx).size).toBe(0);
+    const hasAdmittedFoe = (
+      fx as unknown as {
+        hasAdmittedFoe: (
+          i: number,
+          positions: readonly { x: number; z: number }[],
+          teams: readonly (number | undefined)[],
+          live: readonly boolean[],
+        ) => boolean;
+      }
+    ).hasAdmittedFoe.bind(fx);
+    const snap = (
+      fx as unknown as {
+        rosterSnapshot: () => {
+          positions: { x: number; z: number }[];
+          teams: (number | undefined)[];
+          liveFlags: boolean[];
+        };
+      }
+    ).rosterSnapshot.call(fx);
+    expect(hasAdmittedFoe(0, snap.positions, snap.teams, snap.liveFlags)).toBe(false);
+    expect(hasAdmittedFoe(1, snap.positions, snap.teams, snap.liveFlags)).toBe(false);
+    fx.dispose();
+  });
+
+  it("tracks the nearest hull in range for legacy unteamed groups", () => {
+    const scene = new THREE.Scene();
+    // Three flashes at 0/400/900 (admission 950): no ties, nearest wins.
+    const units = makeUnteamed([
+      { kind: "flash", x: 0, z: 0, rot: 0 },
+      { kind: "flash", x: 400, z: 0, rot: 0 },
+      { kind: "flash", x: 900, z: 0, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    fx.update(1 / 60);
+    expect(fx.totalFired).toBe(0);
+    expect(pendingOf(fx).get(0)).toBe(1);
+    expect(pendingOf(fx).get(1)).toBe(0);
+    expect(pendingOf(fx).get(2)).toBe(1);
+    fx.dispose();
+  });
+
+  it("leaves existing aims alone (never fights the scheduler)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnteamed([
+      { kind: "flash", x: 0, z: 0, rot: 0 },
+      { kind: "flash", x: 400, z: 0, rot: 0 },
+      { kind: "flash", x: 900, z: 0, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    // Hull 0 already tracks the farther hull 2 (a scheduler-drawn aim): the
+    // proactive pass must not steal it back to the nearer hull 1.
+    fx.trackThreat(0, 2);
+    fx.update(1 / 60);
+    expect(pendingOf(fx).get(0)).toBe(2);
+    expect(pendingOf(fx).get(1)).toBe(0);
+    expect(pendingOf(fx).get(2)).toBe(1);
+    fx.dispose();
+  });
+
+  it("draws scheduler volleys from engaged guns first", () => {
+    const scene = new THREE.Scene();
+    // Far hammer (0) out of range of everything; near flash (1) duels the
+    // enemy flash (2) at 400. The ambient volley must never come from 0.
+    const units = makeTeamed([
+      { kind: "hammer", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "flash", team: 0, x: 2000, z: 0, rot: 0 },
+      { kind: "flash", team: 1, x: 2400, z: 0, rot: 0 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    const priv = fx as unknown as {
+      hasAdmittedFoe: (
+        i: number,
+        positions: readonly { x: number; z: number }[],
+        teams: readonly (number | undefined)[],
+        live: readonly boolean[],
+      ) => boolean;
+      rosterSnapshot: () => {
+        positions: { x: number; z: number }[];
+        teams: (number | undefined)[];
+        liveFlags: boolean[];
+      };
+    };
+    const snap = priv.rosterSnapshot.call(fx);
+    expect(priv.hasAdmittedFoe.bind(fx)(0, snap.positions, snap.teams, snap.liveFlags)).toBe(false);
+    expect(priv.hasAdmittedFoe.bind(fx)(1, snap.positions, snap.teams, snap.liveFlags)).toBe(true);
+    expect(priv.hasAdmittedFoe.bind(fx)(2, snap.positions, snap.teams, snap.liveFlags)).toBe(true);
+    // Ten seconds of duelling: volleys leave, nobody dies (flash chips at
+    // 0.06/hit), and the far gun never draws a volley — no aim, no fire.
+    for (let n = 0; n < 600; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(fx.isDestroyedAt(0)).toBe(false);
+    expect(fx.isDestroyedAt(1)).toBe(false);
+    expect(fx.isDestroyedAt(2)).toBe(false);
+    expect(pendingOf(fx).has(0)).toBe(false);
+    fx.dispose();
   });
 });

@@ -1044,6 +1044,7 @@ export class CombatFx {
     this.ensureAim();
     this.ensureDamage();
     this.elapsed += dt;
+    this.trackVisibleEnemies();
     this.slewPending(dt);
     // Gun tubes knock down what they touch: a traversing turret sweeps its
     // barrel outside the hull trunk keepout, so without this the cannon
@@ -1743,16 +1744,145 @@ export class CombatFx {
   }
 
   /**
+   * Gun admission range for `kind`: the doctrine max range plus the
+   * scheduler's +50 aim margin — a live enemy inside this is close enough to
+   * react to (proactive traverse) and to draw volleys (engaged-first
+   * scheduling). Matches the structure-fire pre-gate scale.
+   */
+  private admissionFor(kind: UnitKind): number {
+    return maxRangeFor(kind) + 50;
+  }
+
+  /**
+   * Positional roster snapshot for targeting: body X/Z positions, sides
+   * (wrecks read as undefined, so destroyed hulls are invisible to
+   * targeting — never shot, never counted as sides), and parallel live
+   * flags. Shared by the scheduler and proactive engagement.
+   */
+  private rosterSnapshot(): {
+    positions: { x: number; z: number }[];
+    teams: (number | undefined)[];
+    liveFlags: boolean[];
+  } {
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const positions = this.units.children.map((body) => ({
+      x: (body as THREE.Group).position.x,
+      z: (body as THREE.Group).position.z,
+    }));
+    const teams = this.units.children.map((_, i) =>
+      this.destroyed[i] ? undefined : placed?.[i]?.team,
+    );
+    const liveFlags = this.units.children.map((_, i) => !this.destroyed[i]);
+    return { positions, teams, liveFlags };
+  }
+
+  /**
+   * True when live hull `i` has a live enemy inside its admitted weapon
+   * range — the engaged-first scheduler gate (see `pickLivePair`): volleys
+   * come from guns that can actually hit something. Pure over the snapshot.
+   */
+  private hasAdmittedFoe(
+    i: number,
+    positions: readonly { x: number; z: number }[],
+    teams: readonly (number | undefined)[],
+    live: readonly boolean[],
+  ): boolean {
+    const kind = this.unitKind(i);
+    if (!kind) return false;
+    const side = teams[i];
+    if (side === undefined) return false;
+    const me = positions[i];
+    if (!me) return false;
+    const admission = this.admissionFor(kind);
+    for (let j = 0; j < positions.length; j++) {
+      if (j === i || live[j] === false) continue;
+      const foeSide = teams[j];
+      if (foeSide === undefined || foeSide === side) continue;
+      const foe = positions[j];
+      if (!foe) continue;
+      if (Math.hypot(foe.x - me.x, foe.z - me.z) <= admission) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Proactive engagement: every live gun without a traverse goal turns onto
+   * a live enemy inside admitted weapon range — so hulls visibly react to
+   * enemies they can hit instead of sitting on stale aims until they take
+   * fire (previously only `trackThreat` victims traversed before the
+   * scheduler drew them, and the single ambient volley came from a random
+   * hull). Rides the shared pending traverse (slewed every tick in
+   * `slewPending`), so it never fires by itself — the range/terrain
+   * admission in `launchShot` still gates every round — never fights the
+   * scheduler (drawn pairs overwrite the goal, and guns already carrying an
+   * aim are left alone), and dies with either end. Target choice matches
+   * the scheduler (core `pickStrategicTarget`: wounded/focus pulls,
+   * distance first), so proactive aims feed squad focus fire like any
+   * traverse; legacy headless groups without teams track the nearest other
+   * live hull in range. Range-only notice (no line-of-sight): terrain
+   * occlusion stays the visibility layer's job.
+   */
+  private trackVisibleEnemies(): void {
+    const count = this.units.children.length;
+    if (count < 2) return;
+    const { positions, teams, liveFlags } = this.rosterSnapshot();
+    const teamed = teams.some((t) => t !== undefined);
+    const hp = this.damage.map((d) => 1 - d);
+    for (let i = 0; i < count; i++) {
+      if (this.destroyed[i]) continue;
+      if (this.pending.has(i) || this.pendingHq.has(i)) continue;
+      const kind = this.unitKind(i);
+      if (!kind) continue;
+      const admission = this.admissionFor(kind);
+      const me = positions[i]!;
+      if (teamed) {
+        if (teams[i] === undefined) continue;
+        const target = pickStrategicTarget(i, positions, teams, liveFlags, {
+          hp,
+          // Pending aims are the squad's current focus (structure aims live
+          // in a separate map, so only hull-aim values count).
+          focusCounts: [...this.pending.values()],
+          maxDist: admission,
+        });
+        if (target < 0) continue;
+        // `pickStrategicTarget` falls back to far targets past admission —
+        // only admitted enemies are worth reacting to.
+        const foe = positions[target]!;
+        if (Math.hypot(foe.x - me.x, foe.z - me.z) > admission) continue;
+        this.pending.set(i, target);
+      } else {
+        let best = -1;
+        let bestDist = admission;
+        for (let j = 0; j < count; j++) {
+          if (j === i || this.destroyed[j]) continue;
+          const foe = positions[j]!;
+          const d = Math.hypot(foe.x - me.x, foe.z - me.z);
+          if (d <= bestDist) {
+            best = j;
+            bestDist = d;
+          }
+        }
+        if (best < 0) continue;
+        this.pending.set(i, best);
+      }
+    }
+  }
+
+  /**
    * Draw an attacker/target pair across team lines (wrecks excluded on both
    * ends, friendlies never draw fire). The attacker draws uniformly from
-   * live hulls — one rng draw, exactly like the old hostile-pair picker, so
-   * live rosters replay deterministically — but the *target* is chosen, not
-   * random: guns finish burning hulls, pile onto the squad's current aims
-   * (focus fire over split shots), and stay on their current target instead
-   * of thrashing, while distance still dominates so admitted in-range duels
-   * keep their pace (see core `pickStrategicTarget`). Null when fewer than
-   * two hulls are alive or one side is wiped — the skirmish goes quiet
-   * instead of shelling wrecks or turning on its own side.
+   * *engaged* live hulls — guns with an admitted enemy in range — so the
+   * volley comes from a gun that can actually hit something and reaction
+   * turns into return fire promptly; with nothing in range anywhere the
+   * draw falls back to all live hulls (one rng draw either way, exactly
+   * like the old hostile-pair picker, so live rosters replay
+   * deterministically). The *target* is chosen, not random: guns finish
+   * burning hulls, pile onto the squad's current aims (focus fire over
+   * split shots), and stay on their current target instead of thrashing,
+   * while distance still dominates so admitted in-range duels keep their
+   * pace (see core `pickStrategicTarget`). Null when fewer than two hulls
+   * are alive or one side is wiped — the skirmish goes quiet instead of
+   * shelling wrecks or turning on its own side.
    */
   private pickLivePair(): { attacker: number; target: number } | null {
     const count = this.units.children.length;
@@ -1770,22 +1900,22 @@ export class CombatFx {
       if (!pair) return null;
       return { attacker: alive[pair.attacker]!, target: alive[pair.target]! };
     }
-    const pair = pickHostilePair(alive.length, teams, this.rng);
-    if (!pair) return null;
-    const attacker = alive[pair.attacker]!;
-    // Aim the uniform attacker strategically instead of firing the uniform
-    // target: the roster snapshot is positional (body X/Z), health reads
-    // live damage, and the pending aims are the squad's current focus.
-    const positions = this.units.children.map((body) => ({
-      x: (body as THREE.Group).position.x,
-      z: (body as THREE.Group).position.z,
-    }));
-    const fullTeams: (number | undefined)[] = this.units.children.map(
-      (_, i) => (this.destroyed[i] ? undefined : placed?.[i]?.team),
-    );
-    // Destroyed hulls are invisible to targeting (never shot, never counted
-    // as sides): mark them dead in a parallel live list.
-    const liveFlags = this.units.children.map((_, i) => !this.destroyed[i]);
+    const { positions, teams: fullTeams, liveFlags } = this.rosterSnapshot();
+    // Engaged guns fire first; far guns never waste the ambient volley while
+    // a duel is on. The fallback keeps the old rhythm (traverse-then-retry
+    // on far pairs) when nothing is in range anywhere.
+    const engaged = alive.filter((i) => this.hasAdmittedFoe(i, positions, fullTeams, liveFlags));
+    let attacker: number;
+    if (engaged.length > 0) {
+      attacker = engaged[Math.floor(this.rng() * engaged.length)]!;
+    } else {
+      const pair = pickHostilePair(alive.length, teams, this.rng);
+      if (!pair) return null;
+      attacker = alive[pair.attacker]!;
+    }
+    // Aim the drawn attacker strategically instead of firing a uniform
+    // target: health reads live damage, and the pending aims are the
+    // squad's current focus.
     const kind = this.unitKind(attacker);
     const hp = this.damage.map((d) => 1 - d);
     const target = pickStrategicTarget(attacker, positions, fullTeams, liveFlags, {
@@ -1794,7 +1924,7 @@ export class CombatFx {
       // a separate map keyed by attacker, so only hull-aim values count).
       focusCounts: [...this.pending.values()],
       sticky: this.pending.get(attacker) ?? -1,
-      maxDist: kind ? maxRangeFor(kind) + 50 : undefined,
+      maxDist: kind ? this.admissionFor(kind) : undefined,
     });
     if (target < 0) return null;
     return { attacker, target };
@@ -1868,7 +1998,7 @@ export class CombatFx {
         // Body-distance pre-gate (the exact muzzle gate runs in `fireAtHq`):
         // guns parked across the map never draw structure fire.
         const d = Math.hypot(body.position.x - t.x, body.position.z - t.z);
-        if (d > maxRangeFor(kind) + 50) continue;
+        if (d > this.admissionFor(kind)) continue;
         pairs.push({ attacker: i, team: t.team });
       }
     }
