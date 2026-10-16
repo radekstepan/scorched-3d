@@ -100,7 +100,7 @@ import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
-import { createHoverGate, hoverInfoKey } from "./hoverProbe";
+import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -642,6 +642,17 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const markHoverDirty = (): void => {
       hoverGate.cameraMoved();
     };
+    // Cached canvas rect for the hover probe: the per-probe
+    // getBoundingClientRect layout read cost a forced reflow every motion
+    // frame, so the probe reads this instead (refreshed in resize(), which
+    // the ResizeObserver fires on every layout change). Click/pointer-up
+    // paths still read the rect fresh — they run once per gesture, where a
+    // stale frame after a window resize could misplace the pick.
+    let cachedCanvasRect = renderer.domElement.getBoundingClientRect();
+    // Scratch for the hover unproject: reused every probe, zero per-tick
+    // allocation on the motion path (the old hits array is gone with the
+    // mesh raycast).
+    const hoverNdc = new THREE.Vector3();
 
     const canvasRect = (): DOMRect => renderer.domElement.getBoundingClientRect();
 
@@ -843,6 +854,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       camera.aspect = w / Math.max(h, 1);
       camera.updateProjectionMatrix();
       renderer.setSize(w, h, false);
+      cachedCanvasRect = renderer.domElement.getBoundingClientRect();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
@@ -1031,18 +1043,35 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         hqRef.current?.(hq?.status() ?? []);
       }
 
-      // Hover probe: at most one full-mesh raycast per tick, and only when
-      // the pointer or the camera moved since the last probe (a parked
-      // cursor costs nothing). Emission is deduped on the sampled cell, so
-      // React re-renders only when the readout actually changes.
+      // Hover probe: at most one math pick per tick, and only when the
+      // pointer or the camera moved since the last probe (a parked cursor
+      // costs nothing). The pick marches the heightfield analytically
+      // (~400 bilinear taps worst case) instead of raycasting the full
+      // 320×256 mesh (~163k triangles, no BVH) — sweeping the cursor no
+      // longer dips fps 120 → ~80. NDC comes from the cached rect (no
+      // layout read per probe) and the unproject reuses a scratch vector,
+      // so the motion path allocates nothing. Emission is deduped on the
+      // sampled cell, so React re-renders only when the readout changes.
       const probe = hoverGate.takeProbe();
       if (probe) {
-        const rect = renderer.domElement.getBoundingClientRect();
+        const rect = cachedCanvasRect;
         pointer.x = ((probe.x - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((probe.y - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera);
-        const hits = raycaster.intersectObject(terrain);
-        const info = hits[0] ? hitToInfo(map, hits[0].point) : null;
+        hoverNdc.set(pointer.x, pointer.y, 0.5).unproject(camera);
+        const dx = hoverNdc.x - camera.position.x;
+        const dy = hoverNdc.y - camera.position.y;
+        const dz = hoverNdc.z - camera.position.z;
+        const hit = pickTerrainPoint(
+          map,
+          opt.exaggeration,
+          camera.position.x,
+          camera.position.y,
+          camera.position.z,
+          dx,
+          dy,
+          dz,
+        );
+        const info = hit ? hitToInfo(map, hit) : null;
         const key = hoverInfoKey(info);
         if (key !== lastHoverKey) {
           lastHoverKey = key;
@@ -1162,7 +1191,7 @@ function buildTerrainGeometry(map: TNTMap, exaggeration: number): THREE.BufferGe
   return geo;
 }
 
-function hitToInfo(map: TNTMap, point: THREE.Vector3): HoverInfo {
+function hitToInfo(map: TNTMap, point: { x: number; z: number }): HoverInfo {
   const x = clampInt(Math.round(point.x / CELL_PIXELS + (map.width - 1) / 2), 0, map.width - 1);
   const z = clampInt(Math.round(point.z / CELL_PIXELS + (map.height - 1) / 2), 0, map.height - 1);
   const hgt = map.heights[z * map.width + x] ?? 0;
