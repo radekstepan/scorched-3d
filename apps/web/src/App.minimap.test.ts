@@ -59,3 +59,30 @@ describe("minimap click-to-move wiring", () => {
     expect(appSource).not.toContain("hover.cellX / (map.width - 1)");
   });
 });
+
+describe("minimap jump exemption from the camera clamp (task 120)", () => {
+  // The canvas needs WebGL, so the tick behavior is pinned at source level
+  // while the mechanism (exemption ⟺ zoom/angle survival through real
+  // OrbitControls) is proven headless in minimap.test.ts.
+
+  it("flags jump-placed cameras when the tick applies a jump", () => {
+    expect(canvasSource).toContain("jumpPlacedCamera = true");
+  });
+
+  it("holds the camera clamp at both sites while a jump-placed camera is out", () => {
+    // Both clampCameraToWorld sites must be conditional on the exemption:
+    // an unconditional clamp yanks the fresh teleport (zoom collapse +
+    // angle swing + out-of-frame jump tick on far-view → HQ clicks).
+    const conditional =
+      canvasSource.match(/if \(!jumpPlacedCamera\) clampCameraToWorld\(camera\.position/g) ?? [];
+    expect(conditional).toHaveLength(2);
+  });
+
+  it("clears the exemption through the re-entry check", () => {
+    // The exemption must end when the camera drifts back inside (gradual
+    // motion stays trimmed every tick — the task-118 protection), never
+    // by yanking the jump itself.
+    expect(canvasSource).toContain("isCameraOutsideWorld");
+    expect(canvasSource).toMatch(/jumpPlacedCamera && !isCameraOutsideWorld\(camera\.position/);
+  });
+});

@@ -1,5 +1,13 @@
 import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
+import {
+  MAX_ZOOM_DISTANCE,
+  MIN_ZOOM_DISTANCE,
+  clampCameraToWorld,
+  clampPanTargetWithCamera,
+  isCameraOutsideWorld,
+} from "./cameraPan";
 import {
   jumpCameraTo,
   minimapPointToWorld,
@@ -283,4 +291,162 @@ describe("jumpCameraTo centers the click at any angle and zoom (task 102)", () =
       });
     }
   }
+});
+
+describe("minimap jumps survive the camera clamp via the jump exemption (task 120)", () => {
+  // Headless tick-chain through REAL OrbitControls with the canvas settings
+  // (damping, polar clamp, zoom-to-cursor): jump → controls.update() →
+  // target clamp → conditional camera clamp → project. Task 118's
+  // clampCameraToWorld yanked every jump-placed camera back into the
+  // ±3190×±2550 rectangle — a far-east-view → east-HQ click collapsed zoom
+  // ~2.6x and swung the polar angle ~38°, with the clicked point out of
+  // frame on the jump tick. The tick now exempts jump-placed cameras until
+  // they drift back inside (wiring pins in App.minimap.test.ts); these
+  // tests prove the mechanism through real three.js: exemption ⟺ the
+  // requested zoom + angle survive with the click centered.
+  const ground = 100;
+  const dest = { x: 2472, z: 300 }; // East map-end HQ.
+
+  function makeJumpRig(pos: { x: number; y: number; z: number }, tgt: { x: number; y: number; z: number }) {
+    const doc = { addEventListener() {}, removeEventListener() {} };
+    const el = {
+      style: {},
+      ownerDocument: doc,
+      getRootNode: () => doc,
+      addEventListener() {},
+      removeEventListener() {},
+      setPointerCapture() {},
+      releasePointerCapture() {},
+      hasPointerCapture: () => false,
+    };
+    const camera = new THREE.PerspectiveCamera(48, 16 / 9, 2, 14000);
+    camera.position.set(pos.x, pos.y, pos.z);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.zoomToCursor = true;
+    controls.target.set(tgt.x, tgt.y, tgt.z);
+    controls.update();
+    return { camera, controls };
+  }
+
+  function sphericalOf(camera: THREE.PerspectiveCamera, target: THREE.Vector3): {
+    az: number;
+    polar: number;
+    dist: number;
+  } {
+    const dx = camera.position.x - target.x;
+    const dy = camera.position.y - target.y;
+    const dz = camera.position.z - target.z;
+    const dist = Math.hypot(dx, dy, dz);
+    return { az: Math.atan2(dx, dz), polar: Math.acos(dy / dist), dist };
+  }
+
+  function projectDest(camera: THREE.PerspectiveCamera): { x: number; y: number } {
+    camera.updateMatrixWorld();
+    const ndc = new THREE.Vector3(dest.x, ground, dest.z).project(camera);
+    return { x: ndc.x, y: ndc.y };
+  }
+
+  for (const [name, pos, tgt] of [
+    ["far overview from the east", { x: 3190, y: 1200, z: 0 }, { x: 0, y: 100, z: 0 }],
+    ["mid view looking west", { x: 2500, y: 1400, z: 200 }, { x: 0, y: 100, z: 0 }],
+  ] as const) {
+    it(`exempt jump preserves zoom + angle and centers on the jump tick (${name} → HQ)`, () => {
+      const { camera, controls } = makeJumpRig(pos, tgt);
+      const before = sphericalOf(camera, controls.target);
+      // Tick order mirrors TerrainCanvas: jump → update → target clamp →
+      // conditional camera clamp → render. The translated camera lands
+      // outside the rectangle (the pre-fix yank trigger) but the
+      // exemption holds, so the offset survives untouched.
+      let jumpPlacedCamera = true;
+      jumpCameraTo(camera.position, controls.target, dest, W, D, () => ground);
+      expect(isCameraOutsideWorld(camera.position, W, D)).toBe(true);
+      controls.update();
+      clampPanTargetWithCamera(controls.target, camera.position, W, D);
+      if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, W, D)) jumpPlacedCamera = false;
+      if (!jumpPlacedCamera) clampCameraToWorld(camera.position, W, D);
+      expect(jumpPlacedCamera).toBe(true);
+      const ndc = projectDest(camera);
+      expect(Math.abs(ndc.x)).toBeLessThan(1e-6);
+      expect(Math.abs(ndc.y)).toBeLessThan(1e-6);
+      const after = sphericalOf(camera, controls.target);
+      expect(after.dist).toBeCloseTo(before.dist, 6);
+      expect(after.az).toBeCloseTo(before.az, 6);
+      expect(after.polar).toBeCloseTo(before.polar, 6);
+    });
+  }
+
+  it("contrast: clamping the jump-placed camera collapses zoom and misses the frame (the bug)", () => {
+    // The pre-fix tick order (unconditional camera clamp): the same jump
+    // lands the camera at x=5662, update() aims from there, then the clamp
+    // yanks it to 3190 — so the jump tick renders the clicked point out of
+    // frame, and the settled view keeps neither the zoom nor the angle.
+    const { camera, controls } = makeJumpRig({ x: 3190, y: 1200, z: 0 }, { x: 0, y: 100, z: 0 });
+    const before = sphericalOf(camera, controls.target);
+    jumpCameraTo(camera.position, controls.target, dest, W, D, () => ground);
+    controls.update();
+    clampPanTargetWithCamera(controls.target, camera.position, W, D);
+    clampCameraToWorld(camera.position, W, D);
+    const flash = projectDest(camera);
+    expect(Math.hypot(flash.x, flash.y)).toBeGreaterThan(1);
+    // Settle one quiet tick: the ground point re-centers, but the zoom and
+    // angle are gone (dist ~3374 → ~1314, polar ~71° → ~33°).
+    controls.update();
+    clampPanTargetWithCamera(controls.target, camera.position, W, D);
+    clampCameraToWorld(camera.position, W, D);
+    const settled = projectDest(camera);
+    expect(Math.abs(settled.x)).toBeLessThan(1e-6);
+    expect(Math.abs(settled.y)).toBeLessThan(1e-6);
+    const after = sphericalOf(camera, controls.target);
+    expect(after.dist).toBeLessThan(before.dist * 0.5);
+    expect(after.polar).toBeLessThan(before.polar - 0.3);
+  });
+
+  it("exemption holds across later ticks (no delayed yank) and clears on re-entry", () => {
+    // A jump-tick-only skip would yank on tick 2 — the same breakage one
+    // frame later. Run five quiet ticks through the tick transition and
+    // demand a stable offset throughout.
+    const { camera, controls } = makeJumpRig({ x: 3190, y: 1200, z: 0 }, { x: 0, y: 100, z: 0 });
+    let jumpPlacedCamera = true;
+    jumpCameraTo(camera.position, controls.target, dest, W, D, () => ground);
+    const jumped = sphericalOf(camera, controls.target);
+    for (let tick = 0; tick < 5; tick++) {
+      controls.update();
+      clampPanTargetWithCamera(controls.target, camera.position, W, D);
+      if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, W, D)) jumpPlacedCamera = false;
+      if (!jumpPlacedCamera) clampCameraToWorld(camera.position, W, D);
+      expect(jumpPlacedCamera).toBe(true);
+      const now = sphericalOf(camera, controls.target);
+      expect(now.dist).toBeCloseTo(jumped.dist, 6);
+      expect(now.az).toBeCloseTo(jumped.az, 6);
+      expect(now.polar).toBeCloseTo(jumped.polar, 6);
+    }
+    // Zoom in: dolly the offset to 20% so the camera drifts back inside
+    // (x 5662 → 3110, within ±3190) — the next tick clears the exemption
+    // through the re-entry check.
+    camera.position.set(
+      controls.target.x + (camera.position.x - controls.target.x) * 0.2,
+      controls.target.y + (camera.position.y - controls.target.y) * 0.2,
+      controls.target.z + (camera.position.z - controls.target.z) * 0.2,
+    );
+    expect(isCameraOutsideWorld(camera.position, W, D)).toBe(false);
+    controls.update();
+    clampPanTargetWithCamera(controls.target, camera.position, W, D);
+    if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, W, D)) jumpPlacedCamera = false;
+    if (!jumpPlacedCamera) clampCameraToWorld(camera.position, W, D);
+    expect(jumpPlacedCamera).toBe(false);
+    // …and with the exemption cleared, gradual drift past the bound is
+    // trimmed again: the task-118 protection is intact.
+    camera.position.set((W / 2) * 1.25 + 500, 800, 300);
+    controls.update();
+    clampPanTargetWithCamera(controls.target, camera.position, W, D);
+    if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, W, D)) jumpPlacedCamera = false;
+    if (!jumpPlacedCamera) clampCameraToWorld(camera.position, W, D);
+    expect(camera.position.x).toBeCloseTo((W / 2) * 1.25, 9);
+    expect(controls.target.x).toBeCloseTo(dest.x, 9);
+  });
 });

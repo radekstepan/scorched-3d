@@ -23,6 +23,7 @@ import {
   clampZoomSpeed,
   effectivePanSpeed,
   effectiveZoomSpeed,
+  isCameraOutsideWorld,
   isPanKey,
   panInputFromCodes,
   panOffset,
@@ -300,6 +301,52 @@ describe("clampCameraToWorld", () => {
     expect(position.x - target.x).toBeCloseTo(-1000, 10);
     expect(Math.abs(position.x)).toBeLessThanOrEqual(bx);
     expect(Math.abs(position.z)).toBeLessThanOrEqual(bz);
+  });
+});
+
+describe("isCameraOutsideWorld", () => {
+  // Same rectangle the clamp enforces: ±3190 x ±2550 on the 320x256 map.
+  const worldW = 5104;
+  const worldD = 4080;
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+
+  it("reads false inside the rectangle and on its boundary", () => {
+    expect(isCameraOutsideWorld({ x: 0, y: 1200, z: 0 }, worldW, worldD)).toBe(false);
+    expect(isCameraOutsideWorld({ x: bx, y: 0, z: -bz }, worldW, worldD)).toBe(false);
+    expect(isCameraOutsideWorld({ x: -bx, y: 9999, z: bz }, worldW, worldD)).toBe(false);
+  });
+
+  it("reads true past any edge, per axis", () => {
+    expect(isCameraOutsideWorld({ x: bx + 1, y: 0, z: 0 }, worldW, worldD)).toBe(true);
+    expect(isCameraOutsideWorld({ x: 0, y: 0, z: -bz - 1 }, worldW, worldD)).toBe(true);
+    expect(isCameraOutsideWorld({ x: -(bx + 1), y: 0, z: bz + 1 }, worldW, worldD)).toBe(true);
+  });
+
+  it("ignores height like the clamp", () => {
+    expect(isCameraOutsideWorld({ x: 0, y: 99999, z: 0 }, worldW, worldD)).toBe(false);
+    expect(isCameraOutsideWorld({ x: bx + 1, y: -99999, z: 0 }, worldW, worldD)).toBe(true);
+  });
+
+  it("agrees with the clamp: it fires exactly where the clamp would move the camera", () => {
+    // The minimap-jump exemption (task 120) clears on re-entry through
+    // this predicate, so it must match the clamp bound exactly — a
+    // mismatch would either yank fresh jumps or exempt gradual drift.
+    const points = [
+      { x: bx, z: bz },
+      { x: bx + 0.5, z: bz },
+      { x: bx, z: -(bz + 0.5) },
+      { x: 5662, z: 300 },
+      { x: -1600, z: 2900 },
+      { x: 1482, z: 400 },
+    ];
+    for (const { x, z } of points) {
+      const position = { x, y: 1200, z };
+      const before = { ...position };
+      clampCameraToWorld(position, worldW, worldD);
+      const moved = position.x !== before.x || position.z !== before.z;
+      expect(isCameraOutsideWorld(before, worldW, worldD)).toBe(moved);
+    }
   });
 });
 

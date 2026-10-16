@@ -187,12 +187,31 @@ export function clampPanTargetWithCamera(
  * back shortens the viewing offset (a slight zoom-in at the bound) while
  * the focus point stays put. Height is untouched — the polar clamp and
  * zoom distance own Y.
+ *
+ * Never apply this to a jump-placed camera (see `isCameraOutsideWorld`):
+ * a minimap jump is an explicit teleport whose offset IS the requested
+ * zoom/angle, so reeling it in destroys the request instead of trimming
+ * gradual drift.
  */
 export function clampCameraToWorld(position: Vec3, worldW: number, worldD: number): void {
   const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
   const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
   position.x = Math.min(bx, Math.max(-bx, position.x));
   position.z = Math.min(bz, Math.max(-bz, position.z));
+}
+
+/**
+ * True when the camera sits outside the world rectangle
+ * `clampCameraToWorld` enforces (same bounds, read-only). The tick uses it
+ * for the minimap-jump exemption: a jump-placed camera keeps its exact
+ * offset (the requested zoom/angle) until it drifts back inside on its own
+ * — clamping the fresh teleport would yank it, collapsing zoom and
+ * swinging the angle. Height is ignored, like the clamp itself.
+ */
+export function isCameraOutsideWorld(position: Vec3, worldW: number, worldD: number): boolean {
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+  return Math.abs(position.x) > bx || Math.abs(position.z) > bz;
 }
 
 /**

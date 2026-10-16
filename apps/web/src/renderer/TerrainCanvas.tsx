@@ -67,6 +67,7 @@ import {
   clampPanTargetWithCamera,
   effectivePanSpeed,
   effectiveZoomSpeed,
+  isCameraOutsideWorld,
   isPanKey,
   MAX_ZOOM_DISTANCE,
   MIN_ZOOM_DISTANCE,
@@ -870,6 +871,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     let raf = 0;
     let posTimer = 1;
     let appliedJumpSeq = jumpRef.current?.seq ?? -1;
+    // A minimap jump teleports the camera by rigid translation — its offset
+    // IS the requested zoom/angle — so a jump-placed camera outside the
+    // world rectangle is legitimate (its focus is in-bounds by
+    // construction) and the camera clamp yields until the camera drifts
+    // back inside on its own. Clamping the fresh teleport would yank it,
+    // collapsing zoom and swinging the angle (task 120).
+    let jumpPlacedCamera = false;
     const clock = new THREE.Clock();
     // FPS readout: sampler feeds the overlay div straight from the tick, so
     // React state never churns at frame rate.
@@ -944,9 +952,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           // edge stops forward motion instead of flipping the view (the
           // camera must never keep travelling past a stuck target), then
           // hold the camera itself inside the world rectangle — orbiting
-          // at far zoom would otherwise swing it off the map.
+          // at far zoom would otherwise swing it off the map — unless a
+          // minimap jump placed it (its offset is the requested zoom).
           clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
-          clampCameraToWorld(camera.position, worldW, worldD);
+          if (!jumpPlacedCamera) clampCameraToWorld(camera.position, worldW, worldD);
           markHoverDirty();
         }
       }
@@ -968,6 +977,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (jump && jump.seq !== appliedJumpSeq) {
         appliedJumpSeq = jump.seq;
         jumpCameraTo(camera.position, controls.target, jump, worldW, worldD, groundY);
+        jumpPlacedCamera = true;
         markHoverDirty();
       }
 
@@ -977,9 +987,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // The camera rides the clamped delta (right-drag pan included) so the
       // viewing angle survives the edge instead of flipping backwards — and
       // the camera position itself is held inside the same world rectangle,
-      // so orbiting/zooming can never swing the view off the map.
+      // so orbiting/zooming can never swing the view off the map, unless a
+      // minimap jump placed it: the exemption clears once the camera drifts
+      // back inside, so gradual motion is still trimmed every tick.
       clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
-      clampCameraToWorld(camera.position, worldW, worldD);
+      if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, worldW, worldD)) {
+        jumpPlacedCamera = false;
+      }
+      if (!jumpPlacedCamera) clampCameraToWorld(camera.position, worldW, worldD);
 
       movement.update(dt);
       tracks.update(movement, dt);
