@@ -181,9 +181,23 @@ export const HQ_FOUNDATION_MARGIN = 6;
 /**
  * End-band columns searched per side (outermost first): island shores step
  * the fort inward off the surf instead of beaching it, while inland maps
- * still take the outermost column.
+ * still take the outermost column. Wide enough to reach past shore ramps
+ * onto the inland flats, so the pad-lift price (see `HQ_PAD_LIFT_WEIGHT`)
+ * can trade a few map-end columns for honest ground instead of building a
+ * works hill.
  */
-export const HQ_END_BAND = 16;
+export const HQ_END_BAND = 48;
+/**
+ * Siting price per unit of pad fill: a candidate whose pad would need
+ * leveling UP by `lift` (pad top minus anchor, see `hqPadTop`) loses
+ * `lift * HQ_PAD_LIFT_WEIGHT` score. One unit of fill outweighs one
+ * map-end column (the column pull is 50), so a fort on a shore ramp steps
+ * inland onto ground that is already there instead of raising a works
+ * hill — while flat valley floors (no lift anywhere) still site at the
+ * outermost dry column. Strict + relaxed passes; the half-sweep fallbacks
+ * keep their valley-floor target scoring.
+ */
+export const HQ_PAD_LIFT_WEIGHT = 60;
 
 /**
  * Highest height above sea level a fort may sit at: the roomier of the
@@ -289,38 +303,65 @@ export interface HqGroundField extends HqField {
 }
 
 /**
- * Level every site's construction pad UP to the highest ground it covers —
- * pad cells plus their immediate apron ring (the exit road excluded: the
- * mouth wall is a ramp job for `gradeHqExits`, not a reason to raise the
- * whole fort). Cut-and-fill in place: siting picks low valley-floor
- * anchors, so leveling down to the anchor dug the works into a pit with
- * the driveway staring at a pass wall (Dust Plains rim forts sat ~15 below
- * their mouth). Leveling up seats the slab and the hall floor ON the ground
- * at the local top instead — the anchor cell itself rises with the pad, so
+ * True when (`x`, `z`) falls on the site's exit-lane rectangle past the
+ * hall mouth — the same rect `hqRoadCells` enumerates, tested
+ * arithmetically so siting can price every candidate without allocating
+ * the lane. The driveway columns are the graded ramp's job, never pad
+ * fill.
+ */
+export function isHqRoadCell(site: HqSite, x: number, z: number): boolean {
+  const dir = site.team === 0 ? 1 : -1;
+  const along = (x - site.cellX) * dir;
+  if (along < HQ_HALL_CELLS + 1 || along > HQ_HALL_CELLS + HQ_ROAD_EXTRA) return false;
+  return Math.abs(z - site.cellZ) <= HQ_ROAD_HALF_WIDTH;
+}
+
+/**
+ * Highest natural ground the works pad covers — pad cells plus their
+ * immediate apron ring, exit-lane cells excluded: the level-up target
+ * `levelHqPads` fills the pad to, and the hill the siter prices into
+ * every candidate (see `HQ_PAD_LIFT_WEIGHT`). Always at least the anchor
+ * height, so the pad lift (`hqPadTop - anchor`) is never negative. Pure,
+ * deterministic.
+ */
+export function hqPadTop(field: HqField, site: HqSite): number {
+  let top = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
+  const consider = (x: number, z: number): void => {
+    if (x < 0 || z < 0 || x >= field.width || z >= field.height) return;
+    if (isHqRoadCell(site, x, z)) return;
+    const h = field.heights[z * field.width + x] ?? 0;
+    if (h > top) top = h;
+  };
+  for (const cell of hqPadCells(site, field.width, field.height)) {
+    consider(cell.cellX, cell.cellZ);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        consider(cell.cellX + dx, cell.cellZ + dz);
+      }
+    }
+  }
+  return top;
+}
+
+/**
+ * Level every site's construction pad UP to the highest ground it covers
+ * (see `hqPadTop`: pad cells plus their apron ring, the exit road
+ * excluded — the mouth wall is a ramp job for `gradeHqExits`, not a reason
+ * to raise the whole fort). Cut-and-fill in place: leveling down to a low
+ * anchor dug the works into a pit with the driveway staring at a pass
+ * wall, so leveling up seats the slab and the hall floor ON the ground at
+ * the local top instead — the anchor cell itself rises with the pad, so
  * dry margin and hall-clear siting guards still hold afterwards (raising
- * ground can only dry it). Deterministic.
+ * ground can only dry it). Siting now prices the fill (see
+ * `HQ_PAD_LIFT_WEIGHT`), so on honest ground this is a gentle touch-up,
+ * not a hill — the full lift survives only as the safety net for cramped
+ * maps. Deterministic.
  */
 export function levelHqPads(field: HqField, sites: readonly HqSite[]): void {
   for (const site of sites) {
-    const cells = hqPadCells(site, field.width, field.height);
-    const road = new Set(hqRoadCells(site, field.width, field.height).map((c) => c.cellZ * field.width + c.cellX));
-    let top = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
-    const consider = (x: number, z: number): void => {
-      if (x < 0 || z < 0 || x >= field.width || z >= field.height) return;
-      if (road.has(z * field.width + x)) return;
-      const h = field.heights[z * field.width + x] ?? 0;
-      if (h > top) top = h;
-    };
-    for (const cell of cells) {
-      consider(cell.cellX, cell.cellZ);
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dz === 0) continue;
-          consider(cell.cellX + dx, cell.cellZ + dz);
-        }
-      }
-    }
-    for (const cell of cells) {
+    const top = hqPadTop(field, site);
+    for (const cell of hqPadCells(site, field.width, field.height)) {
       field.heights[cell.cellZ * field.width + cell.cellX] = top;
     }
   }
@@ -390,7 +431,10 @@ export function clearHqLanes(field: HqGroundField, sites: readonly HqSite[]): vo
  * works), nearest dry gentle LOW ground to the middle row (seed offsets
  * the scan start so regens vary). Low ground wins within the allowed
  * band — the old scorer preferred higher cells, which marched forts up
- * every ridge. Pure, no rng draws — replays match exactly.
+ * every ridge — but never a shore ramp the pad would have to fill into a
+ * hill: the pad lift is priced per unit (see `HQ_PAD_LIFT_WEIGHT`), so the
+ * fort steps inland onto ground that is already there. Pure, no rng
+ * draws — replays match exactly.
  *
  * Two passes over the band: a strict valley-floor pass (margin + cap +
  * gentle + clear hall), then a relaxed pass (shore margin, steeper, cap +
@@ -417,9 +461,15 @@ export function placeHqs(field: HqField, seed: number): HqSite[] {
       const h = field.heights[cellZ * field.width + x] ?? 0;
       const slope = cellSlope(field, x, cellZ);
       // Outermost column first (map-end fort), then the central gate,
-      // then gentle, then LOW: factories sit on the valley floor.
+      // then gentle, then LOW: factories sit on the valley floor. And no
+      // works hill: ground the pad would have to fill UP to is priced per
+      // unit, so a shore ramp loses to the inland flat behind it.
       const colOffset = Math.abs(x - endX);
-      return -colOffset * 50 - Math.abs(cellZ - mid) * 4 - slope * 2 - (h - field.seaLevel) * 0.25;
+      const lift = hqPadTop(field, { team, cellX: x, cellZ }) - h;
+      return (
+        -colOffset * 50 - Math.abs(cellZ - mid) * 4 - slope * 2 - (h - field.seaLevel) * 0.25 -
+        lift * HQ_PAD_LIFT_WEIGHT
+      );
     };
     let best = { cellX: -1, cellZ: -1, score: -Infinity };
     for (const x of band) {

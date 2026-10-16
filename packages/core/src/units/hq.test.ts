@@ -31,10 +31,12 @@ import {
   hqHallClear,
   hqMaxAboveSea,
   hqPadCells,
+  hqPadTop,
   hqRoadCells,
   hqSpawnStrength,
   isHqDestroyed,
   isHqGround,
+  isHqRoadCell,
   levelHqPads,
   pickNextSpawnUnit,
   placeHqs,
@@ -200,6 +202,63 @@ describe("placeHqs", () => {
           );
           expect(hqHallClear(raw, site.cellX, site.cellZ, site.team)).toBe(true);
         }
+      }
+    }
+  });
+
+  it("trades map-end columns for inland flats instead of building a works hill", () => {
+    // A shore ramp at the west end (dry, gentle per cell, hall-clear)
+    // rising onto a flat steppe: the old outermost-low scorer took the ramp
+    // foot and filled a 24-unit hill; the lift price must step the fort
+    // inland onto the flat, where the pad needs no fill at all.
+    const width = 96;
+    const height = 64;
+    const seaLevel = 10;
+    const heights = new Uint8Array(width * height);
+    for (let z = 0; z < height; z++) {
+      for (let x = 0; x < width; x++) {
+        heights[z * width + x] = Math.min(24 + 2 * Math.max(0, x - hqCellX(width, 0)), 48);
+      }
+    }
+    const field = { heights, width, height, seaLevel };
+    const sites = placeHqs(field, 7);
+    const west = sites[0]!;
+    expect(west.team).toBe(0);
+    // First fully-flat column past the ramp: anchor on the steppe, no fill.
+    expect(west.cellX).toBe(hqCellX(width, 0) + 12);
+    expect(west.cellZ).toBe(height >> 1);
+    const anchor = heights[west.cellZ * width + west.cellX]!;
+    expect(hqPadTop(field, west) - anchor).toBe(0);
+    // The flat east end still sites at the outermost column.
+    expect(sites[1]!.cellX).toBe(hqCellX(width, 1));
+  });
+
+  it("seats Dust Plains forts inland on natural steppe with no works hill", () => {
+    // Regression: map-end anchors on the shore ramp (sea + 9) filled a
+    // 15–21 unit pad hill. The lift price must pull both forts further
+    // inland, onto ground already high enough that leveling is a touch-up,
+    // not a hill.
+    for (const seed of [1, 7, 42, 3, 99]) {
+      const raw = sampleHeightField("dustplains", seed);
+      const sites = placeHqs(raw, seed);
+      // The shipped map builds its forts from exactly these sites.
+      expect(generateMap("dustplains", seed).hqs).toEqual(sites);
+      for (const site of sites) {
+        const endX = hqCellX(raw.width, site.team);
+        const anchor = raw.heights[site.cellZ * raw.width + site.cellX] ?? 0;
+        const lift = hqPadTop(raw, site) - anchor;
+        expect(
+          Math.abs(site.cellX - endX),
+          `dustplains seed ${seed} team ${site.team} still on the shore ramp`,
+        ).toBeGreaterThanOrEqual(18);
+        expect(
+          anchor,
+          `dustplains seed ${seed} team ${site.team} anchor too low (h=${anchor})`,
+        ).toBeGreaterThanOrEqual(raw.seaLevel + 20);
+        expect(
+          lift,
+          `dustplains seed ${seed} team ${site.team} still builds a hill (lift=${lift})`,
+        ).toBeLessThanOrEqual(4);
       }
     }
   });
@@ -456,6 +515,41 @@ describe("hq exit lanes", () => {
       expect(c.cellZ).toBeGreaterThanOrEqual(0);
       expect(c.cellZ).toBeLessThan(8);
     }
+  });
+
+  it("matches the enumerated exit lane cell for cell", () => {
+    // The arithmetic road test must agree with the enumerated lane exactly
+    // for both facings — siting prices every candidate through it.
+    const w = 64;
+    const h = 64;
+    for (const team of [0, 1] as const) {
+      const site = { team, cellX: team === 0 ? 5 : 58, cellZ: 32 };
+      const lane = new Set(hqRoadCells(site, w, h).map((c) => c.cellZ * w + c.cellX));
+      expect(lane.size).toBeGreaterThan(0);
+      for (let z = 0; z < h; z++) {
+        for (let x = 0; x < w; x++) {
+          expect(isHqRoadCell(site, x, z)).toBe(lane.has(z * w + x));
+        }
+      }
+    }
+  });
+
+  it("prices the pad top off the pad plus apron, never the driveway", () => {
+    const width = 64;
+    const height = 32;
+    const site = { team: 0 as const, cellX: 5, cellZ: 16 };
+    // Flat pad: the top is the anchor, no lift.
+    const heights = new Uint8Array(width * height).fill(40);
+    const field = { heights, width, height, seaLevel: 10 };
+    expect(hqPadTop(field, site)).toBe(40);
+    // A spike on the driveway past the mouth is the ramp's job, not fill.
+    const mouth = 5 + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA;
+    heights[16 * width + mouth + 5] = 200;
+    expect(isHqRoadCell(site, mouth + 5, 16)).toBe(true);
+    expect(hqPadTop(field, site)).toBe(40);
+    // A spike on the apron ring counts: the pad must rise to meet it.
+    heights[(16 + HQ_PAD_HALF_WIDTH + 1) * width + 5] = 90;
+    expect(hqPadTop(field, site)).toBe(90);
   });
 
   it("levels pads UP to the pad-plus-apron top and leaves the rest alone", () => {
