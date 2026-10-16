@@ -282,10 +282,11 @@ export class UnitMovement {
 
   /**
    * Reposition a live hull whose gun cannot engage because terrain hides
-   * the target (core `seekEngage` through the retaliation pursuit drive, so
-   * the hull closes toward the target — a higher vantage or shorter range —
-   * holds at weapons-range stand-off, and resumes patrol if the fight moves
-   * on). Structure targets (an HQ fort, `target -1`) assault through core
+   * the target or its rounds keep sticking in wood (core `seekEngage`
+   * through the retaliation pursuit drive, so the hull closes toward the
+   * target — a higher vantage, shorter range, or out of the forest — holds
+   * at weapons-range stand-off, and resumes patrol if the fight moves on).
+   * Structure targets (an HQ fort, `target -1`) assault through core
    * `seekStructure` instead: the push survives the hunt sweep (never
    * clobbered by a team advance) and yields to consistent challengers
    * before resuming the fort. Wrecks refuse (they hold forever), a hull

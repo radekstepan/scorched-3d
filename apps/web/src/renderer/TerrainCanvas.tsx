@@ -643,9 +643,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       movement.threatenUnit(victim, attacker, ax, az, shell);
       combat.trackThreat(victim, attacker);
     };
-    // Obstructed guns: a hull that holds fire because terrain hides its
-    // target repositions toward it (higher vantage or closer) through the
-    // same pursuit drive instead of shooting through the hill.
+    // Obstructed guns: a hull whose gun cannot engage — terrain hides its
+    // target, or its rounds keep sticking in wood — repositions toward it
+    // (higher vantage, closer, or out of the forest) through the same
+    // pursuit drive instead of shooting through the hill or the canopy.
     combat.onObstructedShot = (attacker, target, x, z) => {
       movement.seekEngage(attacker, target, x, z);
     };

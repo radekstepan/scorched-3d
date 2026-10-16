@@ -502,6 +502,19 @@ export const TREE_STICK_CHANCE_BOLT = 0.55;
 export const TREE_STICK_CHANCE_SHELL = 0.35;
 /** Flight sampling step for canopy-clearance tests, world units. */
 export const CANOPY_SAMPLE_STEP = 16;
+/**
+ * Consecutive tree-stuck rounds after which a gun asks for a reposition
+ * instead of firing into the wood forever: the renderer counts per-attacker
+ * rounds swallowed by live trees (see `rollTreeStick`) and, on the Nth
+ * consecutive stick, reports the shot as obstructed so the hull closes
+ * toward its target — out of the forest when the enemy stands outside it,
+ * closer (fewer crossed crowns) when both stand inside — through the same
+ * pursuit drive terrain-blocked guns use. A round that reaches its impact
+ * resets the count: only *consecutive* futility moves the hull. Sized like
+ * the retaliation precedents (`HQ_DEFENSE_HITS`): one stray ember is canopy
+ * noise, three in a row is a blocked lane.
+ */
+export const FOREST_STICK_REPOSITION_HITS = 3;
 
 /** One tree as a projectile obstacle: ground seat plus standing mask. */
 export interface TreeStand {

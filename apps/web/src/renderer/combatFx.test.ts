@@ -10,6 +10,7 @@ import {
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_SLEW_RATE,
+  FOREST_STICK_REPOSITION_HITS,
   GRAVITY,
   mulberry32,
   muzzleYaw,
@@ -1367,6 +1368,59 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     for (let n = 0; n < 1200; n++) fx.update(1 / 60);
     expect(fx.totalFired).toBeGreaterThan(0);
     expect(fx.stuckCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("reports an obstructed shot when rounds keep sticking in wood (leave the forest)", () => {
+    const scene = new THREE.Scene();
+    const units = makeWoodlandPair("flash", "flash");
+    const ctl = woodlandEnv();
+    // Zero rng: every crossing sticks (0 < stick chance), every volley is
+    // 0→1 (legacy pair pick draws attacker 0, slot 0), and aim never
+    // scatters — the lane reads as blocked on attacker 0's third ember,
+    // deterministically.
+    const fx = new CombatFx(scene, units, () => 0, ctl.env);
+    const obstructed: { attacker: number; target: number; x: number; z: number }[] = [];
+    fx.onObstructedShot = (attacker, target, x, z) => obstructed.push({ attacker, target, x, z });
+    for (let n = 0; n < 3000 && obstructed.length === 0; n++) fx.update(1 / 60);
+    // The third consecutive ember names the pair plus the target position
+    // to close on (unscattered aim: exactly the far hull), and re-arms.
+    expect(fx.totalFired).toBeGreaterThanOrEqual(FOREST_STICK_REPOSITION_HITS);
+    expect(obstructed).toEqual([{ attacker: 0, target: 1, x: 400, z: 0 }]);
+    expect(fx.forestStickCount(0)).toBe(0);
+    // Persistent futility re-reports without spamming: exactly one more
+    // hook per further threshold of consecutive sticks.
+    const stuckAtFirst = fx.stuckCount;
+    for (let n = 0; n < 3000 && obstructed.length < 2; n++) fx.update(1 / 60);
+    expect(obstructed).toHaveLength(2);
+    expect(obstructed[1]).toEqual({ attacker: 0, target: 1, x: 400, z: 0 });
+    expect(fx.stuckCount - stuckAtFirst).toBe(FOREST_STICK_REPOSITION_HITS);
+    fx.dispose();
+  });
+
+  it("resets the forest-futility count when a round reaches its impact", () => {
+    const scene = new THREE.Scene();
+    const units = makeWoodlandPair("flash", "flash");
+    let woodsOn = true;
+    const fx = new CombatFx(scene, units, () => 0, {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      treeStands: () => (woodsOn ? [{ x: 200, z: 0, groundY: 86, standing: true }] : []),
+      strikeTree: () => {},
+    });
+    const obstructed: unknown[] = [];
+    fx.onObstructedShot = (...args: unknown[]) => obstructed.push(args);
+    // Two embers strand a streak of 2 — one short of the reposition.
+    for (let n = 0; n < 3000 && fx.forestStickCount(0) < 2; n++) fx.update(1 / 60);
+    expect(fx.forestStickCount(0)).toBe(2);
+    expect(obstructed).toHaveLength(0);
+    // The wood falls (a blast/crush lane opens): the next volley lands and
+    // clears the streak instead of reporting — only consecutive sticks move
+    // the hull.
+    woodsOn = false;
+    for (let n = 0; n < 3000 && fx.forestStickCount(0) > 0; n++) fx.update(1 / 60);
+    expect(fx.forestStickCount(0)).toBe(0);
+    expect(obstructed).toHaveLength(0);
     fx.dispose();
   });
 

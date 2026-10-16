@@ -19,6 +19,7 @@ import {
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_SLEW_RATE,
+  FOREST_STICK_REPOSITION_HITS,
   flightClearsTerrain,
   flightClearsTrees,
   flightTerrainHit,
@@ -151,6 +152,13 @@ interface Shot {
    */
   attacker: number;
   target: number;
+  /**
+   * Aimed impact X/Z: the target position to close on when the lane proves
+   * futile (see `forestSticks`) — the scattered aim point, so it tracks the
+   * live hull for duels and the fort seat for structure shots alike.
+   */
+  tx: number;
+  tz: number;
 }
 
 interface Flash {
@@ -751,15 +759,30 @@ export class CombatFx {
     | ((victim: number, attacker: number, ax: number, az: number, damageAdd: number, shell: boolean) => void)
     | null = null;
   /**
-   * Fired when a gun holds fire because terrain hides its target (the arc
-   * would hit the hillside): the attacker must reposition to a higher
-   * vantage or closer instead of shooting through the hill. Carries the
-   * attacker's roster index, the intended target index (-1 for a
-   * structure), and the target's world X/Z. Assigned by the canvas (which
-   * steers the hull through the movement drive); null in headless tests,
-   * where obstructed guns just hold fire silently.
+   * Fired when a gun cannot engage through its lane: either it holds fire
+   * because terrain hides its target (the arc would hit the hillside), or
+   * its rounds keep sticking in live wood (`FOREST_STICK_REPOSITION_HITS`
+   * consecutive sticks — the lane is blocked, not unlucky). Either way the
+   * attacker must reposition toward the target — a higher vantage, closer,
+   * or out of the forest — instead of shooting through the hill or feeding
+   * the canopy. Carries the attacker's roster index, the intended target
+   * index (-1 for a structure), and the target's world X/Z. Assigned by the
+   * canvas (which steers the hull through the movement drive); null in
+   * headless tests, where obstructed guns just hold fire silently.
    */
   onObstructedShot: ((attacker: number, target: number, x: number, z: number) => void) | null = null;
+  /**
+   * Consecutive tree-stuck rounds per attacker: every round live wood
+   * swallows increments its gunner's count, every round that reaches its
+   * impact clears it. On `FOREST_STICK_REPOSITION_HITS` the gun reports an
+   * obstructed shot (see `onObstructedShot`) so the hull repositions toward
+   * its target instead of firing into the branches forever, and the count
+   * re-arms from zero — persistent futility keeps the pursuit fresh without
+   * spamming the hook on every ember. Mid-flight terrain kills leave the
+   * count alone (the fire-time terrain gate owns terrain); kills drop the
+   * gunner's entry and `clearTransients` drops the map with the shots.
+   */
+  private forestSticks = new Map<number, number>();
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Reused husk-decay fractions for `poseHusks` (no per-tick array). */
@@ -851,6 +874,10 @@ export class CombatFx {
   /** Rounds intercepted by live trees (stuck embers + early bursts). */
   get stuckCount(): number {
     return this.stuck;
+  }
+  /** Consecutive tree-stuck rounds on `attacker`'s gun (0 without a streak), for tests/HUD. */
+  forestStickCount(attacker: number): number {
+    return this.forestSticks.get(attacker) ?? 0;
   }
 
   /** Peewee grenade lobs fired since construction (subset of `totalFired`). */
@@ -1192,6 +1219,7 @@ export class CombatFx {
     this.nudges.clear();
     this.pending.clear();
     this.pendingHq.clear();
+    this.forestSticks.clear();
     for (const pose of this.aim) pose.overshoot = 0;
     for (const light of this.lights) light.intensity = 0;
     // In-flight glow goes dark with the shots (persistent scorch, kill
@@ -1324,6 +1352,8 @@ export class CombatFx {
         this.destroyed[i] = true;
         this.killedAt[i] = this.elapsed;
         this.deathCount += 1;
+        // A wreck's gun never fires again: drop its futility streak.
+        this.forestSticks.delete(i);
         const wreck = bodies[i];
         if (wreck) {
           this.settleNudge(i, wreck);
@@ -2318,6 +2348,8 @@ export class CombatFx {
       attack,
       attacker: attackerIdx,
       target,
+      tx: impact.x,
+      tz: impact.z,
     });
     this.fired += 1;
     this.lastKind = kind;
@@ -2774,6 +2806,18 @@ export class CombatFx {
           this.shots.splice(this.shots.indexOf(shot), 1);
           this.stuck += 1;
           this.env?.strikeTree?.(stuckFid);
+          // Forest futility: rounds swallowed in a row prove the lane is
+          // blocked, not unlucky — report it so the hull repositions out
+          // of the wood (or closer through it) instead of feeding the
+          // canopy, then re-arm: persistent futility keeps the pursuit
+          // fresh without spamming the hook on every ember.
+          const streak = (this.forestSticks.get(shot.attacker) ?? 0) + 1;
+          if (streak >= FOREST_STICK_REPOSITION_HITS) {
+            this.forestSticks.delete(shot.attacker);
+            this.onObstructedShot?.(shot.attacker, shot.target, shot.tx, shot.tz);
+          } else {
+            this.forestSticks.set(shot.attacker, streak);
+          }
           if (shot.gravity > 0) {
             this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
             this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
@@ -2842,6 +2886,9 @@ export class CombatFx {
       const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
       this.removeShotVisuals(shot);
       this.shots.splice(this.shots.indexOf(shot), 1);
+      // The lane is open after all: a round that reaches its impact clears
+      // the gunner's futility streak (only *consecutive* sticks reposition).
+      this.forestSticks.delete(shot.attacker);
       this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
       this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
     }
