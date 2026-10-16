@@ -22,6 +22,14 @@ More commands:
 
 For more steps, read [Development](docs/development.md).
 
+## Deploy
+
+Every push to `main` publishes `apps/web` to GitHub Pages via
+`.github/workflows/deploy-pages.yml` (build → upload → deploy, no
+publishing branch). One-time setup: in the GitHub repo go to
+Settings → Pages → Source and select "GitHub Actions". The site then
+serves from `https://<owner>.github.io/<repo>/` after each push.
+
 ## More information
 
 - [Architecture](docs/architecture.md) shows workspaces, files, and build notes.
