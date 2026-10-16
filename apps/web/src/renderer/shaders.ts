@@ -10,7 +10,12 @@ export const terrainVertex = /* glsl */ `
 
   void main() {
     vUv = uv;
-    vNormal = normalize(normalMatrix * normal);
+    // World-space normal: the fragment shader reads N.y as world-up for the
+    // slope/rock blend, the hemisphere mix, and the sun dot (sunDir is a
+    // world-space uniform). A view-space normal (normalMatrix) would rotate
+    // with the camera — top-down, flat ground reads N.y ~= 0 and renders
+    // full brown rock; oblique, the same ground reads greener.
+    vNormal = normalize(mat3(modelMatrix) * normal);
     vec4 world = modelMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
     vHeight = position.y;

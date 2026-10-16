@@ -51,7 +51,40 @@ describe("shader sources", () => {
     expect(waterVertex).toContain("time");
     expect(skyFragment).toContain("sunDir");
   });
+});
 
+describe("view-independent ground tint", () => {
+  it("terrain slope/rock blend reads a world-up normal, not a view-space one", () => {
+    // The fragment shader treats N.y as world-up: slope drives the brown
+    // rock blend and the hemisphere mix. If the vertex shader fed a
+    // view-space normal (normalMatrix), N.y would rotate with the camera —
+    // top-down, flat ground reads N.y ~= 0 (full brown); oblique, the same
+    // ground reads greener. The varying must be world-space instead.
+    expect(terrainFragment).toContain("float slope = 1.0 - clamp(N.y, 0.0, 1.0);");
+    expect(terrainVertex).toContain("mat3(modelMatrix) * normal");
+    // The vNormal assignment must be view-independent (gl_Position below it
+    // still legitimately uses viewMatrix — scope the check to that line).
+    const vNormalLine =
+      terrainVertex.split("\n").find((l) => l.includes("vNormal =")) ?? "";
+    expect(vNormalLine).not.toContain("normalMatrix");
+    expect(vNormalLine).not.toContain("modelViewMatrix");
+    expect(vNormalLine).not.toContain("viewMatrix");
+    expect(vNormalLine).not.toContain("cameraPosition");
+  });
+
+  it("terrain sun lighting stays in world space with the sun direction", () => {
+    // sunDir is a world-space uniform (SUN in TerrainCanvas); dotting it
+    // against a view-space normal would swing the light with the camera.
+    expect(terrainFragment).toContain("dot(N, normalize(sunDir))");
+    expect(terrainFragment).toContain("mix(groundColor, skyColor, N.y * 0.5 + 0.5)");
+    const vNormalLine =
+      terrainVertex.split("\n").find((l) => l.includes("vNormal =")) ?? "";
+    expect(vNormalLine).toContain("modelMatrix");
+    expect(vNormalLine).not.toContain("normalMatrix");
+  });
+});
+
+describe("canvas wiring", () => {
   it("is consumed by TerrainCanvas for all three materials", () => {
     for (const name of [
       "terrainVertex",
