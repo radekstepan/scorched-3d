@@ -250,3 +250,48 @@ describe("natural water variation", () => {
     expect(terrainFragment).not.toContain("uniform float seed");
   });
 });
+
+describe("gated calm water", () => {
+  it("terrain underwater tint + caustics render only with water on", () => {
+    expect(terrainFragment).toContain("uniform float showWater;");
+    expect(terrainFragment).toContain("showWater > 0.5 && vWorld.y < waterY");
+  });
+
+  it("canvas drives the terrain water toggle with the surface visibility", () => {
+    expect(canvasSource).toContain(
+      "showWater: { value: options.showWater && map.seaLevel > 0 ? 1 : 0 }",
+    );
+    expect(canvasSource).toContain(
+      "terrainMat.uniforms.showWater!.value = opt.showWater && map.seaLevel > 0 ? 1 : 0;",
+    );
+  });
+
+  it("swell runs low and slow (halved chop)", () => {
+    for (const l of WATER_SWELL_LAYERS) {
+      expect(l.speed).toBeLessThanOrEqual(0.8);
+      expect(l.amp).toBeLessThanOrEqual(0.7);
+    }
+    const totalAmp = WATER_SWELL_LAYERS.reduce((s, l) => s + l.amp, 0);
+    expect(totalAmp).toBeLessThanOrEqual(1.6);
+    // Worst-case crest stays well under the old ~3.8-unit chop.
+    for (let s = 0; s < 60; s++) {
+      const h = waterSurfaceHeight(s * 37.7 - 900, s * 21.3 + 140, s * 0.31);
+      expect(Math.abs(h)).toBeLessThanOrEqual(2.1);
+    }
+  });
+
+  it("fragment ripple, foam, and caustic terms run at half pace", () => {
+    for (const lit of ["time * 0.55", "time * 0.45", "time * 0.85", "time * 1.0", "time * 0.8"]) {
+      expect(waterFragment).toContain(lit);
+    }
+    expect(terrainFragment).toContain("time * 0.5");
+    expect(terrainFragment).toContain("time * 0.35");
+    // Old fast paces are gone.
+    for (const lit of ["time * 1.15", "time * 1.6", "* 1.35", "* 1.05"]) {
+      expect(waterVertex).not.toContain(lit);
+    }
+    for (const lit of ["time * 1.1", "time * 1.7", "time * 2.0"]) {
+      expect(waterFragment).not.toContain(lit);
+    }
+  });
+});

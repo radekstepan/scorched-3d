@@ -193,6 +193,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         seaLevel: { value: map.seaLevel },
         exaggeration: { value: effectiveExaggeration(options.exaggeration) },
         showContours: { value: 0 },
+        showWater: { value: options.showWater && map.seaLevel > 0 ? 1 : 0 },
         time: { value: 0 },
         sunDir: { value: SUN.clone() },
         sunColor: { value: new THREE.Color(1.0, 0.93, 0.78) },
@@ -918,6 +919,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
       terrainMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       terrainMat.uniforms.showContours!.value = opt.showContours ? 1 : 0;
+      terrainMat.uniforms.showWater!.value = opt.showWater && map.seaLevel > 0 ? 1 : 0;
       terrainMat.uniforms.time!.value = t;
       waterMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       waterMat.uniforms.time!.value = t;
