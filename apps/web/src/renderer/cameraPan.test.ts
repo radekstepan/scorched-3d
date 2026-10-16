@@ -26,6 +26,7 @@ import {
   clampPanSpeed,
   clampPanTarget,
   clampPanTargetWithCamera,
+  clampTargetAboveSurface,
   clampZoomSpeed,
   effectivePanSpeed,
   effectiveZoomSpeed,
@@ -611,10 +612,12 @@ describe("camera speed sliders", () => {
   });
 
   it("bounds the wheel-zoom range from close-up to whole-map", () => {
-    // Close-up floor: inside the old 30 (and 80 before it), far outside the
-    // 2-unit near plane, just outside the longest hull half-length (14).
-    expect(MIN_ZOOM_DISTANCE).toBe(15);
-    expect(MIN_ZOOM_DISTANCE).toBeLessThan(30);
+    // Close-up floor: frames a single ~26-unit hull (~27 units tall at the
+    // 48° fov), backed off from a 15-unit floor that showed half a hull —
+    // far outside the 2-unit near plane and the longest hull half-length
+    // (14), and high enough that a typical close-up pitch clears the
+    // 6-unit surface floor (30·cos(74°) ≈ 8.3) instead of riding it.
+    expect(MIN_ZOOM_DISTANCE).toBe(30);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     // Whole-map ceiling for the doubled 320x256 field.
@@ -808,10 +811,36 @@ describe("clampCameraAboveSurface", () => {
   it("sizes the clearance between the near plane and the zoom floor", () => {
     // Above the 2-unit near plane (and the ~2-unit swell crests) with
     // margin, so the eye and its frustum stay out of the surface — yet
-    // well under the 15-unit zoom floor, so steep close-ups of a
+    // well under the 30-unit zoom floor, so typical close-ups of a
     // surface-seated target never touch this clamp.
     expect(CAMERA_SURFACE_CLEARANCE).toBe(6);
     expect(CAMERA_SURFACE_CLEARANCE).toBeGreaterThan(2 * 2);
     expect(CAMERA_SURFACE_CLEARANCE).toBeLessThan(MIN_ZOOM_DISTANCE);
+  });
+});
+
+describe("clampTargetAboveSurface", () => {
+  it("lifts a sunken focus to the surface with zero clearance", () => {
+    // The focus may rest exactly on the dirt (unlike the eye, it needs no
+    // room for a near plane) — the same seating minimap jumps use.
+    const target = { x: 10, y: -400, z: -30 };
+    clampTargetAboveSurface(target, 100);
+    expect(target).toEqual({ x: 10, y: 100, z: -30 });
+  });
+
+  it("leaves a surface-or-higher focus alone and never touches X/Z", () => {
+    for (const y of [100, 500]) {
+      const target = { x: 10, y, z: -30 };
+      clampTargetAboveSurface(target, 100);
+      expect(target).toEqual({ x: 10, y, z: -30 });
+    }
+  });
+
+  it("ignores non-finite surfaces instead of NaN-ing the focus", () => {
+    for (const surfaceY of [NaN, Infinity, -Infinity]) {
+      const target = { x: 1, y: 2, z: 3 };
+      clampTargetAboveSurface(target, surfaceY);
+      expect(target).toEqual({ x: 1, y: 2, z: 3 });
+    }
   });
 });

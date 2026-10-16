@@ -42,13 +42,16 @@ export const ZOOM_SPEED_MAX = 3;
 
 /**
  * Closest the wheel/pinch may dolly toward the orbit target (world units).
- * 15 frames a single ~26-unit tank hull as a tight close-up while staying
- * just outside the longest hull half-length (14) and ~7.5x past the 2-unit
- * near plane, so hulls never clip and no near-plane change was needed; the
- * polar clamp still holds the camera above the dirt. Cursor-anchored zoom
- * behavior is untouched — only the floor.
+ * 30 frames a single ~26-unit tank hull as the close-up (2·30·tan(24°) ≈
+ * 27 world units tall at the 48° fov), backed off from a 15-unit floor
+ * that showed half a hull and felt too close. It also keeps a typical
+ * close-up pitch above the 6-unit surface floor (30·cos(74°) ≈ 8.3), so
+ * cursor-anchored zoom preserves the view angle exactly instead of
+ * steepening onto the floor — while staying well outside the longest
+ * hull half-length (14) and 15x past the 2-unit near plane, so hulls
+ * never clip and no near-plane change was needed.
  */
-export const MIN_ZOOM_DISTANCE = 15;
+export const MIN_ZOOM_DISTANCE = 30;
 /**
  * Farthest the wheel/pinch may dolly out (world units). 320x256 cells is
  * ~5104 world units wide, so twice the classic 4200 keeps the whole
@@ -59,7 +62,7 @@ export const MAX_ZOOM_DISTANCE = 8400;
  * Minimum eye height above the local terrain/water surface (world units).
  * 6 clears the 2-unit near plane with room to spare, rides above the ~2
  * units of water swell crests, and absorbs the bilinear-vs-mesh height
- * mismatch — while staying well under the 15-unit zoom floor, so steep
+ * mismatch — while staying well under the 30-unit zoom floor, so typical
  * close-ups of a surface-seated target never touch it. Only grazing
  * descents (zooming into a slope, orbiting low over a rise) land here.
  */
@@ -291,6 +294,30 @@ export function clampCameraAboveSurface(
   if (!Number.isFinite(surfaceY) || !Number.isFinite(clearance)) return;
   const floor = surfaceY + clearance;
   if (position.y < floor) position.y = floor;
+}
+
+/**
+ * Hold the orbit target at or above the local terrain surface (callers pass
+ * the terrain height under the target's final XZ column — the focus may
+ * rest on a lakebed, mirroring `jumpCameraTo`, which seats jumps on the
+ * terrain rather than the water sheet). The zero clearance is deliberate:
+ * the eye needs room for its near plane and the swell, but a focus point
+ * sitting exactly on the dirt is a valid request.
+ *
+ * Without this, cursor-anchored zoom sinks the target through the floor:
+ * every wheel tick re-seats the target along the camera's downward
+ * forward ray while `clampCameraAboveSurface` holds only the eye up, so
+ * the target dives hundreds of units underground, the camera→target
+ * offset stretches far past the zoom floor, and the view pitches to
+ * fully vertical. Pinning the target to the surface keeps the pair
+ * rigid, so close-ups arrive at the zoom floor with the view angle
+ * intact. Run it after the XZ clamps (it reads the final column) with
+ * no jump exemption — an underground focus is never a valid request.
+ * Non-finite surfaces (no height sample) leave the target alone.
+ */
+export function clampTargetAboveSurface(target: Vec3, surfaceY: number): void {
+  if (!Number.isFinite(surfaceY)) return;
+  if (target.y < surfaceY) target.y = surfaceY;
 }
 
 /**

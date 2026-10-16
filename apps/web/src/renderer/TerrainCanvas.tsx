@@ -68,6 +68,7 @@ import {
   clampCameraToWorld,
   clampCameraToWorldWithTarget,
   clampPanTargetWithCamera,
+  clampTargetAboveSurface,
   effectivePanSpeed,
   effectiveZoomSpeed,
   isCameraOutsideWorld,
@@ -1127,6 +1128,19 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           ? Math.max(groundY(camera.position.x, camera.position.z), water.position.y)
           : groundY(camera.position.x, camera.position.z);
       clampCameraAboveSurface(camera.position, surfaceY);
+      // Focus collision: cursor-anchored zoom re-seats the orbit target
+      // along the camera's downward forward ray every tick, so without a
+      // floor of its own the target sinks hundreds of units underground
+      // while the eye rides the clamp above — the offset stretches far
+      // past the zoom floor and the view pitches fully vertical. Pin the
+      // target's final column to the terrain (like minimap jumps, which
+      // seat on the dirt rather than the water sheet) so the pair stays
+      // rigid and close-ups keep their angle. No jump exemption, like
+      // the eye floor: an underground focus is never a valid request.
+      clampTargetAboveSurface(
+        controls.target,
+        groundY(controls.target.x, controls.target.z),
+      );
 
       movement.update(dt);
       tracks.update(movement, dt);

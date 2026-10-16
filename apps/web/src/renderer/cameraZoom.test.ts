@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
-import { CAMERA_SURFACE_CLEARANCE, DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, clampCameraAboveSurface, effectiveZoomSpeed } from "./cameraPan";
+import { CAMERA_SURFACE_CLEARANCE, DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, clampCameraAboveSurface, clampCameraToWorld, clampPanTargetWithCamera, clampTargetAboveSurface, effectiveZoomSpeed } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -421,14 +421,111 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     );
   });
 
-  it("lets the wheel dolly in closer than the old 30-unit floor", () => {
-    // Tight single-hull close-up (~26-unit tank, longest hull half-length
-    // 14) while staying well outside the 2-unit near plane, so hulls never
-    // clip and the polar clamp still holds the camera above the dirt.
-    expect(MIN_ZOOM_DISTANCE).toBe(15);
-    expect(MIN_ZOOM_DISTANCE).toBeLessThan(30);
+  it("backs the close-up floor off to frame a single hull", () => {
+    // 30-unit floor: ~27 units tall at the 48° fov, about one ~26-unit
+    // tank hull — the 15-unit floor showed half a hull and felt too
+    // close. High enough that a typical close-up pitch clears the 6-unit
+    // surface floor (30·cos(74°) ≈ 8.3), so zooming in keeps the angle
+    // instead of steepening onto the floor — while staying well outside
+    // the longest hull half-length (14) and the 2-unit near plane, so
+    // hulls never clip.
+    expect(MIN_ZOOM_DISTANCE).toBe(30);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     expect(canvasSource).toMatch(/controls\.minDistance\s*=\s*MIN_ZOOM_DISTANCE/);
+  });
+
+  it("pins the orbit target to the terrain every tick", () => {
+    // Cursor-anchored zoom re-seats the target along the camera's downward
+    // forward ray each tick, so without a floor of its own the target sinks
+    // underground while the eye rides the surface clamp — the offset
+    // stretches past the zoom floor and the view pitches fully vertical.
+    // The tick must floor the target's final column on the terrain (like
+    // minimap jumps: dirt, not the water sheet) right after the eye floor.
+    expect(canvasSource).toMatch(/clampTargetAboveSurface\(\s*controls\.target,/);
+    expect(canvasSource).toMatch(/groundY\(controls\.target\.x, controls\.target\.z\)/);
+  });
+});
+
+describe("close-up keeps its angle (target floor)", () => {
+  // Cursor-anchored zoom re-seats the orbit target along the camera's
+  // downward forward ray every wheel tick. The eye floor holds only the
+  // camera up, so without a floor of its own the target dives hundreds of
+  // units underground at max zoom: the camera→target offset stretches far
+  // past the zoom floor and the view pitches fully vertical. The tick
+  // answers with clampTargetAboveSurface on the target's final terrain
+  // column. These tests drive a real control instance through the wheel
+  // path in canvas tick order (XZ clamps, then the surface floors) on
+  // flat ground, first without the floor (the vertical snap) and then
+  // with it applied per tick exactly like the canvas does.
+  const worldW = 5104;
+  const worldD = 4080;
+
+  /** Polar angle of the camera→target offset: 0 = looking straight down. */
+  function polarOf(camera: THREE.PerspectiveCamera, target: THREE.Vector3): number {
+    const off = camera.position.clone().sub(target);
+    return Math.acos(Math.min(1, Math.max(-1, off.y / off.length())));
+  }
+
+  function zoomFlight(floored: boolean, clientX: number, clientY: number): ZoomRig {
+    const rig = makeRig(true);
+    for (let i = 0; i < 120; i++) {
+      rig.fireWheel(clientX, clientY, -120);
+      rig.controls.update();
+      // Canvas tick order: zoom is not a rigid pan, so the camera reels
+      // in alone; both surface floors read their final XZ column.
+      clampPanTargetWithCamera(rig.controls.target, rig.camera.position, worldW, worldD);
+      clampCameraToWorld(rig.camera.position, worldW, worldD);
+      if (floored) clampTargetAboveSurface(rig.controls.target, 0);
+      clampCameraAboveSurface(rig.camera.position, 0);
+    }
+    return rig;
+  }
+
+  function expectFinitePose(rig: ZoomRig): void {
+    for (const v of [
+      rig.camera.position.x,
+      rig.camera.position.y,
+      rig.camera.position.z,
+      rig.controls.target.x,
+      rig.controls.target.y,
+      rig.controls.target.z,
+    ]) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
+  }
+
+  it("pitches fully vertical and overshoots the zoom floor without the target floor (the bug)", () => {
+    const rig = zoomFlight(false, 400, 450);
+    // The eye rides the 6-unit floor while the focus sinks ~390 under the
+    // dirt: the offset stretches ~13x past the zoom floor and the view
+    // ends up looking straight down instead of holding its ~74° pitch.
+    expect(rig.controls.target.y).toBeLessThan(-100);
+    expect(distanceOf(rig.camera, rig.controls.target)).toBeGreaterThan(5 * MIN_ZOOM_DISTANCE);
+    expect(polarOf(rig.camera, rig.controls.target)).toBeLessThan((10 * Math.PI) / 180);
+  });
+
+  it.each([
+    [400, 300],
+    [400, 450],
+    [400, 550],
+  ])("arrives at the zoom floor with the angle intact (cursor %i,%i)", (clientX, clientY) => {
+    const start = makeRig(true);
+    const startPhi = polarOf(start.camera, start.controls.target);
+    const rig = zoomFlight(true, clientX, clientY);
+    // Parked at the zoom floor, focus on the dirt, eye above it — and the
+    // pitch within a few degrees of the opening ~74° (center zoom holds
+    // it exactly; low-cursor zoom leans a touch shallower onto the eye
+    // floor instead of snapping vertical).
+    expect(distanceOf(rig.camera, rig.controls.target)).toBeGreaterThanOrEqual(
+      MIN_ZOOM_DISTANCE - 1e-6,
+    );
+    expect(distanceOf(rig.camera, rig.controls.target)).toBeLessThan(MIN_ZOOM_DISTANCE + 1);
+    expect(rig.controls.target.y).toBeGreaterThanOrEqual(-1e-9);
+    expect(rig.camera.position.y).toBeGreaterThanOrEqual(CAMERA_SURFACE_CLEARANCE - 1e-9);
+    expect(Math.abs(polarOf(rig.camera, rig.controls.target) - startPhi)).toBeLessThan(
+      (8 * Math.PI) / 180,
+    );
+    expectFinitePose(rig);
   });
 });
