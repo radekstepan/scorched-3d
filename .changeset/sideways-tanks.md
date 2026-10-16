@@ -1,3 +1,8 @@
+---
+"@scorched-3d/core": patch
+"@scorched-3d/web": patch
+---
+
 # Task 17 — Tanks driving sideways (fixed)
 
 Root cause was not the steering code: core `driveToward` already turns the
