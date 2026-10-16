@@ -176,6 +176,26 @@ export function clampPanTargetWithCamera(
 }
 
 /**
+ * Keep the camera position itself inside the same virtual rectangle as the
+ * orbit target (up to PAN_EDGE_MARGIN past each map edge). Clamping only
+ * the target still lets orbiting/zooming swing the camera thousands of
+ * units past the edge — the target sits at its bound while the camera
+ * keeps travelling, and the view leaves the world ("off the map").
+ *
+ * Unlike `clampPanTargetWithCamera`, the target is NOT moved here: the
+ * target already has its own tighter-or-equal clamp, so pulling the camera
+ * back shortens the viewing offset (a slight zoom-in at the bound) while
+ * the focus point stays put. Height is untouched — the polar clamp and
+ * zoom distance own Y.
+ */
+export function clampCameraToWorld(position: Vec3, worldW: number, worldD: number): void {
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+  position.x = Math.min(bx, Math.max(-bx, position.x));
+  position.z = Math.min(bz, Math.max(-bz, position.z));
+}
+
+/**
  * True when a key event originates from an editable control, so native
  * behavior (e.g. arrows moving a range-slider thumb or caret) wins over
  * camera panning. Accepts the raw `Event.target`.

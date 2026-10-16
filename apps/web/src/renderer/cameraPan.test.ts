@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PAN_SPEED,
@@ -13,6 +16,7 @@ import {
   ZOOM_SPEED_MAX,
   ZOOM_SPEED_MIN,
   applyPan,
+  clampCameraToWorld,
   clampPanSpeed,
   clampPanTarget,
   clampPanTargetWithCamera,
@@ -208,6 +212,97 @@ describe("clampPanTargetWithCamera", () => {
   });
 });
 
+describe("clampCameraToWorld", () => {
+  // Standard 320x256 map: world 5104x4080, target rectangle ±3190 x ±2550.
+  const worldW = 5104;
+  const worldD = 4080;
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+
+  it("uses the same virtual rectangle as the orbit target", () => {
+    expect(bx).toBeCloseTo(3190, 10);
+    expect(bz).toBeCloseTo(2550, 10);
+  });
+
+  it("leaves in-bounds positions alone", () => {
+    const position = { x: 100, y: 1200, z: -200 };
+    clampCameraToWorld(position, worldW, worldD);
+    expect(position).toEqual({ x: 100, y: 1200, z: -200 });
+  });
+
+  it("contains the opening frame (up to 350 past the map edge)", () => {
+    // commanderCameraPose starts the camera past the map edge looking in;
+    // the rectangle must swallow that pose or the first tick would snap it.
+    expect(worldW / 2 + 350).toBeLessThan(bx);
+    expect(worldD / 2 + 350).toBeLessThan(bz);
+    const position = { x: worldW / 2 + 350, y: 1300, z: -(worldD / 2 + 350) };
+    clampCameraToWorld(position, worldW, worldD);
+    expect(position.x).toBeCloseTo(worldW / 2 + 350, 10);
+    expect(position.z).toBeCloseTo(-(worldD / 2 + 350), 10);
+  });
+
+  it("clamps past the edge margin on every side, per axis", () => {
+    const position = { x: 99999, y: 1200, z: 200 };
+    clampCameraToWorld(position, worldW, worldD);
+    expect(position.x).toBeCloseTo(bx, 10);
+    expect(position.z).toBe(200);
+    const other = { x: -100, y: 1200, z: -99999 };
+    clampCameraToWorld(other, worldW, worldD);
+    expect(other.x).toBe(-100);
+    expect(other.z).toBeCloseTo(-bz, 10);
+  });
+
+  it("clamps both axes at a corner", () => {
+    const position = { x: -99999, y: 1200, z: 99999 };
+    clampCameraToWorld(position, worldW, worldD);
+    expect(position.x).toBeCloseTo(-bx, 10);
+    expect(position.z).toBeCloseTo(bz, 10);
+  });
+
+  it("never moves the camera height", () => {
+    const position = { x: 99999, y: 1200, z: -99999 };
+    clampCameraToWorld(position, worldW, worldD);
+    expect(position.y).toBe(1200);
+  });
+
+  it("supports non-square maps", () => {
+    const position = { x: 99999, y: 500, z: 99999 };
+    clampCameraToWorld(position, 2000, 4000);
+    expect(position.x).toBeCloseTo(1000 * (1 + PAN_EDGE_MARGIN), 10);
+    expect(position.z).toBeCloseTo(2000 * (1 + PAN_EDGE_MARGIN), 10);
+  });
+
+  it("pulls an orbited-out camera back while the clamped target stays put", () => {
+    // The reported bug: target pinned at its bound, camera swung thousands
+    // of units past the edge by orbiting at far zoom. The tick order is
+    // clampPanTargetWithCamera first (no-op here — target already inside),
+    // then the camera clamp reels the camera in without touching the target.
+    const target = { x: 0, y: 0, z: 0 };
+    const position = { x: 0, y: 1500, z: 6000 };
+    clampPanTargetWithCamera(target, position, worldW, worldD);
+    clampCameraToWorld(position, worldW, worldD);
+    expect(target).toEqual({ x: 0, y: 0, z: 0 });
+    expect(position.x).toBe(0);
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(position.y).toBe(1500);
+  });
+
+  it("holds both at the edge when a pan pushes past together", () => {
+    // Keyboard/right-drag pans translate target and camera by the same
+    // offset; at the edge the target stops with the angle retained and the
+    // camera ends inside the rectangle too.
+    const target = { x: bx - 100, y: 0, z: 0 };
+    const position = { x: bx - 1100, y: 1200, z: 1000 };
+    applyPan(position, target, { x: 500, z: 0 });
+    clampPanTargetWithCamera(target, position, worldW, worldD);
+    clampCameraToWorld(position, worldW, worldD);
+    expect(target.x).toBeCloseTo(bx, 10);
+    expect(position.x - target.x).toBeCloseTo(-1000, 10);
+    expect(Math.abs(position.x)).toBeLessThanOrEqual(bx);
+    expect(Math.abs(position.z)).toBeLessThanOrEqual(bz);
+  });
+});
+
 describe("shouldIgnoreKeyEvent", () => {
   it("ignores editable controls", () => {
     expect(shouldIgnoreKeyEvent({ tagName: "INPUT" })).toBe(true);
@@ -324,5 +419,19 @@ describe("camera speed sliders", () => {
     // Whole-map ceiling for the doubled 320x256 field.
     expect(MAX_ZOOM_DISTANCE).toBe(8400);
     expect(MAX_ZOOM_DISTANCE).toBeGreaterThan(MIN_ZOOM_DISTANCE);
+  });
+});
+
+describe("world-bounds wiring in TerrainCanvas", () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const canvasSource = readFileSync(join(here, "TerrainCanvas.tsx"), "utf8");
+
+  it("holds the camera inside the world rectangle on both clamp sites", () => {
+    // Clamping only the orbit target still lets orbiting/zooming swing the
+    // camera off the map, so the tick must clamp the camera position too —
+    // once after keyboard pan, once after controls.update() (right-drag pan,
+    // orbit, cursor-anchored zoom, and minimap jumps all flow through it).
+    const sites = canvasSource.match(/clampCameraToWorld\(camera\.position/g) ?? [];
+    expect(sites).toHaveLength(2);
   });
 });
