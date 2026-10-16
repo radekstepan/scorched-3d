@@ -48,9 +48,11 @@ export const HQ_BEACON_COLOR = 0xff2a1a;
 /** One full sweep of the beacon rotor, seconds (continuous rotation). */
 export const HQ_BEACON_PERIOD = 1.4;
 /** Beacon PointLight peak intensity (physical falloff, combat-pool order). */
-export const HQ_BEACON_PEAK = 900;
-/** Beacon falloff range: washes the canopy + door apron, nothing more. */
-export const HQ_BEACON_DISTANCE = 170;
+export const HQ_BEACON_PEAK = 3200;
+/** Beacon falloff range: washes the whole works + hall + staging apron. */
+export const HQ_BEACON_DISTANCE = 340;
+/** Beacon physical-falloff decay (same curve as the combat pools). */
+export const HQ_BEACON_DECAY = 1.8;
 /** Beacon dome radius (a bare hemisphere, no mast or platform). */
 export const HQ_BEACON_RADIUS = 2;
 /** Rotor orbit inside the dome: bulb + light sweep this radius. */
@@ -233,7 +235,7 @@ export function buildHq(team: TeamId): THREE.Group {
   bulb.position.set(HQ_BEACON_ORBIT, 1, 0);
   tag(bulb);
   rotor.add(bulb);
-  const beaconLight = new THREE.PointLight(HQ_BEACON_COLOR, HQ_BEACON_PEAK, HQ_BEACON_DISTANCE, 1.8);
+  const beaconLight = new THREE.PointLight(HQ_BEACON_COLOR, HQ_BEACON_PEAK, HQ_BEACON_DISTANCE, HQ_BEACON_DECAY);
   beaconLight.name = "hq-beacon-light";
   beaconLight.position.set(HQ_BEACON_ORBIT, 1, 0);
   rotor.add(beaconLight);
@@ -305,8 +307,8 @@ export function setHqBeaconAngle(group: THREE.Group, angle: number): void {
 /**
  * Drive the beacon to `level` 0..1 (clamped): the dome lens burns hot at
  * full flash and falls back to a faint lens when dark, while the PointLight
- * scales to its peak so the canopy + door apron wash pulses with it. A
- * wrecked HQ stays dark — wrecks never re-light.
+ * scales to its peak so the works + hall + staging-apron wash pulses with
+ * it. A wrecked HQ stays dark — wrecks never re-light.
  */
 export function setHqBeaconLevel(group: THREE.Group, level: number): void {
   if (group.userData.hqWrecked) {

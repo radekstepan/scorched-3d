@@ -22,6 +22,7 @@ import {
   HQ_BASE_D,
   HQ_BASE_W,
   HQ_BEACON_COLOR,
+  HQ_BEACON_DECAY,
   HQ_BEACON_DISTANCE,
   HQ_BEACON_ORBIT,
   HQ_BEACON_PEAK,
@@ -242,6 +243,23 @@ describe("hq warning beacon", () => {
     expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK, 9);
     setHqBeaconLevel(group, -99);
     expect(getHqBeaconLight(group)!.intensity).toBe(0);
+  });
+
+  it("washes a wide staging area around the works, not just the canopy", () => {
+    const group = buildHq(0);
+    const light = getHqBeaconLight(group)!;
+    expect(light.distance).toBe(HQ_BEACON_DISTANCE);
+    expect(light.decay).toBe(HQ_BEACON_DECAY);
+    // Range covers the full hall plus a staging apron past the mouth.
+    const mouthDist = Math.abs(HQ_EXIT_OFFSET - HQ_BEACON_X);
+    expect(HQ_BEACON_DISTANCE).toBeGreaterThan(mouthDist * 2);
+    // Peak compensates physical falloff, so the wash still reads at range:
+    // strong at the hall mouth, visible at the old 170 cutoff, non-dark at
+    // the new cutoff edge (no wide-but-black falloff).
+    const at = (d: number): number => HQ_BEACON_PEAK / Math.pow(d, HQ_BEACON_DECAY);
+    expect(at(mouthDist)).toBeGreaterThan(0.5);
+    expect(at(170)).toBeGreaterThan(0.25);
+    expect(at(HQ_BEACON_DISTANCE)).toBeGreaterThan(0.05);
   });
 
   it("kills the beacon with the wreck and never re-lights", () => {
