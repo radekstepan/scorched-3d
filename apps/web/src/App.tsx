@@ -56,6 +56,7 @@ export default function App() {
     showHealth: true,
     panSpeed: 1,
     zoomSpeed: 1,
+    nightMode: false,
   });
 
   // Cache selection-tray thumbnails on load (one idle-chunked 3D render
@@ -307,6 +308,7 @@ export default function App() {
             onChange={(v) => patch({ zoomSpeed: v })}
           />
           <Toggle label="Water" on={options.showWater} onClick={() => patch({ showWater: !options.showWater })} />
+          <Toggle label="Night" on={options.nightMode} onClick={() => patch({ nightMode: !options.nightMode })} />
           <Toggle label="Features" on={options.showFeatures} onClick={() => patch({ showFeatures: !options.showFeatures })} />
           <Toggle label="Wireframe" on={options.showWire} onClick={() => patch({ showWire: !options.showWire })} />
           <Toggle label="Contours" on={options.showContours} onClick={() => patch({ showContours: !options.showContours })} />

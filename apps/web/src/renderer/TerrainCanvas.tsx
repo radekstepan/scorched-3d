@@ -17,6 +17,7 @@ import {
   featureName,
   hqAnchor,
   igniteTree,
+  mulberry32,
   planRoutes,
   placeHqs,
   sampleHeightBilinear,
@@ -103,8 +104,11 @@ import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraS
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
+import { applyDayNight } from "./night";
+import { FIREFLY_COUNT, FireflyFx, placeFireflies } from "./fireflies";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
+const ORIGIN = new THREE.Vector3();
 
 interface Props {
   map: TNTMap;
@@ -203,6 +207,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fogColor: { value: fogColor },
         fogNear: { value: fogNear },
         fogFar: { value: fogFar },
+        fireflyA: { value: new THREE.Vector3() },
+        fireflyB: { value: new THREE.Vector3() },
+        fireflyGlow: { value: 0 },
       },
       vertexShader: terrainVertex,
       fragmentShader: terrainFragment,
@@ -238,16 +245,18 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     scene.add(water);
     scene.fog = new THREE.Fog(fogColor, fogNear, fogFar);
 
-    const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(8000, 32, 20),
-      new THREE.ShaderMaterial({
-        uniforms: { sunDir: { value: SUN.clone() } },
-        vertexShader: skyVertex,
-        fragmentShader: skyFragment,
-        side: THREE.BackSide,
-        depthWrite: false,
-      }),
-    );
+    const skyMat = new THREE.ShaderMaterial({
+      uniforms: {
+        sunDir: { value: SUN.clone() },
+        nightMix: { value: 0 },
+        time: { value: 0 },
+      },
+      vertexShader: skyVertex,
+      fragmentShader: skyFragment,
+      side: THREE.BackSide,
+      depthWrite: false,
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(8000, 32, 20), skyMat);
     scene.add(sky);
 
     const hemi = new THREE.HemisphereLight(0xb8d4f0, 0x3a3424, 0.45);
@@ -255,6 +264,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const sun = new THREE.DirectionalLight(0xfff1d0, 1.15);
     sun.position.copy(SUN).multiplyScalar(1800);
     scene.add(sun);
+    // Day/night comes from the View menu via ref (no effect re-runs), so the
+    // preset applies here for the opening frame and re-applies on change in
+    // the tick — object identities never change, no shader recompiles.
+    const dayNightTargets = { scene, fogColor, hemi, sun, terrainMat, waterMat, skyMat };
+    applyDayNight(dayNightTargets, options.nightMode);
 
     const trees = buildTrees(map, options.exaggeration);
     const rocks = buildRocks(map, options.exaggeration);
@@ -280,6 +294,18 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       worldHeight(sampleHeightBilinear(map, x, z) - craterDepthAt(craters, x, z), optsRef.current.exaggeration);
     const seat = (x: number, z: number, hull: number, kind: UnitKind) =>
       seatHull(map, kind, x, z, hull, optsRef.current.exaggeration);
+    // Night swarm: seeded on the map seed, clustered around forest stands.
+    const fireflies = new FireflyFx(
+      scene,
+      placeFireflies(
+        mulberry32(map.seed ^ 0xf1e5),
+        treePositions(trees).map((p) => ({ x: p.x, z: p.z })),
+        FIREFLY_COUNT,
+        groundY,
+      ),
+      groundY,
+    );
+    fireflies.setNight(options.nightMode);
     // Graduated collateral state: caller-owned core DamageField indexed by
     // feature id. Poses and fire visuals are transient views of this field,
     // so exaggeration re-snaps preserve burns instead of resurrecting them.
@@ -882,6 +908,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     resize();
 
     let lastExag = options.exaggeration;
+    let lastNight = options.nightMode;
     let raf = 0;
     let posTimer = 1;
     let appliedJumpSeq = jumpRef.current?.seq ?? -1;
@@ -933,6 +960,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fire.clearTransients();
         movement.resnap();
         hq?.resnap();
+        fireflies.resnap();
         tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
@@ -948,6 +976,19 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       water.visible = opt.showWater && map.seaLevel > 0;
       trees.visible = opt.showFeatures;
       rocks.visible = opt.showFeatures;
+      if (opt.nightMode !== lastNight) {
+        lastNight = opt.nightMode;
+        applyDayNight(dayNightTargets, lastNight);
+      }
+      skyMat.uniforms.time!.value = t;
+      fireflies.setNight(opt.nightMode);
+      fireflies.update(t);
+      // Mirror the roaming pools into the terrain shader (it ignores scene
+      // lights): positions track the PointLights, glow dies by day.
+      const pools = fireflies.poolLights();
+      (terrainMat.uniforms.fireflyA!.value as THREE.Vector3).copy(pools[0]?.position ?? ORIGIN);
+      (terrainMat.uniforms.fireflyB!.value as THREE.Vector3).copy(pools[1]?.position ?? ORIGIN);
+      terrainMat.uniforms.fireflyGlow!.value = opt.nightMode ? fireflies.glowLevel : 0;
       terrainMat.wireframe = opt.showWire;
       const mag = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearFilter;
       const min = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
@@ -1137,6 +1178,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       disposeOcclusionAssets();
       combat.dispose();
       fire.dispose();
+      fireflies.dispose();
       selectionRef.current?.([]);
       positionsRef.current?.([]);
       hqRef.current?.([]);

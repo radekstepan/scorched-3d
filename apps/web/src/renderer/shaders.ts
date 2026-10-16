@@ -33,6 +33,9 @@ export const terrainFragment = /* glsl */ `
   uniform vec3 fogColor;
   uniform float fogNear;
   uniform float fogFar;
+  uniform vec3 fireflyA;
+  uniform vec3 fireflyB;
+  uniform float fireflyGlow;
 
   varying vec2 vUv;
   varying vec3 vWorld;
@@ -96,6 +99,14 @@ export const terrainFragment = /* glsl */ `
       float seaBand = abs(h - seaLevel);
       color = mix(color, vec3(1.0, 0.28, 0.18), (1.0 - smoothstep(0.0, 1.2, seaBand)) * 0.85);
     }
+
+    // Firefly ground pools: the terrain shader ignores scene lights, so the
+    // two roaming pool lights are mirrored here as additive glow (0 by day).
+    // Falloff 1/(1+(d/110)^2) — see fireflyPoolGlow in fireflies.ts.
+    vec3 poolTint = vec3(0.45, 0.6, 0.22);
+    float poolA = fireflyGlow / (1.0 + pow(length(vWorld - fireflyA) / 110.0, 2.0));
+    float poolB = fireflyGlow / (1.0 + pow(length(vWorld - fireflyB) / 110.0, 2.0));
+    color += poolTint * (poolA + poolB);
 
     float dist = length(vWorld - cameraPosition);
     float fog = clamp((dist - fogNear) / (fogFar - fogNear), 0.0, 1.0);
@@ -368,21 +379,40 @@ export const skyVertex = /* glsl */ `
 
 export const skyFragment = /* glsl */ `
   uniform vec3 sunDir;
+  uniform float nightMix;
+  uniform float time;
   varying vec3 vDir;
+
+  float skyHash(vec3 p) {
+    return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453);
+  }
 
   void main() {
     vec3 dir = normalize(vDir);
     float t = clamp(dir.y * 0.5 + 0.5, 0.0, 1.0);
-    vec3 zenith = vec3(0.18, 0.36, 0.62);
-    vec3 horizon = vec3(0.62, 0.78, 0.88);
-    vec3 ground = vec3(0.28, 0.32, 0.30);
+    vec3 zenith = mix(vec3(0.18, 0.36, 0.62), vec3(0.015, 0.04, 0.10), nightMix);
+    vec3 horizon = mix(vec3(0.62, 0.78, 0.88), vec3(0.10, 0.16, 0.26), nightMix);
+    vec3 ground = mix(vec3(0.28, 0.32, 0.30), vec3(0.02, 0.03, 0.05), nightMix);
     vec3 color = mix(horizon, zenith, pow(t, 1.15));
     if (dir.y < 0.0) color = mix(horizon, ground, clamp(-dir.y * 1.4, 0.0, 1.0));
 
+    // Day sun / night moon share the light direction, so the disc always
+    // sits where the directional light comes from.
     float sun = pow(max(dot(dir, normalize(sunDir)), 0.0), 48.0);
-    color += vec3(1.0, 0.92, 0.72) * sun * 0.85;
+    vec3 disc = mix(vec3(1.0, 0.92, 0.72), vec3(0.92, 0.96, 1.0), nightMix);
+    color += disc * sun * mix(0.85, 0.95, nightMix);
     float glow = pow(max(dot(dir, normalize(sunDir)), 0.0), 6.0);
-    color += vec3(1.0, 0.7, 0.35) * glow * 0.18;
+    vec3 glowCol = mix(vec3(1.0, 0.7, 0.35), vec3(0.35, 0.5, 0.75), nightMix);
+    color += glowCol * glow * mix(0.18, 0.12, nightMix);
+
+    // Stars: sparse hashed cells above the horizon, twinkling gently.
+    if (nightMix > 0.5 && dir.y > 0.0) {
+      vec3 cell = floor(dir * 260.0);
+      float h = skyHash(cell);
+      float star = smoothstep(0.995, 1.0, h);
+      float twinkle = 0.6 + 0.4 * sin(time * 2.0 + h * 40.0);
+      color += vec3(0.85, 0.92, 1.0) * star * twinkle * smoothstep(0.02, 0.2, dir.y);
+    }
     gl_FragColor = vec4(color, 1.0);
   }
 `;

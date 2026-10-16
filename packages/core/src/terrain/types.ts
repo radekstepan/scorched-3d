@@ -127,6 +127,8 @@ export interface ViewOptions {
   panSpeed: number;
   /** Scroll-wheel zoom multiplier (1 = default). */
   zoomSpeed: number;
+  /** Moonlit night palette with fireflies instead of daylight. */
+  nightMode: boolean;
 }
 
 /**
