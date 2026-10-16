@@ -21,6 +21,7 @@ import {
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
+  hqStagingRoute,
   makeHqBeaconGlowTextureData,
   poseHqWreck,
   setDoorLift,
@@ -53,6 +54,9 @@ import {
   HQ_FOUNDATION_MARGIN,
   HQ_HALL_LEN,
   HQ_SPAWN_OFFSET,
+  HQ_STAGING_FAR_AHEAD,
+  HQ_STAGING_NEAR_AHEAD,
+  HQ_STAGING_SIDE,
   HQ_WALL_H,
   hqSpawnWorld,
 } from "./hq";
@@ -707,6 +711,33 @@ describe("hq reinforcement exit", () => {
       expect(box.min.x, `${kind} rear clears the door`).toBeGreaterThan(
         HQ_BASE_W / 2 - HQ_SPAWN_OFFSET,
       );
+    }
+  });
+
+  it("stages releases on a loop that exits straight, then turns off the lane", () => {
+    // Far keeps the legacy lane-end distance; near sits halfway back; the
+    // lateral stands clear of the graded lane (2.5 cells ≈ 40) plus a full
+    // spacing stop (48), so staged hulls never pin the exit drive.
+    expect(HQ_STAGING_FAR_AHEAD).toBe(320);
+    expect(HQ_STAGING_NEAR_AHEAD).toBe(160);
+    expect(HQ_STAGING_SIDE).toBeGreaterThan(40 + 48);
+    for (const team of [0, 1] as const) {
+      const facing = hqFacingFor(team);
+      const exit = hqExitWorld({ x: 100, z: -40 }, facing);
+      for (const side of [1, -1] as const) {
+        const [near, far] = hqStagingRoute(exit, facing, side);
+        // Both points past the mouth toward the map center, in [near, far]
+        // order — the mover seeds at the door with leg 1, so the first leg
+        // runs door → far.
+        expect(far!.x).toBe(exit.x + facing * HQ_STAGING_FAR_AHEAD);
+        expect(near!.x).toBe(exit.x + facing * HQ_STAGING_NEAR_AHEAD);
+        // Far sits ON the anchor row: the exit leg runs straight down the
+        // hall instead of grinding through the curb wall.
+        expect(far!.z).toBe(exit.z);
+        // Near sits off the lane on the release's side: the loop turns off
+        // the road past the mouth instead of returning to the door.
+        expect(near!.z).toBe(exit.z + side * HQ_STAGING_SIDE);
+      }
     }
   });
 

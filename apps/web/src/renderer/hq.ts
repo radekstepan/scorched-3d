@@ -133,6 +133,39 @@ export function hqSpawnWorld(anchor: { x: number; z: number }, facing: HqFacing)
   return { x: anchor.x + facing * HQ_SPAWN_OFFSET, z: anchor.z };
 }
 
+/**
+ * Staging loop for a release, past the hall mouth along `facing`. Route
+ * order is [near, far]: the mover seeds at the door with leg 1, so the
+ * first leg runs door → far straight down the hall (far sits ON the anchor
+ * row at the legacy 320 — the cleared lane's far end — because a straight
+ * leg from inside the hall to an off-road point would grind through the
+ * curb wall; the veer must happen past the mouth). Past the mouth the loop
+ * turns off the lane: near sits halfway back and `HQ_STAGING_SIDE` off the
+ * anchor row — clear of the graded lane (2.5 cells ≈ 40) plus a full
+ * spacing stop (48), so a hull on the off-road leg never pins a hull
+ * exiting down the centerline. The loop never returns to the door, so the
+ * entrance stays passable for the next release.
+ */
+export const HQ_STAGING_NEAR_AHEAD = 160;
+export const HQ_STAGING_FAR_AHEAD = 320;
+export const HQ_STAGING_SIDE = 96;
+
+/** Which side of the exit lane a release stages on (releases alternate). */
+export type HqStagingSide = 1 | -1;
+
+/** Staging loop for an HQ mouth `exit` + facing + side. */
+export function hqStagingRoute(
+  exit: { x: number; z: number },
+  facing: HqFacing,
+  side: HqStagingSide,
+): { x: number; z: number }[] {
+  const s = side < 0 ? -1 : 1;
+  return [
+    { x: exit.x + facing * HQ_STAGING_NEAR_AHEAD, z: exit.z + s * HQ_STAGING_SIDE },
+    { x: exit.x + facing * HQ_STAGING_FAR_AHEAD, z: exit.z },
+  ];
+}
+
 function hqBox(
   parent: THREE.Group,
   w: number,

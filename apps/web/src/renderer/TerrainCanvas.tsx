@@ -45,6 +45,7 @@ import {
 } from "./shaders";
 import { buildUnits, buildSpawnedUnit, hideUnitCircles, setTeamRingSelected } from "./units";
 import { CombatFx } from "./combatFx";
+import { hqFacingFor, hqStagingRoute, type HqStagingSide } from "./hq";
 import { HqFx, type HqStatus } from "./hqFx";
 import { applyCraters } from "./craters";
 import { FireFx } from "./fireFx";
@@ -501,6 +502,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // walks the hall out of the mouth to join the hunt; enemy fire — aimed volleys
     // inside admitted range plus honest splash from any nearby blast — can
     // wreck the fort, which stops the clock and leaves a charred husk.
+    // Release count per team: successive releases stage on alternating
+    // sides of the exit lane so no two stagings stack on the entrance.
+    const spawnCounts = [0, 0];
     hq = new HqFx(
       scene,
       // The map ships its sited forts (`generateMap` leveled and dirt-seated
@@ -533,10 +537,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
             cellZ: Math.min(Math.max(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0), map.height - 1),
             rotation: yaw,
           });
-          // Staging anchors past the mouth (the cleared lane's far end), so the
-          // door-to-staging leg walks the hall's full length on the way out.
-          const staging = { x: exit.x + (team === 0 ? 320 : -320), z: exit.z };
-          movement.addUnit(x, z, yaw, [{ x, z }, staging], kind);
+          // Staging loop past the mouth: the first leg walks the hall's full
+          // length straight out, then the loop turns off the lane and never
+          // returns to the door — the entrance stays passable. Successive
+          // releases alternate sides so stagings spread instead of stacking.
+          const side: HqStagingSide = spawnCounts[team]! % 2 === 0 ? 1 : -1;
+          spawnCounts[team]! += 1;
+          movement.addUnit(x, z, yaw, hqStagingRoute(exit, hqFacingFor(team), side), kind);
           health.setCount(units.children.length);
           occlusion.setKinds(placed.map((u) => u.kind));
           waypoints.setRoutes(routes);

@@ -15,6 +15,7 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { UnitMovement } from "./movement";
+import { hqExitWorld, hqFacingFor, hqSpawnWorld, hqStagingRoute } from "./hq";
 import { buildUnits, getLegs, getWheels, IDLE_TILT } from "./units";
 
 function makeGroup(): THREE.Group {
@@ -626,6 +627,46 @@ describe("UnitMovement wrecks", () => {
     const driven = movement.moverState(2)!;
     expect(Math.hypot(driven.x - 900, driven.z - 100)).toBeGreaterThan(50);
     expect(units.children.length).toBe(3);
+    movement.dispose();
+  });
+
+  it("drives HQ releases off the exit lane and never back to the door", () => {
+    const units = makeGroup();
+    const rs = routes();
+    const movement = new UnitMovement(units, rs, { groundY: () => 100 });
+    const anchor = { x: -1000, z: 0 };
+    const spawn = hqSpawnWorld(anchor, hqFacingFor(0));
+    const exit = hqExitWorld(anchor, hqFacingFor(0));
+    const route = hqStagingRoute(exit, hqFacingFor(0), 1);
+    const idx = movement.addUnit(spawn.x, spawn.z, Math.PI / 2, route, "stump");
+    const body = new THREE.Group();
+    body.position.set(spawn.x, 100, spawn.z);
+    units.add(body);
+    // The release seeds at the door with leg 1: its first leg runs straight
+    // to the far lane-end point, never back into the hall.
+    expect(movement.moverState(idx)!.leg).toBe(1);
+    let closestToFar = Infinity;
+    let furthestOffLane = 0;
+    let closestToDoorAfterExit = Infinity;
+    for (let n = 0; n < 1800; n++) {
+      movement.update(1 / 60);
+      const m = movement.moverState(idx)!;
+      closestToFar = Math.min(closestToFar, Math.hypot(m.x - route[1]!.x, m.z - route[1]!.z));
+      if (n > 700) {
+        // Past the mouth for good: the loop never returns to the door.
+        expect(m.x, `tick ${n} stays past the mouth`).toBeGreaterThan(exit.x);
+        closestToDoorAfterExit = Math.min(
+          closestToDoorAfterExit,
+          Math.hypot(m.x - spawn.x, m.z - spawn.z),
+        );
+        furthestOffLane = Math.max(furthestOffLane, Math.abs(m.z - exit.z));
+      }
+    }
+    // Reached the lane end, turned off the lane (past the road edge plus a
+    // full spacing stop), and stayed well away from the door.
+    expect(closestToFar).toBeLessThan(40);
+    expect(furthestOffLane).toBeGreaterThan(88);
+    expect(closestToDoorAfterExit).toBeGreaterThan(200);
     movement.dispose();
   });
 });
