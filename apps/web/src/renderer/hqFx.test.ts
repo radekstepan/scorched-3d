@@ -14,6 +14,10 @@ import { NIGHT_LIGHT_BOOST } from "./night";
 import { HealthBars } from "./healthBars";
 import {
   foundationDepthOf,
+  getHqBeaconBeams,
+  hqBeaconAngleAt,
+  hqBeaconAngleOf,
+  HQ_BEACON_PERIOD,
   HQ_DOOR_TRAVEL,
   HQ_EXIT_OFFSET,
   HQ_FOUNDATION_MARGIN,
@@ -255,31 +259,44 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("burns the warning beacons steady while the works stand", () => {
+  it("sweeps the beacon rotors while the halos hold steady", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
     const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
     const lights = groups.map((g) => g.getObjectByName("hq-beacon-light") as THREE.PointLight);
     const glows = groups.map((g) => g.getObjectByName("hq-beacon-glow") as THREE.Sprite);
     const opacity = (s: THREE.Sprite): number => (s.material as THREE.SpriteMaterial).opacity;
-    // Fresh forts start lit with their halos on.
+    // Fresh forts start lit with their halos on, rotors parked at zero.
     expect(lights[0]!.intensity).toBeGreaterThan(0);
     expect(lights[1]!.intensity).toBeGreaterThan(0);
     expect(opacity(glows[0]!)).toBeGreaterThan(0);
     expect(opacity(glows[1]!)).toBeCloseTo(opacity(glows[0]!), 9);
-    // Ticks hold the same steady burn on both forts — no blink, no sweep,
-    // no breathing.
-    hq.update(0.35);
-    hq.update(0.35);
+    expect(hqBeaconAngleOf(groups[0]!)).toBe(0);
+    expect(hqBeaconAngleOf(groups[1]!)).toBe(0);
+    for (const g of groups) expect(getHqBeaconBeams(g)).toHaveLength(2);
+    // Ticks circle both rotors off the shared clock — the odd fort leads
+    // by half a turn, so the sweeps never march in lockstep.
+    hq.update(0.5);
+    expect(hqBeaconAngleOf(groups[0]!)).toBeCloseTo(hqBeaconAngleAt(0.5), 9);
+    expect(hqBeaconAngleOf(groups[1]!)).toBeCloseTo(
+      hqBeaconAngleAt(0.5 + HQ_BEACON_PERIOD * 0.5),
+      9,
+    );
+    hq.update(0.5);
+    expect(hqBeaconAngleOf(groups[0]!)).toBeCloseTo(hqBeaconAngleAt(1), 9);
+    expect(hqBeaconAngleOf(groups[1]!)).toBeCloseTo(hqBeaconAngleAt(1 + HQ_BEACON_PERIOD * 0.5), 9);
+    // The sweep never disturbs the burn: same wash, same halo on both.
     expect(lights[0]!.intensity).toBeGreaterThan(0);
     expect(lights[1]!.intensity).toBeCloseTo(lights[0]!.intensity, 9);
     expect(opacity(glows[0]!)).toBeGreaterThan(0);
     expect(opacity(glows[1]!)).toBeCloseTo(opacity(glows[0]!), 9);
-    // No rotor or cone meshes anywhere: the glow is a halo, not beams.
     for (const g of groups) {
-      expect(g.getObjectByName("hq-beacon-rotor")).toBeUndefined();
-      expect(g.getObjectByName("hq-beacon-beam-a")).toBeUndefined();
-      expect(g.getObjectByName("hq-beacon-mote-a")).toBeUndefined();
+      for (const beam of getHqBeaconBeams(g)) {
+        expect(beam.visible).toBe(true);
+        expect(
+          ((beam.material as THREE.ShaderMaterial).uniforms.uLevel as { value: number }).value,
+        ).toBe(1);
+      }
     }
     hq.dispose();
   });
@@ -328,6 +345,7 @@ describe("HqFx", () => {
   it("kills the beacon on the wreck and keeps it dark", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    hq.update(0.5);
     for (let n = 0; n < 40; n++) hq.splash(-1000, 0, "hammer", null);
     expect(hq.isDestroyedAt(0)).toBe(true);
     const light = hq.groupAt(0)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
@@ -335,10 +353,23 @@ describe("HqFx", () => {
     const glow = hq.groupAt(0)!.getObjectByName("hq-beacon-glow") as THREE.Sprite;
     expect(glow.visible).toBe(false);
     expect((glow.material as THREE.SpriteMaterial).opacity).toBe(0);
-    // Ticks never re-light the wreck; the survivor keeps burning lit.
+    const deadBeams = getHqBeaconBeams(hq.groupAt(0)!);
+    expect(deadBeams).toHaveLength(2);
+    for (const beam of deadBeams) {
+      expect(beam.visible).toBe(false);
+      expect(
+        ((beam.material as THREE.ShaderMaterial).uniforms.uLevel as { value: number }).value,
+      ).toBe(0);
+    }
+    // Ticks never re-light the wreck and its rotor freezes where it died;
+    // the survivor keeps burning lit and keeps sweeping.
+    const deadAngle = hqBeaconAngleOf(hq.groupAt(0)!);
+    const liveAngle = hqBeaconAngleOf(hq.groupAt(1)!);
     hq.update(2);
     expect(light.intensity).toBe(0);
     expect(glow.visible).toBe(false);
+    expect(hqBeaconAngleOf(hq.groupAt(0)!)).toBe(deadAngle);
+    expect(hqBeaconAngleOf(hq.groupAt(1)!)).not.toBe(liveAngle);
     const survivor = hq.groupAt(1)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
     expect(survivor.intensity).toBeGreaterThan(0);
     const survivorGlow = hq.groupAt(1)!.getObjectByName("hq-beacon-glow") as THREE.Sprite;

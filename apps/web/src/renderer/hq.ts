@@ -14,8 +14,9 @@ import { buildTeamRing } from "./units";
  * `buildHq`), so the door animation is a single position write per tick
  * and the wreck pose is a one-time recolor. A red warning beacon on the
  * canopy top (a clear lens over a hot centered core, wrapped in a soft
- * additive halo with no cone geometry) burns while the works stands as
- * the "working building" signal and dies with it.
+ * additive halo, with twin diffused light-tower cones circling on a rotor)
+ * burns while the works stands as the "working building" signal and dies
+ * with it.
  *
  * Local frame: the door faces +X. The canvas mirrors team 1 (east) so its
  * door faces the map center (-X world).
@@ -53,6 +54,8 @@ export const HQ_CONCRETE = 0x6b6f75;
 export const HQ_DARK = 0x3a3d42;
 /** Red warning-beacon lens color: the "working building" signal. */
 export const HQ_BEACON_COLOR = 0xff2a1a;
+/** One full sweep of the beacon rotor, seconds (slow light-tower circling). */
+export const HQ_BEACON_PERIOD = 6;
 /** Beacon PointLight peak intensity (physical falloff, combat-pool order). */
 export const HQ_BEACON_PEAK = 3200;
 /**
@@ -65,6 +68,28 @@ export const HQ_BEACON_DISTANCE = 560;
 export const HQ_BEACON_DECAY = 1.8;
 /** Beacon dome radius (a bare hemisphere, no mast or platform). */
 export const HQ_BEACON_RADIUS = 2;
+/**
+ * Light-tower beam length, world units: apex at the hot core, far end past
+ * the works over the surroundings, fading out before the rim.
+ */
+export const HQ_BEACON_BEAM_LEN = 60;
+/** Light-tower beam cone base radius, world units (a wide diffused cone). */
+export const HQ_BEACON_BEAM_RADIUS = 6;
+/** Light-tower beam peak alpha at full level (additive, per the glow convention). */
+export const HQ_BEACON_BEAM_OPACITY = 0.22;
+/**
+ * Beam axial fade span in cone-UV units (apex v=1, far rim v=0): alpha
+ * ramps 0 → 1 over [0, HQ_BEACON_BEAM_FADE], so the far rim melts away with
+ * no hard edge. Shared by the beam GLSL and the pure `hqBeaconBeamAxial`
+ * mirror.
+ */
+export const HQ_BEACON_BEAM_FADE = 0.35;
+/**
+ * Beam silhouette-fade exponent: alpha scales with |dot(N, V)| ^ EDGE, so
+ * the cone flanks melt away at grazing view angles instead of drawing a
+ * hard border. Shared by the beam GLSL below.
+ */
+export const HQ_BEACON_BEAM_EDGE = 1.5;
 /**
  * Diffused halo sprite width/height, world units: a borderless radial glow
  * centered on the hot core, reaching well past the glass.
@@ -140,6 +165,53 @@ function hqStack(
   mesh.position.set(x, y, z);
   parent.add(mesh);
   return mesh;
+}
+
+/**
+ * Diffused light-tower beam material: an additive shader over an open cone
+ * whose alpha melts away both along the beam (bright at the hot-core apex,
+ * gone at the far rim) and across the silhouette (flanks fade at grazing
+ * view angles), so the circling cones read as volumeless glow with no hard
+ * borders. `uLevel` (0..1) follows `setHqBeaconLevel`; wrecks park it at 0.
+ */
+function makeHqBeaconBeamMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(HQ_BEACON_COLOR) },
+      uOpacity: { value: HQ_BEACON_BEAM_OPACITY },
+      uLevel: { value: 1 },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vView;
+      void main() {
+        vUv = uv;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalMatrix * normal;
+        vView = -mv.xyz;
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      uniform float uLevel;
+      varying vec2 vUv;
+      varying vec3 vNormal;
+      varying vec3 vView;
+      void main() {
+        float axial = smoothstep(0.0, ${HQ_BEACON_BEAM_FADE.toFixed(2)}, vUv.y);
+        float facing = abs(dot(normalize(vNormal), normalize(vView)));
+        float edge = pow(facing, ${HQ_BEACON_BEAM_EDGE.toFixed(2)});
+        gl_FragColor = vec4(uColor, uOpacity * uLevel * axial * edge);
+      }
+    `,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
 }
 
 /**
@@ -228,10 +300,12 @@ export function buildHq(team: TeamId): THREE.Group {
   // reads as emanating from the center instead of a red disc pasted on
   // top. A single additive halo sprite (`hq-beacon-glow`, a radial
   // gradient fading to transparent at the rim) wraps the core in a soft
-  // diffused glow — no cone geometry, no rotor, no harsh borders — while
-  // the PointLight washes the same red onto the surrounding surfaces. The
-  // level tick drives the whole stack via `setHqBeaconLevel`; wrecks kill
-  // it for good.
+  // diffused glow while the PointLight washes the same red onto the
+  // surrounding surfaces, and twin diffused light-tower cones
+  // (`hq-beacon-beam-*`) circle on a rotor (`hq-beacon-rotor`) around the
+  // core like a lighthouse — the visible sweep that sells the tower. The
+  // level tick drives the whole stack via `setHqBeaconLevel` and spins the
+  // rotor via `setHqBeaconAngle`; wrecks kill it for good.
   const dome = new THREE.Mesh(
     new THREE.SphereGeometry(HQ_BEACON_RADIUS, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshLambertMaterial({
@@ -247,6 +321,28 @@ export function buildHq(team: TeamId): THREE.Group {
   dome.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
   tag(dome);
   group.add(dome);
+  const rotor = new THREE.Group();
+  rotor.name = "hq-beacon-rotor";
+  rotor.position.set(HQ_BEACON_X, HQ_BEACON_Y, 0);
+  group.add(rotor);
+  // Twin light-tower beams: open diffused-shader cones with their apexes
+  // at the hot core, pointing in opposite horizontal directions from the
+  // rotor. The cone geometry starts apex-up along +Y, so seat the apex at
+  // the origin and tip it onto +X; the second mesh mirrors it with a half
+  // turn. Each mesh owns its material (per-HQ level drive) over one shared
+  // geometry — the axial fade runs apex-bright → rim-gone along the cone
+  // UVs (v=1 at the apex, v=0 at the far rim).
+  const beamGeo = new THREE.ConeGeometry(HQ_BEACON_BEAM_RADIUS, HQ_BEACON_BEAM_LEN, 12, 1, true);
+  beamGeo.translate(0, -HQ_BEACON_BEAM_LEN / 2, 0);
+  beamGeo.rotateZ(Math.PI / 2);
+  for (const s of [1, -1]) {
+    const beam = new THREE.Mesh(beamGeo, makeHqBeaconBeamMaterial());
+    beam.name = s > 0 ? "hq-beacon-beam-a" : "hq-beacon-beam-b";
+    beam.position.set(0, 1, 0);
+    if (s < 0) beam.rotation.y = Math.PI;
+    tag(beam);
+    rotor.add(beam);
+  }
   const bulb = new THREE.Mesh(
     new THREE.SphereGeometry(0.8, 12, 10),
     new THREE.MeshLambertMaterial({
@@ -328,9 +424,54 @@ export function getHqBeaconLight(group: THREE.Group): THREE.PointLight | null {
   return (group.getObjectByName("hq-beacon-light") as THREE.PointLight | undefined) ?? null;
 }
 
+/** Warning-beacon rotor of an HQ group, or null (plain test groups). */
+export function getHqBeaconRotor(group: THREE.Group): THREE.Group | null {
+  return (group.getObjectByName("hq-beacon-rotor") as THREE.Group | undefined) ?? null;
+}
+
 /** Warning-beacon hot core of an HQ group, or null (plain test groups). */
 export function getHqBeaconBulb(group: THREE.Group): THREE.Mesh | null {
   return (group.getObjectByName("hq-beacon-bulb") as THREE.Mesh | undefined) ?? null;
+}
+
+/** Warning-beacon light-tower beams riding the rotor (empty on plain test groups). */
+export function getHqBeaconBeams(group: THREE.Group): THREE.Mesh[] {
+  const rotor = getHqBeaconRotor(group);
+  if (!rotor) return [];
+  return rotor.children.filter(
+    (c): c is THREE.Mesh => c.type === "Mesh" && c.name.startsWith("hq-beacon-beam"),
+  );
+}
+
+/**
+ * Rotor angle `timeS` seconds into the loop, radians: one full sweep per
+ * `HQ_BEACON_PERIOD`. Pure, so headless tests can pin the spin without a
+ * scene. Non-finite/negative time reads 0 (rotor parked facing +X).
+ */
+export function hqBeaconAngleAt(timeS: number): number {
+  if (!isFinite(timeS) || timeS < 0) return 0;
+  return ((timeS % HQ_BEACON_PERIOD) / HQ_BEACON_PERIOD) * Math.PI * 2;
+}
+
+/** Current rotor angle of an HQ group, radians (0 when missing). */
+export function hqBeaconAngleOf(group: THREE.Group): number {
+  return getHqBeaconRotor(group)?.rotation.y ?? 0;
+}
+
+/** Point the beacon rotor at `angle` radians (wrecks stay dark regardless). */
+export function setHqBeaconAngle(group: THREE.Group, angle: number): void {
+  const rotor = getHqBeaconRotor(group);
+  if (rotor) rotor.rotation.y = angle;
+}
+
+/**
+ * Beam axial fade 0..1 at cone-UV `v` (apex v=1, far rim v=0): the pure
+ * mirror of the `smoothstep(0, HQ_BEACON_BEAM_FADE, vUv.y)` in the beam
+ * GLSL — 0 at the far rim, full past the fade span, clamped outside.
+ */
+export function hqBeaconBeamAxial(v: number): number {
+  const t = Math.min(1, Math.max(0, v / HQ_BEACON_BEAM_FADE));
+  return t * t * (3 - 2 * t);
 }
 
 /** Warning-beacon diffused halo of an HQ group, or null (plain test groups). */
@@ -367,10 +508,12 @@ export function makeHqBeaconGlowTextureData(size: number): Uint8Array {
 }
 
 /**
- * Seat the beacon core + halo from the stored level (0..1): the hot core
- * holds a steady burn on the dome axis (no swell, no bob) while the halo
- * holds a steady opacity past the lens. Wrecks and level 0 keep the whole
- * stack dark and hide the halo.
+ * Seat the beacon core + halo + beams from the stored level (0..1): the
+ * hot core holds a steady burn on the dome axis (no swell, no bob) while
+ * the halo holds a steady opacity past the lens and the rotor beams follow
+ * through their `uLevel` uniform (the tick owns the rotor angle — the
+ * level never touches it). Wrecks and level 0 keep the whole stack dark
+ * and hide the halo + beams.
  */
 function applyBeaconCore(group: THREE.Group): void {
   const wrecked = group.userData.hqWrecked === true;
@@ -397,6 +540,12 @@ function applyBeaconCore(group: THREE.Group): void {
     if (mat) mat.opacity = level * HQ_BEACON_GLOW_OPACITY;
     glow.visible = !wrecked && level > 0;
   }
+  for (const beam of getHqBeaconBeams(group)) {
+    const mat = beam.material as THREE.ShaderMaterial | undefined;
+    const uLevel = mat?.uniforms?.uLevel as { value: number } | undefined;
+    if (uLevel) uLevel.value = level;
+    beam.visible = !wrecked && level > 0;
+  }
 }
 
 /**
@@ -404,8 +553,8 @@ function applyBeaconCore(group: THREE.Group): void {
  * and falls back to faint glass when dark, the PointLight scales to `peak`
  * (default `HQ_BEACON_PEAK` — night passes the boosted peak) so the faded
  * wash over the works + hall + staging apron holds steady with it, and the
- * core + halo follow through `applyBeaconCore`. A wrecked HQ stays dark —
- * wrecks never re-light.
+ * core + halo + rotor beams follow through `applyBeaconCore`. A wrecked HQ
+ * stays dark — wrecks never re-light.
  */
 export function setHqBeaconLevel(group: THREE.Group, level: number, peak = HQ_BEACON_PEAK): void {
   const l = Math.min(Math.max(level, 0), 1);
@@ -553,7 +702,7 @@ export function poseHqWreck(group: THREE.Group): void {
   }
   // The warning beacon dies with the works: the char pass above already
   // darkened the lens color, but its red emissive would keep glowing, so
-  // kill the lens, core, halo, and wash light outright (and the wrecked
-  // flag keeps `setHqBeaconLevel` from ever re-lighting them).
+  // kill the lens, core, halo, beams, and wash light outright (and the
+  // wrecked flag keeps `setHqBeaconLevel` from ever re-lighting them).
   setHqBeaconLevel(group, 0);
 }

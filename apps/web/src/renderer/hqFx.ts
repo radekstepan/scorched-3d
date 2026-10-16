@@ -12,15 +12,18 @@ import {
 import {
   buildHq,
   doorLiftOf,
+  hqBeaconAngleAt,
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
   hqSpawnWorld,
   poseHqWreck,
   setDoorLift,
+  setHqBeaconAngle,
   setHqBeaconLevel,
   setHqFoundation,
   HQ_BEACON_PEAK,
+  HQ_BEACON_PERIOD,
   HQ_DOOR_TRAVEL,
   type HqFacing,
 } from "./hq";
@@ -121,6 +124,8 @@ export class HqFx {
   private pendingKind: (UnitKind | null)[] = [];
   /** Night toggle: live beacons burn at the boosted peak while night. */
   private night = false;
+  /** Beacon rotor clock, seconds (both forts sweep; odd forts lead by half a turn). */
+  private beaconT = 0;
   private env: HqEnv;
   private rng: () => number;
   private disposed = false;
@@ -271,13 +276,18 @@ export class HqFx {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
+    this.beaconT += dt;
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
-      // Steady diffused burn: one cheap level write per live HQ (2 lights
-      // total, no shadows), so both works' halos hold the same glow.
+      // Steady diffused burn + circling light-tower sweep: one cheap level
+      // write per live HQ (2 lights total, no shadows), so both works'
+      // halos hold the same glow while their rotors circle — odd forts
+      // lead by half a turn, so the two sweeps never march in lockstep.
+      // Wrecks are skipped above, so a dead rotor freezes where it died.
       setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * nightLightScale(this.night));
+      setHqBeaconAngle(group, hqBeaconAngleAt(this.beaconT + (i % 2) * HQ_BEACON_PERIOD * 0.5));
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release draws a random
         // kind and starts the door — stronger units also rearm a longer
