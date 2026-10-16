@@ -38,6 +38,23 @@ export const terrainFragment = /* glsl */ `
   varying vec3 vNormal;
   varying float vHeight;
 
+  float wHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  float wNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(wHash(i), wHash(i + vec2(1.0, 0.0)), u.x),
+      mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), u.x),
+      u.y
+    );
+  }
+
   void main() {
     vec3 albedo = texture2D(mapTex, vUv).rgb;
     vec3 N = normalize(vNormal);
@@ -55,9 +72,16 @@ export const terrainFragment = /* glsl */ `
       float depth = waterY - vWorld.y;
       float wet = clamp(depth * 0.025, 0.0, 0.82);
       color = mix(color, vec3(0.04, 0.16, 0.26), wet);
-      float ca = sin(dot(vWorld.xz, vec2(0.10, 0.07)) + time)
-        + sin(dot(vWorld.xz, vec2(-0.06, 0.08)) + time * 0.7);
+      // Warped, patch-masked caustics: light webs drift and pool instead
+      // of tiling on a diagonal grid.
+      vec2 cp = vWorld.xz + (vec2(
+        wNoise(vWorld.xz * 0.012 + vec2(6.1, 2.9 + time * 0.04)),
+        wNoise(vWorld.xz * 0.012 + vec2(15.3, 10.7 - time * 0.03))
+      ) - 0.5) * 34.0;
+      float ca = sin(dot(cp, vec2(0.10, 0.07)) + time)
+        + sin(dot(cp, vec2(-0.06, 0.08)) + time * 0.7);
       float caustic = pow(ca * 0.25 + 0.5, 4.0);
+      caustic *= 0.5 + wNoise(vWorld.xz * 0.008 + vec2(time * 0.05, 3.3));
       color += caustic * (1.0 - wet) * vec3(0.12, 0.28, 0.3);
     }
 
@@ -83,14 +107,40 @@ export const waterVertex = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vView;
 
+  float wHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  float wNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(wHash(i), wHash(i + vec2(1.0, 0.0)), u.x),
+      mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), u.x),
+      u.y
+    );
+  }
+
   void main() {
     vUv = uv;
     vec3 pos = position;
     vec2 wpos = pos.xz;
-    float w1 = sin(dot(wpos, vec2(0.94, 0.34)) * 0.018 + time * 1.15) * 1.35;
-    float w2 = sin(dot(wpos, vec2(-0.42, 0.91)) * 0.022 + time * 0.85) * 1.05;
-    float w3 = sin(dot(wpos, vec2(0.71, -0.71)) * 0.030 + time * 1.6) * 0.55;
-    pos.y += w1 + w2 + w3;
+    // Domain warp: a low-frequency noise offset ( terrain-style warping )
+    // bends each swell layer, so crests meander instead of running straight.
+    vec2 warp = vec2(
+      wNoise(wpos * 0.006 + vec2(3.1, 17.7)),
+      wNoise(wpos * 0.006 + vec2(9.2, 5.6))
+    ) - 0.5;
+    vec2 wp = wpos + warp * 90.0;
+    float w1 = sin(dot(wp, vec2(0.94, 0.34)) * 0.018 + time * 1.15) * 1.35;
+    float w2 = sin(dot(wp, vec2(-0.42, 0.91)) * 0.022 + time * 0.85) * 1.05;
+    float w3 = sin(dot(wp, vec2(0.71, -0.71)) * 0.030 + time * 1.6) * 0.55;
+    // Spatial swell envelope: some patches run high, others nearly flat.
+    float ampMod = 0.7 + 0.6 * wNoise(wpos * 0.0025 + vec2(time * 0.05, -time * 0.03));
+    pos.y += (w1 + w2 + w3) * ampMod;
     vec4 world = modelMatrix * vec4(pos, 1.0);
     vWorld = world.xyz;
     vView = cameraPosition - world.xyz;
@@ -113,6 +163,23 @@ export const waterFragment = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vView;
 
+  float wHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+
+  float wNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(wHash(i), wHash(i + vec2(1.0, 0.0)), u.x),
+      mix(wHash(i + vec2(0.0, 1.0)), wHash(i + vec2(1.0, 1.0)), u.x),
+      u.y
+    );
+  }
+
   void main() {
     float terrainH = texture2D(heightTex, vUv).r * 255.0 * exaggeration;
     float waterY = seaLevel * exaggeration;
@@ -123,9 +190,14 @@ export const waterFragment = /* glsl */ `
     vec3 color = mix(shallowCol, deepCol, clamp(depth / 90.0, 0.0, 1.0));
 
     vec3 V = normalize(vView);
-    float r1 = sin(dot(vWorld.xz, vec2(0.033, 0.022)) + time * 1.1);
-    float r2 = sin(dot(vWorld.xz, vec2(-0.019, 0.041)) - time * 0.9);
-    float r3 = sin(dot(vWorld.xz, vec2(0.028, -0.031)) + time * 1.7 + r1 * 1.3);
+    // Warped ripple domain: highlights wander instead of tiling.
+    vec2 rp = vWorld.xz + (vec2(
+      wNoise(vWorld.xz * 0.008 + vec2(time * 0.03, 0.0)),
+      wNoise(vWorld.xz * 0.008 + vec2(13.7, 7.3 - time * 0.02))
+    ) - 0.5) * 40.0;
+    float r1 = sin(dot(rp, vec2(0.033, 0.022)) + time * 1.1);
+    float r2 = sin(dot(rp, vec2(-0.019, 0.041)) - time * 0.9);
+    float r3 = sin(dot(rp, vec2(0.028, -0.031)) + time * 1.7 + r1 * 1.3);
     vec3 N = normalize(vec3(
       (r1 * 0.7 + r3 * 0.5) * 0.12,
       1.0,
@@ -139,10 +211,18 @@ export const waterFragment = /* glsl */ `
     float spec = pow(max(dot(N, H), 0.0), 64.0);
     color += sunColor * spec * 0.65;
 
-    float foam = 1.0 - smoothstep(0.0, 14.0, depth);
-    float f1 = sin(dot(vWorld.xz, vec2(0.32, 0.24)) + time * 2.0);
-    float f2 = sin(dot(vWorld.xz, vec2(-0.21, 0.28)) - time * 1.6 + f1 * 1.1);
-    float foamNoise = f1 * 0.6 + f2 * 0.4;
+    float foam = 1.0 - smoothstep(0.0, 14.0 * (0.6 + 0.8 * wNoise(vWorld.xz * 0.01)), depth);
+    vec2 fp = vWorld.xz + (vec2(
+      wNoise(vWorld.xz * 0.015 + vec2(4.7, 1.3 + time * 0.05)),
+      wNoise(vWorld.xz * 0.015 + vec2(11.9, 8.8 - time * 0.04))
+    ) - 0.5) * 30.0;
+    float f1 = sin(dot(fp, vec2(0.32, 0.24)) + time * 2.0);
+    float f2 = sin(dot(fp, vec2(-0.21, 0.28)) - time * 1.6 + f1 * 1.1);
+    float foamNoise = f1 * 0.55 + f2 * 0.35 + (wNoise(fp * 0.02 + time * 0.1) - 0.5) * 0.5;
+    foam *= 0.65 + foamNoise * 0.35;
+    // Foam patchiness: ragged noise mask so the shoreline breaks into
+    // clumps instead of a uniform milky band.
+    foam *= 0.5 + 0.8 * wNoise(vWorld.xz * 0.02 + vec2(time * 0.08, -time * 0.06));
     foam *= 0.65 + foamNoise * 0.35;
     color = mix(color, vec3(0.86, 0.94, 0.96), clamp(foam, 0.0, 0.85));
 
@@ -179,11 +259,62 @@ export const WATER_SWELL_LAYERS: readonly WaterSwellLayer[] = [
 
 /** JS mirror of the vertex-shader swell: surface height at (x, z, time). */
 export function waterSurfaceHeight(x: number, z: number, time: number): number {
+  const { wx, wz } = waterWarp(x, z);
   let h = 0;
   for (const l of WATER_SWELL_LAYERS) {
-    h += Math.sin((x * l.dx + z * l.dz) * l.freq + time * l.speed) * l.amp;
+    h += Math.sin((wx * l.dx + wz * l.dz) * l.freq + time * l.speed) * l.amp;
   }
-  return h;
+  return h * waterAmpMod(x, z, time);
+}
+
+/** Deterministic hash noise mirroring the GLSL wHash/wNoise helpers. */
+function fract(v: number): number {
+  return v - Math.floor(v);
+}
+
+export function waterHash(ix: number, iz: number): number {
+  const px = fract(ix * 0.1031);
+  const py = fract(iz * 0.1031);
+  const pz = fract(ix * 0.1031);
+  const d =
+    px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+  return fract((px + d + (py + d)) * (pz + d));
+}
+
+export function waterNoise(x: number, z: number): number {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uz = fz * fz * (3 - 2 * fz);
+  const a = waterHash(ix, iz);
+  const b = waterHash(ix + 1, iz);
+  const c = waterHash(ix, iz + 1);
+  const d = waterHash(ix + 1, iz + 1);
+  return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+}
+
+/** Swell domain warp: bends crest lines so they meander (world units). */
+export function waterWarp(x: number, z: number): { wx: number; wz: number } {
+  const ox = waterNoise(x * 0.006 + 3.1, z * 0.006 + 17.7) - 0.5;
+  const oz = waterNoise(x * 0.006 + 9.2, z * 0.006 + 5.6) - 0.5;
+  return { wx: x + ox * 90, wz: z + oz * 90 };
+}
+
+/** Spatial swell envelope in [0.7, 1.3]: some patches run high, others flat. */
+export function waterAmpMod(x: number, z: number, time: number): number {
+  return 0.7 + 0.6 * waterNoise(x * 0.0025 + time * 0.05, z * 0.0025 - time * 0.03);
+}
+
+/** Foam shoreline width in world units: varies patch to patch. */
+export function waterFoamBand(x: number, z: number): number {
+  return 14.0 * (0.6 + 0.8 * waterNoise(x * 0.01, z * 0.01));
+}
+
+/** Foam patchiness mask in [0.5, 1.3]: breaks the shoreline into clumps. */
+export function waterFoamPatch(x: number, z: number, time: number): number {
+  return 0.5 + 0.8 * waterNoise(x * 0.02 + time * 0.08, z * 0.02 - time * 0.06);
 }
 
 /**
@@ -192,9 +323,11 @@ export function waterSurfaceHeight(x: number, z: number, time: number): number {
  * highlight field is a non-repeating interference pattern, not an x/z grid.
  */
 export function waterRipple(x: number, z: number, time: number): { nx: number; nz: number } {
-  const r1 = Math.sin(x * 0.033 + z * 0.022 + time * 1.1);
-  const r2 = Math.sin(x * -0.019 + z * 0.041 - time * 0.9);
-  const r3 = Math.sin(x * 0.028 + z * -0.031 + time * 1.7 + r1 * 1.3);
+  const rx = x + (waterNoise(x * 0.008 + time * 0.03, z * 0.008) - 0.5) * 40;
+  const rz = z + (waterNoise(x * 0.008 + 13.7, z * 0.008 + 7.3 - time * 0.02) - 0.5) * 40;
+  const r1 = Math.sin(rx * 0.033 + rz * 0.022 + time * 1.1);
+  const r2 = Math.sin(rx * -0.019 + rz * 0.041 - time * 0.9);
+  const r3 = Math.sin(rx * 0.028 + rz * -0.031 + time * 1.7 + r1 * 1.3);
   const nx = (r1 * 0.7 + r3 * 0.5) * 0.12;
   const nz = (r2 * 0.7 - r3 * 0.5) * 0.12;
   const inv = 1 / Math.hypot(nx, 1, nz);
@@ -203,9 +336,22 @@ export function waterRipple(x: number, z: number, time: number): { nx: number; n
 
 /** JS mirror of the fragment-shader foam breakup noise, in [-1, 1]. */
 export function waterFoamNoise(x: number, z: number, time: number): number {
-  const f1 = Math.sin(x * 0.32 + z * 0.24 + time * 2.0);
-  const f2 = Math.sin(x * -0.21 + z * 0.28 - time * 1.6 + f1 * 1.1);
-  return f1 * 0.6 + f2 * 0.4;
+  const fx = x + (waterNoise(x * 0.015 + 4.7, z * 0.015 + 1.3 + time * 0.05) - 0.5) * 30;
+  const fz = z + (waterNoise(x * 0.015 + 11.9, z * 0.015 + 8.8 - time * 0.04) - 0.5) * 30;
+  const f1 = Math.sin(fx * 0.32 + fz * 0.24 + time * 2.0);
+  const f2 = Math.sin(fx * -0.21 + fz * 0.28 - time * 1.6 + f1 * 1.1);
+  const v = f1 * 0.55 + f2 * 0.35 + (waterNoise(fx * 0.02 + time * 0.1, fz * 0.02) - 0.5) * 0.5;
+  return Math.max(-1, Math.min(1, v));
+}
+
+/** JS mirror of the underwater caustic webs, in [0, 1.5]. */
+export function waterCaustic(x: number, z: number, time: number): number {
+  const cx = x + (waterNoise(x * 0.012 + 6.1, z * 0.012 + 2.9 + time * 0.04) - 0.5) * 34;
+  const cz = z + (waterNoise(x * 0.012 + 15.3, z * 0.012 + 10.7 - time * 0.03) - 0.5) * 34;
+  const ca =
+    Math.sin(cx * 0.1 + cz * 0.07 + time) + Math.sin(cx * -0.06 + cz * 0.08 + time * 0.7);
+  const base = Math.pow(ca * 0.25 + 0.5, 4);
+  return base * (0.5 + waterNoise(x * 0.008 + time * 0.05, z * 0.008 + 3.3));
 }
 
 export const skyVertex = /* glsl */ `
