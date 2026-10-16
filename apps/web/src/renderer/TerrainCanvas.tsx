@@ -860,7 +860,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const h = wrap.clientHeight;
       camera.aspect = w / Math.max(h, 1);
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h, false);
+      // Keep updateStyle enabled (the default): with `false` the canvas
+      // keeps its pixel-ratio backing store as its CSS box (2x the wrap on
+      // retina), overflows the wrap, and the root's overflow-hidden clips it
+      // to the top-left quadrant — so the orbit target at NDC (0,0) renders
+      // at the visible bottom-right corner and minimap jumps never center.
+      // Nothing in CSS constrains the canvas (preflight max-width covers
+      // img/video only), so three.js must style it here.
+      renderer.setSize(w, h);
       cachedCanvasRect = renderer.domElement.getBoundingClientRect();
     };
     const ro = new ResizeObserver(resize);
