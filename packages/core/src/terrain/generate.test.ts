@@ -39,6 +39,7 @@ describe("generateMap", () => {
     expect(a.heights).toEqual(b.heights);
     expect(a.features).toEqual(b.features);
     expect(a.tileMap).toEqual(b.tileMap);
+    expect(a.hqs).toEqual(b.hqs);
   });
 
   it("varies with the seed", () => {

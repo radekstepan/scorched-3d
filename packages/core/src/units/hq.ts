@@ -1,6 +1,6 @@
 import { BLAST_RADIUS, PEEWEE_GRENADE_BLAST_RADIUS, effectiveBlastDist, type BlastSlope } from "./destruction.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
-import { CELL_PIXELS, worldHeight } from "../terrain/types.js";
+import { CELL_PIXELS, FEATURE_EMPTY, worldHeight } from "../terrain/types.js";
 import { TEAM_IDS } from "./types.js";
 import type { AttackMode, TeamId, UnitKind } from "./types.js";
 
@@ -142,6 +142,24 @@ export const HQ_HIGH_FRACTION = 0.6;
 /** Hall-corridor cells checked toward the map center (exit offset in cells). */
 export const HQ_HALL_CELLS = 12;
 /**
+ * Construction pad around the works: this many cells behind the anchor
+ * (under the back wall plus an apron), `HQ_PAD_HALF_WIDTH` each side of the
+ * anchor row, and `HQ_PAD_FRONT_EXTRA` past `HQ_HALL_CELLS` toward the map
+ * center (mouth margin). The pad is leveled to the anchor height so the
+ * slab and the hall floor sit ON the ground instead of buried in it, then
+ * cleared of features and painted dirt so the works reads seated.
+ */
+export const HQ_PAD_REAR = 4;
+export const HQ_PAD_HALF_WIDTH = 3;
+export const HQ_PAD_FRONT_EXTRA = 1;
+/**
+ * Dirt-road cells past the hall corridor toward the map center (clear +
+ * dirt paint, terrain kept — the road follows the ground out to the
+ * reinforcement staging point). Half-width each side of the anchor row.
+ */
+export const HQ_ROAD_EXTRA = 20;
+export const HQ_ROAD_HALF_WIDTH = 2;
+/**
  * World units the concrete footing extends below the lowest ground sampled
  * under the works footprint. Covers bilinear ripple between sampled cells
  * (anchors sit on cell corners while the renderer seats on bilinear
@@ -204,6 +222,90 @@ export function hqHallClear(field: HqField, cellX: number, cellZ: number, team: 
     if (h <= field.seaLevel + HQ_FALLBACK_DRY_MARGIN) return false;
   }
   return true;
+}
+
+/** One attribute-grid cell of an HQ pad or exit road. */
+export interface HqGroundCell {
+  cellX: number;
+  cellZ: number;
+}
+
+/**
+ * Construction-pad cells for a site: the slab footprint plus the hall
+ * corridor toward the map center, clamped to the grid. Deterministic —
+ * the same site always yields the same cells.
+ */
+export function hqPadCells(site: HqSite, width: number, height: number): HqGroundCell[] {
+  const dir = site.team === 0 ? 1 : -1;
+  const cells: HqGroundCell[] = [];
+  for (let i = -HQ_PAD_REAR; i <= HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA; i++) {
+    const cellX = site.cellX + dir * i;
+    if (cellX < 0 || cellX >= width) continue;
+    for (let dz = -HQ_PAD_HALF_WIDTH; dz <= HQ_PAD_HALF_WIDTH; dz++) {
+      const cellZ = site.cellZ + dz;
+      if (cellZ < 0 || cellZ >= height) continue;
+      cells.push({ cellX, cellZ });
+    }
+  }
+  return cells;
+}
+
+/**
+ * Dirt-road cells past the hall mouth toward the map center, clamped to
+ * the grid. Reinforcements spawn at the mouth and stage further in, so the
+ * road runs them a cleared lane out of the woods.
+ */
+export function hqRoadCells(site: HqSite, width: number, height: number): HqGroundCell[] {
+  const dir = site.team === 0 ? 1 : -1;
+  const cells: HqGroundCell[] = [];
+  for (let i = HQ_HALL_CELLS + 1; i <= HQ_HALL_CELLS + HQ_ROAD_EXTRA; i++) {
+    const cellX = site.cellX + dir * i;
+    if (cellX < 0 || cellX >= width) continue;
+    for (let dz = -HQ_ROAD_HALF_WIDTH; dz <= HQ_ROAD_HALF_WIDTH; dz++) {
+      const cellZ = site.cellZ + dz;
+      if (cellZ < 0 || cellZ >= height) continue;
+      cells.push({ cellX, cellZ });
+    }
+  }
+  return cells;
+}
+
+/** Heightfield view for HQ ground works (siting field plus live features). */
+export interface HqGroundField extends HqField {
+  features: Uint16Array;
+}
+
+/**
+ * Level every site's construction pad to its anchor height (cut-and-fill in
+ * place): the slab and the hall floor sit on flat ground at the anchor, so
+ * uphill soil never buries the works and the road out stays visible. The
+ * anchor cell itself is untouched by construction, so siting guards (dry
+ * margin, hall-clear corridor) still hold afterwards. Deterministic.
+ */
+export function levelHqPads(field: HqField, sites: readonly HqSite[]): void {
+  for (const site of sites) {
+    const anchor = field.heights[site.cellZ * field.width + site.cellX] ?? 0;
+    for (const cell of hqPadCells(site, field.width, field.height)) {
+      field.heights[cell.cellZ * field.width + cell.cellX] = anchor;
+    }
+  }
+}
+
+/**
+ * Clear every site's pad and exit road of features (trees, rocks, metal,
+ * fringe) in place, so reinforcements drive out of the hall onto an open
+ * lane instead of into standing trunks. Cells outside the lanes are
+ * untouched. Deterministic.
+ */
+export function clearHqLanes(field: HqGroundField, sites: readonly HqSite[]): void {
+  for (const site of sites) {
+    for (const cell of hqPadCells(site, field.width, field.height)) {
+      field.features[cell.cellZ * field.width + cell.cellX] = FEATURE_EMPTY;
+    }
+    for (const cell of hqRoadCells(site, field.width, field.height)) {
+      field.features[cell.cellZ * field.width + cell.cellX] = FEATURE_EMPTY;
+    }
+  }
 }
 
 /**

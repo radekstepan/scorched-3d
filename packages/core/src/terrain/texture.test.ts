@@ -44,6 +44,7 @@ function makeMap(): TNTMap {
     featureTable: [],
     palette,
     units: [],
+    hqs: [],
     minimap: { width: 4, height: 2, pixels: new Uint8Array([16, 96, 160, 180, 16, 16, 16, 16]) },
   };
 }

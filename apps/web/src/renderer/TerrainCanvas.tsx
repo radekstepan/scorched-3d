@@ -443,7 +443,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // wreck the fort, which stops the clock and leaves a charred husk.
     hq = new HqFx(
       scene,
-      placeHqs(map, map.seed).map((site) => ({
+      // The map ships its sited forts (`generateMap` leveled the pads and
+      // painted the exit roads for exactly these cells); fall back to a
+      // fresh siting only for synthetic maps that predate the field.
+      (map.hqs ?? placeHqs(map, map.seed)).map((site) => ({
         ...hqAnchor(map, site, optsRef.current.exaggeration),
         team: site.team,
       })),

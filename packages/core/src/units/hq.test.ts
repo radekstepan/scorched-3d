@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBlastToHqs,
+  clearHqLanes,
   createHqDamage,
   createHqSpawns,
   HQ_DRY_MARGIN,
   HQ_FALLBACK_DRY_MARGIN,
   HQ_FALLBACK_SLOPE,
   HQ_FOUNDATION_MARGIN,
+  HQ_HALL_CELLS,
   HQ_HIGH_BASELINE,
   HQ_HIGH_FRACTION,
   HQ_MAX_SLOPE,
   HQ_MAX_SPAWNS,
+  HQ_PAD_FRONT_EXTRA,
+  HQ_PAD_HALF_WIDTH,
+  HQ_PAD_REAR,
+  HQ_ROAD_EXTRA,
+  HQ_ROAD_HALF_WIDTH,
   HQ_SPAWN_INTERVAL,
   HQ_SPAWN_MAX_INTERVAL,
   HQ_SPAWN_MIN_INTERVAL,
@@ -21,9 +28,12 @@ import {
   hqFoundationDrop,
   hqHallClear,
   hqMaxAboveSea,
+  hqPadCells,
+  hqRoadCells,
   hqSpawnStrength,
   isHqDestroyed,
   isHqGround,
+  levelHqPads,
   pickNextSpawnUnit,
   placeHqs,
   spawnIntervalFor,
@@ -35,7 +45,7 @@ import { BLAST_RADIUS } from "./destruction.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { generateMap } from "../terrain/generate.js";
-import { worldHeight, type MapPreset } from "../terrain/types.js";
+import { FEATURE_EMPTY, FEATURE_FRINGE, worldHeight, type MapPreset } from "../terrain/types.js";
 
 function flatField(width = 64, height = 64, h = 40, seaLevel = 10) {
   return {
@@ -147,7 +157,8 @@ describe("placeHqs", () => {
       for (const seed of [1, 7, 42]) {
         const map = generateMap(preset, seed);
         const cap = hqMaxAboveSea(map);
-        const sites = placeHqs(map, map.seed);
+        // The shipped forts: the ground works were built for exactly these.
+        const sites = map.hqs;
         expect(sites).toHaveLength(2);
         for (const site of sites) {
           const h = map.heights[site.cellZ * map.width + site.cellX] ?? 0;
@@ -355,5 +366,141 @@ describe("pickNextSpawnUnit", () => {
     // randomness, not an exact shuffle).
     expect(counts.peewee! / N).toBeGreaterThan(0.35);
     expect(counts.hammer! / N).toBeLessThan(0.15);
+  });
+});
+
+describe("hq exit lanes", () => {
+  it("lays the pad and road toward the map center per team", () => {
+    const w = 64;
+    const h = 64;
+    const west = { team: 0 as const, cellX: 5, cellZ: 32 };
+    const pad = hqPadCells(west, w, h);
+    const padXs = pad.map((c) => c.cellX);
+    const padZs = pad.map((c) => c.cellZ);
+    expect(Math.min(...padXs)).toBe(5 - HQ_PAD_REAR);
+    expect(Math.max(...padXs)).toBe(5 + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA);
+    expect(Math.min(...padZs)).toBe(32 - HQ_PAD_HALF_WIDTH);
+    expect(Math.max(...padZs)).toBe(32 + HQ_PAD_HALF_WIDTH);
+    // Full rectangle, no gaps.
+    expect(pad).toHaveLength(
+      (HQ_PAD_REAR + HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA + 1) * (HQ_PAD_HALF_WIDTH * 2 + 1),
+    );
+    // The road picks up past the hall mouth and runs further in.
+    const road = hqRoadCells(west, w, h);
+    const roadXs = road.map((c) => c.cellX);
+    const roadZs = road.map((c) => c.cellZ);
+    expect(Math.min(...roadXs)).toBe(5 + HQ_HALL_CELLS + 1);
+    expect(Math.max(...roadXs)).toBe(5 + HQ_HALL_CELLS + HQ_ROAD_EXTRA);
+    expect(Math.min(...roadZs)).toBe(32 - HQ_ROAD_HALF_WIDTH);
+    expect(Math.max(...roadZs)).toBe(32 + HQ_ROAD_HALF_WIDTH);
+    expect(road).toHaveLength(HQ_ROAD_EXTRA * (HQ_ROAD_HALF_WIDTH * 2 + 1));
+    // The east works mirrors toward -x.
+    const east = { team: 1 as const, cellX: 58, cellZ: 10 };
+    const epadXs = hqPadCells(east, w, h).map((c) => c.cellX);
+    expect(Math.max(...epadXs)).toBe(58 + HQ_PAD_REAR);
+    expect(Math.min(...epadXs)).toBe(58 - HQ_HALL_CELLS - HQ_PAD_FRONT_EXTRA);
+    const eroadXs = hqRoadCells(east, w, h).map((c) => c.cellX);
+    expect(Math.max(...eroadXs)).toBe(58 - HQ_HALL_CELLS - 1);
+    expect(Math.min(...eroadXs)).toBe(58 - HQ_HALL_CELLS - HQ_ROAD_EXTRA);
+  });
+
+  it("clamps lanes to the grid at map edges", () => {
+    const site = { team: 0 as const, cellX: 1, cellZ: 0 };
+    const cells = [...hqPadCells(site, 8, 8), ...hqRoadCells(site, 8, 8)];
+    expect(cells.length).toBeGreaterThan(0);
+    for (const c of cells) {
+      expect(c.cellX).toBeGreaterThanOrEqual(0);
+      expect(c.cellX).toBeLessThan(8);
+      expect(c.cellZ).toBeGreaterThanOrEqual(0);
+      expect(c.cellZ).toBeLessThan(8);
+    }
+  });
+
+  it("levels pads to the anchor height and leaves the rest alone", () => {
+    const width = 64;
+    const height = 32;
+    // A steady uphill grade toward the map center: the pad must cut it flat.
+    const heights = new Uint8Array(width * height);
+    for (let z = 0; z < height; z++) {
+      for (let x = 0; x < width; x++) heights[z * width + x] = 40 + x;
+    }
+    const field = { heights, width, height, seaLevel: 10 };
+    const site = { team: 0 as const, cellX: 5, cellZ: 16 };
+    const anchor = 40 + 5;
+    levelHqPads(field, [site]);
+    for (const c of hqPadCells(site, width, height)) {
+      expect(field.heights[c.cellZ * width + c.cellX]).toBe(anchor);
+    }
+    // Outside the pad the grade survives (a cell past the road end).
+    const farX = 5 + HQ_HALL_CELLS + HQ_ROAD_EXTRA + 1;
+    expect(field.heights[16 * width + farX]).toBe(40 + farX);
+    // Leveling is a no-op on an already-flat pad.
+    levelHqPads(field, [site]);
+    for (const c of hqPadCells(site, width, height)) {
+      expect(field.heights[c.cellZ * width + c.cellX]).toBe(anchor);
+    }
+  });
+
+  it("clears lanes of every feature word and leaves the rest alone", () => {
+    const width = 32;
+    const height = 32;
+    const heights = new Uint8Array(width * height).fill(40);
+    // Woods everywhere, with rocks, a metal deposit, and fringe mixed in.
+    const features = new Uint16Array(width * height).fill(0);
+    features[16 * width + 8] = 3;
+    features[16 * width + 9] = 4;
+    features[17 * width + 8] = 5;
+    features[17 * width + 9] = FEATURE_FRINGE;
+    const field = { heights, width, height, seaLevel: 10, features };
+    const site = { team: 0 as const, cellX: 5, cellZ: 16 };
+    clearHqLanes(field, [site]);
+    for (const c of [...hqPadCells(site, width, height), ...hqRoadCells(site, width, height)]) {
+      expect(field.features[c.cellZ * width + c.cellX]).toBe(FEATURE_EMPTY);
+    }
+    // Outside the lanes the woods stand.
+    expect(field.features[0]).toBe(0);
+    expect(field.features[height * width - 1]).toBe(0);
+  });
+
+  it("ships leveled, cleared, dirt-painted lanes for its own forts", () => {
+    const presets: MapPreset[] = [
+      "greenreach",
+      "archipelago",
+      "highpass",
+      "caldera",
+      "rivercross",
+      "dustplains",
+    ];
+    for (const preset of presets) {
+      for (const seed of [1, 7, 42]) {
+        const map = generateMap(preset, seed);
+        expect(map.hqs).toHaveLength(2);
+        const tileW = map.width / 2;
+        for (const site of map.hqs) {
+          const anchor = map.heights[site.cellZ * map.width + site.cellX] ?? 0;
+          const lane = [...hqPadCells(site, map.width, map.height), ...hqRoadCells(site, map.width, map.height)];
+          expect(lane.length).toBeGreaterThan(0);
+          for (const c of hqPadCells(site, map.width, map.height)) {
+            expect(
+              map.heights[c.cellZ * map.width + c.cellX],
+              `${preset} seed ${seed} team ${site.team} pad not level`,
+            ).toBe(anchor);
+          }
+          for (const c of lane) {
+            expect(
+              map.features[c.cellZ * map.width + c.cellX],
+              `${preset} seed ${seed} team ${site.team} feature blocks the lane`,
+            ).toBe(FEATURE_EMPTY);
+            const tile = map.tileMap[(c.cellZ >> 1) * tileW + (c.cellX >> 1)] ?? 0;
+            expect(
+              map.tileKinds[tile],
+              `${preset} seed ${seed} team ${site.team} lane tile not dirt`,
+            ).toBe("dirt");
+          }
+          // The finished ground still satisfies the siting guards.
+          expect(hqHallClear(map, site.cellX, site.cellZ, site.team)).toBe(true);
+        }
+      }
+    }
   });
 });

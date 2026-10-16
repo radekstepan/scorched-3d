@@ -1,6 +1,7 @@
 /** TNT-shaped terrain (Total Annihilation map format) used by the Scorched 3D map pipeline. */
 
 import type { PlacedUnit } from "../units/types.js";
+import type { HqSite } from "../units/hq.js";
 
 export const TNT_VERSION = 0x2000;
 export const CELL_PIXELS = 16;
@@ -89,6 +90,8 @@ export interface TNTMap {
   palette: Uint8Array;
   /** Static demo units, re-placed deterministically on every generation. */
   units: PlacedUnit[];
+  /** Sited HQ forts (one per team): the ground works were built for these. */
+  hqs: HqSite[];
   minimap: {
     width: number;
     height: number;

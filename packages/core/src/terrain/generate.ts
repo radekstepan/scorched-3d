@@ -1,6 +1,7 @@
 import { buildPalette, TILE_RAMPS } from "./palette";
 import { clamp, fbm, hash2, lerp, mulberry32, ridged, smoothstep, warpFbm } from "./noise";
 import { placeUnits } from "../units/place.js";
+import { clearHqLanes, hqPadCells, hqRoadCells, levelHqPads, placeHqs } from "../units/hq.js";
 import {
   CELL_PIXELS,
   FEATURE_EMPTY,
@@ -46,6 +47,15 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
 
   stampFeatures(preset, heights, features, width, height, seaLevel, seed);
 
+  // HQ ground works: site the forts, level their construction pads to the
+  // anchor height (cut-and-fill, so the slab and hall floor sit on the
+  // ground instead of buried in it), and clear the pads + exit roads of
+  // features (trees, rocks, metal) so reinforcements drive out onto an
+  // open lane. Runs before tile classification so the pad reads flat.
+  const hqs = placeHqs({ heights, width, height, seaLevel }, seed);
+  levelHqPads({ heights, width, height, seaLevel }, hqs);
+  clearHqLanes({ heights, width, height, seaLevel, features }, hqs);
+
   const kinds: TileKind[] = [];
   const tiles: Uint8Array[] = [];
   const palette = buildPalette();
@@ -68,6 +78,13 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
     }
   }
 
+  // Dirt exit roads: paint every tile touched by an HQ pad or exit road
+  // with a dirt variant (deterministic per tile, like the base
+  // classification), so the cleared lane out of each works reads as a road
+  // on the terrain and the minimap. Runs after classification, before the
+  // minimap + units, so both see the finished ground.
+  paintHqRoads(tileMap, kinds, hqs, width, height, seed);
+
   const minimap = buildMinimap(heights, tileMap, tiles, width, height, seaLevel);
   const units = placeUnits({ heights, features, width, height, seaLevel }, seed);
 
@@ -89,7 +106,34 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
     palette,
     minimap,
     units,
+    hqs,
   };
+}
+
+function paintHqRoads(
+  tileMap: Uint16Array,
+  kinds: TileKind[],
+  hqs: { team: 0 | 1; cellX: number; cellZ: number }[],
+  width: number,
+  height: number,
+  seed: number,
+): void {
+  const dirt: number[] = [];
+  for (let i = 0; i < kinds.length; i++) {
+    if (kinds[i] === "dirt") dirt.push(i);
+  }
+  if (dirt.length === 0) return;
+  const tileW = width / 2;
+  const paint = (cellX: number, cellZ: number): void => {
+    const tx = cellX >> 1;
+    const tz = cellZ >> 1;
+    const variant = Math.floor(hash2(tx, tz, seed + 90) * dirt.length);
+    tileMap[tz * tileW + tx] = dirt[variant] ?? dirt[0]!;
+  };
+  for (const site of hqs) {
+    for (const cell of hqPadCells(site, width, height)) paint(cell.cellX, cell.cellZ);
+    for (const cell of hqRoadCells(site, width, height)) paint(cell.cellX, cell.cellZ);
+  }
 }
 
 function sampleHeight(

@@ -113,7 +113,10 @@ describe("Units panel live per-kind counts", () => {
 
   it("fields map-end HQ forts with spawn, damage, and broadcast wiring", () => {
     const canvas = readFileSync(join(here, "renderer", "TerrainCanvas.tsx"), "utf8");
-    expect(canvas).toContain("placeHqs(map, map.seed)");
+    // The canvas builds forts on the map's own sited cells (whose pads were
+    // leveled and whose exit roads were painted for exactly those cells),
+    // keeping a fresh siting only as a synthetic-map fallback.
+    expect(canvas).toContain("map.hqs ?? placeHqs(map, map.seed)");
     expect(canvas).toContain("new HqFx");
     expect(canvas).toContain("onSpawn");
     expect(canvas).toContain("buildSpawnedUnit");
