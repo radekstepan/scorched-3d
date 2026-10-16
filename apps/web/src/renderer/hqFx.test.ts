@@ -10,7 +10,6 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
-import { HQ_BEACON_BEAM_LEN, HQ_BEACON_PERIOD } from "./hq";
 import { NIGHT_LIGHT_BOOST } from "./night";
 import { HealthBars } from "./healthBars";
 import {
@@ -256,67 +255,52 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("sweeps the warning beacons in sync while the works stand", () => {
+  it("burns the warning beacons steady while the works stand", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
     const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
     const lights = groups.map((g) => g.getObjectByName("hq-beacon-light") as THREE.PointLight);
-    const rotors = groups.map((g) => g.getObjectByName("hq-beacon-rotor") as THREE.Group);
-    // Fresh forts start lit, rotors parked.
+    const glows = groups.map((g) => g.getObjectByName("hq-beacon-glow") as THREE.Sprite);
+    const opacity = (s: THREE.Sprite): number => (s.material as THREE.SpriteMaterial).opacity;
+    // Fresh forts start lit with their halos on.
     expect(lights[0]!.intensity).toBeGreaterThan(0);
     expect(lights[1]!.intensity).toBeGreaterThan(0);
-    expect(rotors[0]!.rotation.y).toBeCloseTo(0, 9);
-    // A quarter period turns both rotors a quarter turn, in sync — and the
-    // wash stays on while the rotor sweeps (no blink dark half).
-    hq.update(HQ_BEACON_PERIOD * 0.25);
-    expect(rotors[0]!.rotation.y).toBeCloseTo(Math.PI / 2, 6);
-    expect(rotors[1]!.rotation.y).toBeCloseTo(Math.PI / 2, 6);
+    expect(opacity(glows[0]!)).toBeGreaterThan(0);
+    expect(opacity(glows[1]!)).toBeCloseTo(opacity(glows[0]!), 9);
+    // Ticks hold the same steady burn on both forts — no blink, no sweep,
+    // no breathing.
+    hq.update(0.35);
+    hq.update(0.35);
     expect(lights[0]!.intensity).toBeGreaterThan(0);
-    expect(lights[1]!.intensity).toBeGreaterThan(0);
-    // Another quarter turn keeps them locked together.
-    hq.update(HQ_BEACON_PERIOD * 0.25);
-    expect(rotors[0]!.rotation.y).toBeCloseTo(Math.PI, 6);
-    expect(rotors[1]!.rotation.y).toBeCloseTo(rotors[0]!.rotation.y, 9);
+    expect(lights[1]!.intensity).toBeCloseTo(lights[0]!.intensity, 9);
+    expect(opacity(glows[0]!)).toBeGreaterThan(0);
+    expect(opacity(glows[1]!)).toBeCloseTo(opacity(glows[0]!), 9);
+    // No rotor or cone meshes anywhere: the glow is a halo, not beams.
+    for (const g of groups) {
+      expect(g.getObjectByName("hq-beacon-rotor")).toBeUndefined();
+      expect(g.getObjectByName("hq-beacon-beam-a")).toBeUndefined();
+      expect(g.getObjectByName("hq-beacon-mote-a")).toBeUndefined();
+    }
     hq.dispose();
   });
 
-  it("sweeps both beam cones in sync with a steady burn (no breathing)", () => {
+  it("holds the same halo opacity and core burn across many ticks", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
     const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
-    const beams = groups.map((g) => g.getObjectByName("hq-beacon-beam-a") as THREE.Mesh);
+    const glows = groups.map((g) => g.getObjectByName("hq-beacon-glow") as THREE.Sprite);
     const bulbs = groups.map((g) => g.getObjectByName("hq-beacon-bulb") as THREE.Mesh);
-    const opacity = () => (beams[0]!.material as THREE.MeshBasicMaterial).opacity;
-    const burn = () => (bulbs[0]!.material as THREE.MeshLambertMaterial).emissiveIntensity;
-    // Horizontal beam-cone direction of fort 0's first cone (mouth center
-    // relative to the rotor pivot, flattened — the sweep is horizontal).
-    const dirOf = (): { x: number; z: number } => {
-      groups[0]!.updateMatrixWorld(true);
-      const pivot = groups[0]!
-        .getObjectByName("hq-beacon-rotor")!
-        .getWorldPosition(new THREE.Vector3());
-      const tip = beams[0]!.localToWorld(new THREE.Vector3(HQ_BEACON_BEAM_LEN, 0, 0));
-      return { x: tip.x - pivot.x, z: tip.z - pivot.z };
-    };
-    // A quarter period points the cone one way; another quarter turns it a
-    // further quarter turn — the beam angle visibly circles.
-    hq.update(HQ_BEACON_PERIOD * 0.25);
-    const q = dirOf();
-    expect(Math.hypot(q.x, q.z)).toBeCloseTo(HQ_BEACON_BEAM_LEN, 6);
-    const steadyOpacity = opacity();
-    const steadyBurn = burn();
+    hq.update(0.25);
+    const steadyOpacity = (glows[0]!.material as THREE.SpriteMaterial).opacity;
+    const steadyBurn = (bulbs[0]!.material as THREE.MeshLambertMaterial).emissiveIntensity;
     expect(steadyOpacity).toBeGreaterThan(0);
     expect(steadyBurn).toBeGreaterThan(0);
-    hq.update(HQ_BEACON_PERIOD * 0.25);
-    const h = dirOf();
-    expect(Math.hypot(h.x, h.z)).toBeCloseTo(HQ_BEACON_BEAM_LEN, 6);
-    expect(q.x * h.x + q.z * h.z).toBeCloseTo(0, 4);
-    // ...with the exact same burn and beam opacity on both forts — the
-    // angle moves, nothing swells in and out.
-    expect(opacity()).toBeCloseTo(steadyOpacity, 9);
-    expect(burn()).toBeCloseTo(steadyBurn, 9);
-    expect((beams[1]!.material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(steadyOpacity, 9);
-    expect((bulbs[1]!.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeCloseTo(steadyBurn, 9);
+    for (let n = 0; n < 8; n++) hq.update(0.25);
+    for (const i of [0, 1]) {
+      expect((glows[i]!.material as THREE.SpriteMaterial).opacity).toBeCloseTo(steadyOpacity, 9);
+      expect((bulbs[i]!.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeCloseTo(steadyBurn, 9);
+      expect(glows[i]!.visible).toBe(true);
+    }
     hq.dispose();
   });
 
@@ -348,14 +332,18 @@ describe("HqFx", () => {
     expect(hq.isDestroyedAt(0)).toBe(true);
     const light = hq.groupAt(0)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
     expect(light.intensity).toBe(0);
-    // Ticks never re-light the wreck; the survivor keeps sweeping lit.
-    const rotor = hq.groupAt(0)!.getObjectByName("hq-beacon-rotor") as THREE.Group;
-    const parked = rotor.rotation.y;
-    hq.update(HQ_BEACON_PERIOD * 2);
+    const glow = hq.groupAt(0)!.getObjectByName("hq-beacon-glow") as THREE.Sprite;
+    expect(glow.visible).toBe(false);
+    expect((glow.material as THREE.SpriteMaterial).opacity).toBe(0);
+    // Ticks never re-light the wreck; the survivor keeps burning lit.
+    hq.update(2);
     expect(light.intensity).toBe(0);
-    expect(rotor.rotation.y).toBe(parked);
+    expect(glow.visible).toBe(false);
     const survivor = hq.groupAt(1)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
     expect(survivor.intensity).toBeGreaterThan(0);
+    const survivorGlow = hq.groupAt(1)!.getObjectByName("hq-beacon-glow") as THREE.Sprite;
+    expect(survivorGlow.visible).toBe(true);
+    expect((survivorGlow.material as THREE.SpriteMaterial).opacity).toBeGreaterThan(0);
     hq.dispose();
   });
 });

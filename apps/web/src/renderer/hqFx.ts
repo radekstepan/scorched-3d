@@ -12,14 +12,12 @@ import {
 import {
   buildHq,
   doorLiftOf,
-  hqBeaconAngleAt,
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
   hqSpawnWorld,
   poseHqWreck,
   setDoorLift,
-  setHqBeaconAngle,
   setHqBeaconLevel,
   setHqFoundation,
   HQ_BEACON_PEAK,
@@ -121,8 +119,6 @@ export class HqFx {
   private released: boolean[] = [false, false];
   /** Kind drawn for the running release (set when its clock fires). */
   private pendingKind: (UnitKind | null)[] = [];
-  /** Beacon sweep clock: every live HQ rotor turns on this shared phase. */
-  private clock = 0;
   /** Night toggle: live beacons burn at the boosted peak while night. */
   private night = false;
   private env: HqEnv;
@@ -143,7 +139,7 @@ export class HqFx {
       // surface under the footprint so the downhill side shows concrete
       // instead of an air gap (flat ground just buries them invisibly).
       setHqFoundation(group, hqFoundationDropWorld({ x: a.x, y: a.y, z: a.z }, facing, env.groundY));
-      // Warning beacons start lit — the first tick's sweep takes over.
+      // Warning beacons start lit — the first tick's level drive takes over.
       setHqBeaconLevel(group, 1);
       this.scene.add(group);
       this.groups.push(group);
@@ -266,7 +262,7 @@ export class HqFx {
   }
 
   /**
-   * Night owns the beacon budget: live beacons sweep at the boosted peak
+   * Night owns the beacon budget: live beacons burn at the boosted peak
    * while night, day peak otherwise. Wrecks stay dark either way.
    */
   setNight(night: boolean): void {
@@ -275,16 +271,13 @@ export class HqFx {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
-    // Shared beacon phase: one cheap angle write per live HQ (2 rotors
-    // total, lights have no shadows), so both works' beams sweep in sync.
-    this.clock += dt;
-    const angle = hqBeaconAngleAt(this.clock);
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
+      // Steady diffused burn: one cheap level write per live HQ (2 lights
+      // total, no shadows), so both works' halos hold the same glow.
       setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * nightLightScale(this.night));
-      setHqBeaconAngle(group, angle);
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release draws a random
         // kind and starts the door — stronger units also rearm a longer
@@ -340,10 +333,17 @@ export class HqFx {
     for (const group of this.groups) {
       this.scene.remove(group);
       group.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (mesh.type === "Mesh") {
+        if (child.type === "Mesh") {
+          const mesh = child as THREE.Mesh;
           mesh.geometry?.dispose();
           const mat = mesh.material as THREE.Material | undefined;
+          mat?.dispose();
+        } else if (child.type === "Sprite") {
+          // The beacon halo owns a procedural texture per HQ — release it
+          // with the material instead of leaking it per dispose cycle.
+          const sprite = child as THREE.Sprite;
+          const mat = sprite.material as THREE.SpriteMaterial | undefined;
+          mat?.map?.dispose();
           mat?.dispose();
         }
       });
