@@ -3,6 +3,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  applyFogDrift,
+  FOG_DRIFT_AMP,
+  FOG_DRIFT_SCALE,
+  FOG_DRIFT_WIND_X,
+  FOG_DRIFT_WIND_Z,
+  fogDriftFactor,
   skyFragment,
   skyVertex,
   terrainFragment,
@@ -282,6 +288,70 @@ describe("natural water variation", () => {
     expect(waterFragment).toContain("uniform float time;");
     expect(waterFragment).not.toContain("uniform float seed");
     expect(terrainFragment).not.toContain("uniform float seed");
+  });
+});
+
+describe("drifting distance fog", () => {
+  it("haze factor is deterministic, bounded, and varies in x, z and time", () => {
+    const t = 12.4;
+    expect(fogDriftFactor(300, -150, t)).toBe(fogDriftFactor(300, -150, t));
+    const lo = 1 - FOG_DRIFT_AMP / 2;
+    const hi = 1 + FOG_DRIFT_AMP / 2;
+    // Subtle by contract: at most ±20% around the base fog.
+    expect(lo).toBeGreaterThanOrEqual(0.8);
+    expect(hi).toBeLessThanOrEqual(1.2);
+    for (let s = 0; s < 60; s++) {
+      const f = fogDriftFactor(s * 61.7 - 1500, s * 37.3 + 400, t + s * 1.1);
+      expect(f).toBeGreaterThanOrEqual(lo - 1e-12);
+      expect(f).toBeLessThanOrEqual(hi + 1e-12);
+    }
+    const f = fogDriftFactor(300, -150, t);
+    expect(fogDriftFactor(1400, -150, t)).not.toBe(f);
+    expect(fogDriftFactor(300, 950, t)).not.toBe(f);
+    expect(fogDriftFactor(300, -150, t + 40)).not.toBe(f);
+  });
+
+  it("drifts slowly: a second barely shifts it, a minute visibly does", () => {
+    let oneSecond = 0;
+    let oneMinute = 0;
+    for (let s = 0; s < 40; s++) {
+      const x = s * 83.1 - 1200;
+      const z = s * 51.7 + 300;
+      const base = fogDriftFactor(x, z, 20);
+      oneSecond = Math.max(oneSecond, Math.abs(fogDriftFactor(x, z, 21) - base));
+      oneMinute = Math.max(oneMinute, Math.abs(fogDriftFactor(x, z, 80) - base));
+    }
+    expect(oneSecond).toBeLessThan(0.02);
+    expect(oneMinute).toBeGreaterThan(0.01);
+  });
+
+  it("keeps near-ground fog-free and clamps far fog into range", () => {
+    for (let s = 0; s < 30; s++) {
+      const x = s * 97.3 - 800;
+      const z = s * 43.9 - 500;
+      const t = s * 2.7;
+      expect(applyFogDrift(0, x, z, t)).toBe(0);
+      const full = applyFogDrift(1, x, z, t);
+      expect(full).toBeGreaterThanOrEqual(0);
+      expect(full).toBeLessThanOrEqual(1);
+      const half = applyFogDrift(0.5, x, z, t);
+      expect(half).toBeCloseTo(0.5 * fogDriftFactor(x, z, t), 12);
+    }
+  });
+
+  it("terrain and water GLSL carry the same wind-blown haze field", () => {
+    for (const src of [terrainFragment, waterFragment]) {
+      expect(src).toContain(`vWorld.xz * ${FOG_DRIFT_SCALE}`);
+      expect(src).toContain(`vec2(time * ${FOG_DRIFT_WIND_X}, time * ${FOG_DRIFT_WIND_Z})`);
+      expect(src).toContain(`fogWobble * ${FOG_DRIFT_AMP}`);
+      expect(src).toContain("fog = clamp(fog * (1.0 + fogWobble");
+    }
+    // Wind blows diagonally so banks crawl across the view, not along an axis.
+    expect(FOG_DRIFT_WIND_X).not.toBe(0);
+    expect(FOG_DRIFT_WIND_Z).not.toBe(0);
+    // No new uniforms: the drift reuses the existing time uniform.
+    expect(terrainFragment).toContain("uniform float time;");
+    expect(waterFragment).toContain("uniform float time;");
   });
 });
 

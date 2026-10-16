@@ -123,6 +123,11 @@ export const terrainFragment = /* glsl */ `
 
     float dist = length(vWorld - cameraPosition);
     float fog = clamp((dist - fogNear) / (fogFar - fogNear), 0.0, 1.0);
+    // Drifting haze: a slow wind-blown noise field breathes the fog factor
+    // so distant banks crawl instead of sitting frozen. Relative modulation
+    // keeps near-ground fog-free (0 stays 0) — mirrored by fogDriftFactor.
+    float fogWobble = wNoise(vWorld.xz * 0.0009 + vec2(time * 0.008, time * -0.006)) - 0.5;
+    fog = clamp(fog * (1.0 + fogWobble * 0.35), 0.0, 1.0);
     color = mix(color, fogColor, fog);
     gl_FragColor = vec4(color, 1.0);
   }
@@ -259,6 +264,9 @@ export const waterFragment = /* glsl */ `
 
     float dist = length(vWorld - cameraPosition);
     float fog = clamp((dist - fogNear) / (fogFar - fogNear), 0.0, 1.0);
+    // Same drifting haze as the terrain shader (mirrored by fogDriftFactor).
+    float fogWobble = wNoise(vWorld.xz * 0.0009 + vec2(time * 0.008, time * -0.006)) - 0.5;
+    fog = clamp(fog * (1.0 + fogWobble * 0.35), 0.0, 1.0);
     color = mix(color, fogColor, fog);
 
     gl_FragColor = vec4(color, alpha);
@@ -393,6 +401,36 @@ export function waterCaustic(x: number, z: number, time: number): number {
     Math.sin(cx * 0.1 + cz * 0.07 + time * 0.5) + Math.sin(cx * -0.06 + cz * 0.08 + time * 0.35);
   const base = Math.pow(ca * 0.25 + 0.5, 4);
   return base * (0.5 + waterNoise(x * 0.008 + time * 0.025, z * 0.008 + 3.3));
+}
+
+/**
+ * Drifting distance-haze field, mirrored from the terrain/water fragment
+ * shaders: the linear distance fog is modulated by a wind-blown value-noise
+ * field so far banks breathe and crawl instead of sitting frozen. Broad
+ * cells (~1100 world units) scrolling at ~0.01 cells/s read as slow weather,
+ * not shimmer; the relative modulation keeps near-ground fog-free.
+ */
+export const FOG_DRIFT_SCALE = 0.0009;
+export const FOG_DRIFT_WIND_X = 0.008;
+export const FOG_DRIFT_WIND_Z = -0.006;
+export const FOG_DRIFT_AMP = 0.35;
+
+/** Haze multiplier in [1-amp/2, 1+amp/2] at world (x, z) and time. */
+export function fogDriftFactor(x: number, z: number, time: number): number {
+  return (
+    1 +
+    (waterNoise(
+      x * FOG_DRIFT_SCALE + time * FOG_DRIFT_WIND_X,
+      z * FOG_DRIFT_SCALE + time * FOG_DRIFT_WIND_Z,
+    ) -
+      0.5) *
+      FOG_DRIFT_AMP
+  );
+}
+
+/** Distance-fog factor after the drifting haze, clamped to [0, 1]. */
+export function applyFogDrift(fog: number, x: number, z: number, time: number): number {
+  return Math.min(1, Math.max(0, fog * fogDriftFactor(x, z, time)));
 }
 
 export const skyVertex = /* glsl */ `
