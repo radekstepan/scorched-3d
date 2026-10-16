@@ -25,22 +25,30 @@ import { buildTeamRing } from "./units";
  * front (+Z) exit lane clear of buildings over its full width and deliver
  * products at the factory exit; here the open hall + hall mouth serve the
  * same role — a clear lane toward the map center where each reinforcement
- * appears facing out, then drives through the normal movement pipeline.
+ * appears at the door-side hall start facing out, then walks the hall out
+ * of the mouth into the normal movement pipeline.
  */
 
 /** Bunker base footprint, world units (fits easily inside a map-end column). */
 export const HQ_BASE_W = 96;
 export const HQ_BASE_D = 76;
 /** Wall height above the base slab; the door is slightly shorter. */
-export const HQ_WALL_H = 26;
+export const HQ_WALL_H = 34;
 export const HQ_DOOR_W = 34;
-export const HQ_DOOR_H = 24;
-/** How far the door slides up when a reinforcement drives out. */
-export const HQ_DOOR_TRAVEL = 22;
+export const HQ_DOOR_H = 32;
+/** How far the door slides up when a reinforcement drives out (fully clears the opening). */
+export const HQ_DOOR_TRAVEL = 32;
 /** Hall floor length from the bunker mouth toward the map center. */
 export const HQ_HALL_LEN = 130;
 /** Hall mouth offset from the HQ origin (door face + hall length). */
 export const HQ_EXIT_OFFSET = 48 + HQ_HALL_LEN;
+/**
+ * Reinforcement spawn offset from the HQ origin: just outside the door
+ * (front face + longest spawnable half-hull + door-slab clearance), so the
+ * release appears at the works and walks the hall out of the mouth instead
+ * of popping in at the mouth.
+ */
+export const HQ_SPAWN_OFFSET = 64;
 /** Concrete + dark trim palette (team color comes from TEAM_DEFS). */
 export const HQ_CONCRETE = 0x6b6f75;
 export const HQ_DARK = 0x3a3d42;
@@ -64,7 +72,7 @@ export const HQ_BEACON_HALO_SCALE = 1.7;
 export const HQ_BEACON_BOB = 0.3;
 /** Beacon dome seat, local frame (bare hemisphere on the canopy top, over the door). */
 export const HQ_BEACON_X = 58;
-export const HQ_BEACON_Y = 33;
+export const HQ_BEACON_Y = 41;
 /**
  * Default footing depth under the slab/hall (world units, straight down
  * from the slab underside at local y=0). `HqFx` re-sizes both footings per
@@ -85,6 +93,11 @@ export function hqFacingFor(team: TeamId): HqFacing {
 /** World-space hall-mouth position for an HQ anchor + facing. */
 export function hqExitWorld(anchor: { x: number; z: number }, facing: HqFacing): { x: number; z: number } {
   return { x: anchor.x + facing * HQ_EXIT_OFFSET, z: anchor.z };
+}
+
+/** World-space door-side spawn position for an HQ anchor + facing. */
+export function hqSpawnWorld(anchor: { x: number; z: number }, facing: HqFacing): { x: number; z: number } {
+  return { x: anchor.x + facing * HQ_SPAWN_OFFSET, z: anchor.z };
 }
 
 function hqBox(
@@ -166,19 +179,20 @@ export function buildHq(team: TeamId): THREE.Group {
   for (const vx of [-24, 18]) {
     tag(hqBox(group, 8, 5, 8, vx, 4 + HQ_WALL_H + 5 + 2.5, vx > 0 ? -14 : 14, HQ_CONCRETE));
   }
-  // Twin chimney stacks at the back corners, with dark caps.
+  // Twin chimney stacks at the back corners, with dark caps (crowned above
+  // the monitor roof so the works beats the commander's antenna).
   for (const s of [-1, 1]) {
-    const stack = hqStack(group, 4, 5, 36, -38, 4 + 18, s * 28, HQ_CONCRETE);
+    const stack = hqStack(group, 4, 5, 44, -38, 4 + 22, s * 28, HQ_CONCRETE);
     stack.name = "hq-chimney";
     tag(stack);
-    tag(hqStack(group, 5.5, 5.5, 2, -38, 4 + 36 + 1, s * 28, HQ_DARK));
+    tag(hqStack(group, 5.5, 5.5, 2, -38, 4 + 44 + 1, s * 28, HQ_DARK));
   }
   // Silo tank + side workshop annex on the slab (kept inside the base so
   // the whole works sits on seated ground).
-  const silo = hqStack(group, 9, 9, 30, 18, 4 + 15, -28, HQ_CONCRETE);
+  const silo = hqStack(group, 9, 9, 38, 18, 4 + 19, -28, HQ_CONCRETE);
   silo.name = "hq-silo";
   tag(silo);
-  tag(hqStack(group, 9.5, 9.5, 2, 18, 4 + 30 + 1, -28, HQ_DARK));
+  tag(hqStack(group, 9.5, 9.5, 2, 18, 4 + 38 + 1, -28, HQ_DARK));
   const annex = hqBox(group, 30, 14, 24, -20, 4 + 7, 24, HQ_DARK);
   annex.name = "hq-annex";
   tag(annex);

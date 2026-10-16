@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
+import { HQ_SPAWN_ROSTER } from "@scorched-3d/core";
+import { buildSpawnedUnit } from "./units";
 import {
   buildHq,
   doorLiftOf,
@@ -44,7 +46,9 @@ import {
   HQ_FOUNDATION_DEPTH,
   HQ_FOUNDATION_MARGIN,
   HQ_HALL_LEN,
+  HQ_SPAWN_OFFSET,
   HQ_WALL_H,
+  hqSpawnWorld,
 } from "./hq";
 
 describe("buildHq", () => {
@@ -440,5 +444,80 @@ describe("hq foundations", () => {
     }
     // The wreck keeps the deep seat — foundations survive posing.
     expect(foundationDepthOf(group)).toBeCloseTo(60, 9);
+  });
+});
+
+describe("hq reinforcement exit", () => {
+  it("spawns reinforcements just outside the door so they walk the hall out the mouth", () => {
+    // Door-side hall start: outside the bunker face, well short of the
+    // mouth — the release drives the hall's length on foot instead of
+    // popping in at the mouth.
+    expect(HQ_SPAWN_OFFSET).toBeGreaterThan(HQ_BASE_W / 2);
+    expect(HQ_SPAWN_OFFSET).toBeLessThan(HQ_EXIT_OFFSET);
+    for (const team of [0, 1] as const) {
+      const spawn = hqSpawnWorld({ x: 100, z: -40 }, hqFacingFor(team));
+      expect(spawn.x).toBe(team === 0 ? 100 + HQ_SPAWN_OFFSET : 100 - HQ_SPAWN_OFFSET);
+      // Centerline of the hall, so the drive out is straight.
+      expect(spawn.z).toBe(-40);
+      // The mouth stays ahead of the spawn toward the map center.
+      const mouth = hqExitWorld({ x: 100, z: -40 }, hqFacingFor(team));
+      expect(team === 0 ? mouth.x - spawn.x : spawn.x - mouth.x).toBe(
+        HQ_EXIT_OFFSET - HQ_SPAWN_OFFSET,
+      );
+    }
+  });
+
+  it("fits every spawnable hull through the door and clear of the front wall at spawn", () => {
+    // The lifted door fully clears the opening, so tall tubes never graze it.
+    expect(HQ_DOOR_TRAVEL).toBeGreaterThanOrEqual(HQ_DOOR_H);
+    const openingTop = 4 + HQ_DOOR_H;
+    for (const kind of HQ_SPAWN_ROSTER) {
+      const body = buildSpawnedUnit(kind, 0, 0, 0, Math.PI / 2, () => 0);
+      body.updateMatrixWorld(true);
+      const box = new THREE.Box3();
+      const tmp = new THREE.Box3();
+      body.traverse((child) => {
+        if (child.type !== "Mesh") return;
+        if (child.name === "team-ring") return;
+        tmp.setFromObject(child);
+        box.union(tmp);
+      });
+      expect(box.max.y - body.position.y, `${kind} clears the door head`).toBeLessThan(openingTop);
+      expect(Math.abs(box.min.z), `${kind} fits the opening width`).toBeLessThan(HQ_DOOR_W / 2);
+      expect(Math.abs(box.max.z), `${kind} fits the opening width`).toBeLessThan(HQ_DOOR_W / 2);
+      // Rear overhang stays outside the front wall face (hence clear of the
+      // door slab) at the door-side spawn.
+      expect(box.min.x, `${kind} rear clears the door`).toBeGreaterThan(
+        HQ_BASE_W / 2 - HQ_SPAWN_OFFSET,
+      );
+    }
+  });
+
+  it("stands taller than the commander", () => {
+    const cmd = buildSpawnedUnit("commander", 0, 0, 0, 0, () => 0);
+    cmd.updateMatrixWorld(true);
+    const cmdBox = new THREE.Box3();
+    const tmp = new THREE.Box3();
+    cmd.traverse((child) => {
+      if (child.type !== "Mesh") return;
+      if (child.name === "team-ring") return;
+      tmp.setFromObject(child);
+      cmdBox.union(tmp);
+    });
+    const works = buildHq(0);
+    works.updateMatrixWorld(true);
+    const worksBox = new THREE.Box3().setFromObject(works);
+    // Overall: stacks + caps beat the antenna tip.
+    expect(worksBox.max.y).toBeGreaterThan(cmdBox.max.y);
+    // Massing, not just the stacks: the roofline clears the commander's
+    // torso (antenna excluded — a thin whip, not the read).
+    const torso = new THREE.Box3();
+    cmd.getObjectByName("turret")!.traverse((child) => {
+      if (child.type !== "Mesh") return;
+      if ((child as THREE.Mesh).geometry instanceof THREE.CylinderGeometry) return;
+      tmp.setFromObject(child);
+      torso.union(tmp);
+    });
+    expect(4 + HQ_WALL_H + 5).toBeGreaterThan(torso.max.y - cmd.position.y);
   });
 });

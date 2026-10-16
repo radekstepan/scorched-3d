@@ -12,7 +12,13 @@ import {
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
 import { HQ_BEACON_PERIOD } from "./hq";
 import { HealthBars } from "./healthBars";
-import { foundationDepthOf, HQ_DOOR_TRAVEL, HQ_FOUNDATION_MARGIN } from "./hq";
+import {
+  foundationDepthOf,
+  HQ_DOOR_TRAVEL,
+  HQ_EXIT_OFFSET,
+  HQ_FOUNDATION_MARGIN,
+  HQ_SPAWN_OFFSET,
+} from "./hq";
 
 function anchors() {
   return [
@@ -74,6 +80,33 @@ describe("HqFx", () => {
     expect(hq.doorLift(0)).toBe(0);
     expect(hq.doorLift(1)).toBe(0);
     expect(spawns.map((s) => s.team)).toEqual([0, 1]);
+    hq.dispose();
+  });
+
+  it("releases at the door-side hall start and reports the mouth as the exit", () => {
+    const scene = new THREE.Scene();
+    const spawns: { team: 0 | 1; x: number; z: number; exit: { x: number; z: number } }[] = [];
+    const hq = new HqFx(scene, anchors(), {
+      groundY: () => 40,
+      rng: mulberry32(11),
+      onSpawn: (team, _kind, x, z, exit) => spawns.push({ team, x, z, exit }),
+    });
+    hq.update(HQ_SPAWN_INTERVAL);
+    hq.update(HQ_DOOR_OPEN_T);
+    expect(spawns).toHaveLength(2);
+    // Door-side hall start, mirrored per team — the release walks the hall
+    // out of the mouth instead of popping in at it.
+    expect(spawns[0]!.x).toBeCloseTo(-1000 + HQ_SPAWN_OFFSET, 9);
+    expect(spawns[0]!.z).toBeCloseTo(0, 9);
+    expect(spawns[0]!.exit).toEqual({ x: -1000 + HQ_EXIT_OFFSET, z: 0 });
+    expect(spawns[1]!.x).toBeCloseTo(1000 - HQ_SPAWN_OFFSET, 9);
+    expect(spawns[1]!.z).toBeCloseTo(0, 9);
+    expect(spawns[1]!.exit).toEqual({ x: 1000 - HQ_EXIT_OFFSET, z: 0 });
+    // The spawn sits between the anchor and the mouth, toward the center.
+    expect(hq.spawnAt(0)).toEqual({ x: -1000 + HQ_SPAWN_OFFSET, z: 0 });
+    expect(hq.exitAt(0)).toEqual({ x: -1000 + HQ_EXIT_OFFSET, z: 0 });
+    expect(hq.spawnAt(0).x).toBeGreaterThan(-1000);
+    expect(hq.exitAt(0).x).toBeGreaterThan(hq.spawnAt(0).x);
     hq.dispose();
   });
 

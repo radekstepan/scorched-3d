@@ -20,9 +20,10 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  * economy): `research/retail-executable-spec/04-units-orders-scripts-and-movement.md`
  * establishes that factory mobile products are allocated with a heading and
  * delivered at the factory's exit position (`QueryBuildInfo` supplies the
- * position). Mirrored here by fixed per-team exit points (the hall mouth)
- * where each reinforcement appears facing the map center, then drives out
- * through the normal movement pipeline. Deviations are deliberate
+ * position). Mirrored here by fixed per-team door-side spawn points just
+ * outside the hall door where each reinforcement appears facing the map
+ * center, then walks the hall out of the mouth into the normal movement
+ * pipeline. Deviations are deliberate
  * simplifications: fixed interval + per-team cap instead of build queues and
  * metal/energy costs, and a weighted-random spawn roster instead of player choice.
  */
@@ -209,9 +210,9 @@ export function isHqGround(field: HqField, x: number, z: number, maxAboveSea: nu
 
 /**
  * The hall runs ~11 cells from the anchor toward the map center and
- * reinforcements spawn at its mouth: every corridor cell must be dry land
- * (relaxed margin — the mouth may sit closer to shore than the slab) or
- * the fort would launch hulls into the surf. Pure, deterministic.
+ * reinforcements walk its length out of the mouth: every corridor cell must
+ * be dry land (relaxed margin — the mouth may sit closer to shore than the
+ * slab) or the fort would march hulls into the surf. Pure, deterministic.
  */
 export function hqHallClear(field: HqField, cellX: number, cellZ: number, team: TeamId): boolean {
   const dir = team === 0 ? 1 : -1;
@@ -252,8 +253,8 @@ export function hqPadCells(site: HqSite, width: number, height: number): HqGroun
 
 /**
  * Dirt-road cells past the hall mouth toward the map center, clamped to
- * the grid. Reinforcements spawn at the mouth and stage further in, so the
- * road runs them a cleared lane out of the woods.
+ * the grid. Reinforcements walk out of the mouth and stage further in, so
+ * the road runs them a cleared lane out of the woods.
  */
 export function hqRoadCells(site: HqSite, width: number, height: number): HqGroundCell[] {
   const dir = site.team === 0 ? 1 : -1;

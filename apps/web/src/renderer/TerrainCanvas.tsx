@@ -469,8 +469,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     combat.setExternalHull(true);
     // Team HQs: one fortified bunker per side at its map end (Blue west,
     // Orange east, doors facing the map center). Each live HQ slides its
-    // door up every interval and releases a reinforcement from the hall
-    // mouth that drives out to join the hunt; enemy fire — aimed volleys
+    // door up every interval and releases a reinforcement at its door that
+    // walks the hall out of the mouth to join the hunt; enemy fire — aimed volleys
     // inside admitted range plus honest splash from any nearby blast — can
     // wreck the fort, which stops the clock and leaves a charred husk.
     hq = new HqFx(
@@ -484,11 +484,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       })),
       {
         groundY,
-        onSpawn: (team, kind, x, z) => {
+        onSpawn: (team, kind, x, z, exit) => {
           // New hull, same systems as the mustered roster: body + selection
           // marker, placement entry (team/kind for targeting + HUD), mover
-          // on a short hall-to-staging patrol (the hunt sweep acquires
-          // enemies same-tick), and roster growth for bars/ghosts/trails.
+          // on a door-to-staging patrol (the release appears just outside
+          // the door and walks the hall out of the mouth while the hunt
+          // sweep acquires enemies same-tick), and roster growth for
+          // bars/ghosts/trails.
           const yaw = team === 0 ? Math.PI / 2 : -Math.PI / 2;
           const body = buildSpawnedUnit(kind, team, x, z, yaw, groundY);
           const marker = buildSelectionMarker();
@@ -503,7 +505,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
             cellZ: Math.min(Math.max(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0), map.height - 1),
             rotation: yaw,
           });
-          const staging = { x: x + (team === 0 ? 320 : -320), z };
+          // Staging anchors past the mouth (the dirt road's far end), so the
+          // door-to-staging leg walks the hall's full length on the way out.
+          const staging = { x: exit.x + (team === 0 ? 320 : -320), z: exit.z };
           movement.addUnit(x, z, yaw, [{ x, z }, staging], kind);
           health.setCount(units.children.length);
           occlusion.setKinds(placed.map((u) => u.kind));

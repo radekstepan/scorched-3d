@@ -675,10 +675,11 @@ export class UnitMovement {
 
   /**
    * Register a reinforcement released by an HQ: append its mover (seeded at
-   * the hall mouth on a short patrol loop toward the staging point, so the
-   * hunt sweep can acquire enemies same-tick), kind, and route, and return
-   * its roster index. The caller owns the body, placement entry, and HUD
-   * roster push; combat's per-unit arrays grow on their own next tick.
+   * the door-side hall start on a patrol loop out the hall mouth toward the
+   * staging point, so it walks the hall on foot and the hunt sweep can
+   * acquire enemies same-tick), kind, and route, and return its roster
+   * index. The caller owns the body, placement entry, and HUD roster push;
+   * combat's per-unit arrays grow on their own next tick.
    */
   addUnit(x: number, z: number, yaw: number, route: RoutePoint[], kind: UnitKind): number {
     const mover = initMover(route, yaw);

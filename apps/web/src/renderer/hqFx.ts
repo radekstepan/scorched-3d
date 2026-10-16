@@ -17,6 +17,7 @@ import {
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
+  hqSpawnWorld,
   poseHqWreck,
   setDoorLift,
   setHqBeaconAngle,
@@ -35,11 +36,11 @@ import {
  * damage points nearby defenders at the shooter).
  *
  * Release sequence per reinforcement: the door slides up over `DOOR_OPEN_T`,
- * the reinforcement is released at the hall mouth the moment the door seats
- * fully open (facing the map center, so it drives straight out of the hall
- * and into the hunt pipeline), the door holds briefly, then slides shut.
- * A destroyed HQ slams its door, poses its wreck, kills its warning
- * beacon, and never releases again.
+ * the reinforcement is released just outside the door (door-side hall
+ * start) the moment the door seats fully open (facing the map center, so
+ * it walks the hall out of the mouth and into the hunt pipeline), the door
+ * holds briefly, then slides shut. A destroyed HQ slams its door, poses
+ * its wreck, kills its warning beacon, and never releases again.
  */
 
 /** Door slides up over this long, seconds. */
@@ -59,8 +60,18 @@ export interface HqAnchorInput {
 export interface HqEnv {
   /** Terrain surface height at world (x, z), tracking live exaggeration. */
   groundY: (x: number, z: number) => number;
-  /** Fired at full-open with the hall-mouth position of the reinforcement. */
-  onSpawn?: (team: 0 | 1, kind: UnitKind, x: number, z: number) => void;
+  /**
+   * Fired at full-open with the door-side spawn position of the
+   * reinforcement plus the hall-mouth exit it walks out of (staging
+   * anchors past the mouth).
+   */
+  onSpawn?: (
+    team: 0 | 1,
+    kind: UnitKind,
+    x: number,
+    z: number,
+    exit: { x: number; z: number },
+  ) => void;
   /** Fired once when an HQ's health exhausts (canvas detonates the burst). */
   onKilled?: (index: number) => void;
   /** Fired per splash that chips a live HQ (canvas rallies defenders). */
@@ -170,9 +181,14 @@ export class HqFx {
     return this.groups[index] ?? null;
   }
 
-  /** Hall-mouth world position where an HQ's reinforcements appear. */
+  /** Hall-mouth world position an HQ's reinforcements walk out of (staging anchors past it). */
   exitAt(index: number): { x: number; z: number } {
     return hqExitWorld(this.anchors[index] ?? { x: 0, z: 0 }, this.facings[index] ?? 1);
+  }
+
+  /** Door-side hall-start world position where an HQ's reinforcements appear. */
+  spawnAt(index: number): { x: number; z: number } {
+    return hqSpawnWorld(this.anchors[index] ?? { x: 0, z: 0 }, this.facings[index] ?? 1);
   }
 
   /** Seated world position of an HQ (wrecks included — history stays). */
@@ -280,11 +296,12 @@ export class HqFx {
       const t = this.anim[i]!;
       if (!this.released[i] && t >= HQ_DOOR_OPEN_T) {
         this.released[i] = true;
+        const spawn = this.spawnAt(i);
         const exit = this.exitAt(i);
         const team = (group.userData.hqTeam as 0 | 1 | undefined) ?? 0;
         // Set when the clock fired above; the HQ cannot die mid-release
         // without cancelling `anim` (see `splash`), so it is always present.
-        this.env.onSpawn?.(team, this.pendingKind[i]!, exit.x, exit.z);
+        this.env.onSpawn?.(team, this.pendingKind[i]!, spawn.x, spawn.z, exit);
       }
       const total = HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T;
       if (t >= total) {
