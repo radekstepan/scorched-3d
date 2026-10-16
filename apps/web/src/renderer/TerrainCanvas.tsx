@@ -63,7 +63,7 @@ import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
 import {
   applyPan,
-  clampPanTarget,
+  clampPanTargetWithCamera,
   effectivePanSpeed,
   effectiveZoomSpeed,
   isPanKey,
@@ -921,7 +921,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           const dist = camera.position.distanceTo(controls.target);
           const offset = panOffset(camera.position, controls.target, input, panStepDistance(dist, dt, opt.panSpeed));
           applyPan(camera.position, controls.target, offset);
-          clampPanTarget(controls.target, worldW, worldD);
+          // Carry the camera with the clamped target delta so hitting an
+          // edge stops forward motion instead of flipping the view (the
+          // camera must never keep travelling past a stuck target).
+          clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
           markHoverDirty();
         }
       }
@@ -949,7 +952,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       controls.update();
       // Cursor-anchored zoom migrates the orbit target toward the cursor, so
       // re-clamp it to the map after the update (keyboard pan clamps before).
-      clampPanTarget(controls.target, worldW, worldD);
+      // The camera rides the clamped delta (right-drag pan included) so the
+      // viewing angle survives the edge instead of flipping backwards.
+      clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
 
       movement.update(dt);
       tracks.update(movement, dt);

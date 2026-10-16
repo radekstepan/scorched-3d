@@ -149,6 +149,33 @@ export function clampPanTarget(target: Vec3, worldW: number, worldD: number): vo
 }
 
 /**
+ * Clamp the orbit target to the map like `clampPanTarget`, but move the
+ * camera position back by the clamped-away delta so the position→target
+ * offset (yaw/pitch/distance) never changes.
+ *
+ * Clamping the target alone lets the camera keep travelling past it: at a
+ * map corner the camera crosses over the stuck target and the view flips
+ * backwards. Carrying the camera with the clamped delta stops forward
+ * motion at the bound instead — per axis, so sliding along an edge still
+ * works — while the viewing angle is retained exactly.
+ */
+export function clampPanTargetWithCamera(
+  target: Vec3,
+  position: Vec3,
+  worldW: number,
+  worldD: number,
+): void {
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+  const cx = Math.min(bx, Math.max(-bx, target.x));
+  const cz = Math.min(bz, Math.max(-bz, target.z));
+  position.x += cx - target.x;
+  position.z += cz - target.z;
+  target.x = cx;
+  target.z = cz;
+}
+
+/**
  * True when a key event originates from an editable control, so native
  * behavior (e.g. arrows moving a range-slider thumb or caret) wins over
  * camera panning. Accepts the raw `Event.target`.

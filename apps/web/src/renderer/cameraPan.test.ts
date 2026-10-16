@@ -15,6 +15,7 @@ import {
   applyPan,
   clampPanSpeed,
   clampPanTarget,
+  clampPanTargetWithCamera,
   clampZoomSpeed,
   effectivePanSpeed,
   effectiveZoomSpeed,
@@ -143,6 +144,67 @@ describe("clampPanTarget", () => {
     clampPanTarget(target, 2000, 4000);
     expect(target.x).toBeCloseTo(1000 * (1 + PAN_EDGE_MARGIN), 10);
     expect(target.z).toBeCloseTo(2000 * (1 + PAN_EDGE_MARGIN), 10);
+  });
+});
+
+describe("clampPanTargetWithCamera", () => {
+  const bound = (4000 / 2) * (1 + PAN_EDGE_MARGIN);
+
+  it("stops at the edge and retains the viewing angle", () => {
+    // Target already at the north bound, camera south of it: panning
+    // further north must move neither — the old target-only clamp let the
+    // camera keep travelling past the stuck target and flip the view.
+    const target = { x: 0, y: 0, z: -bound };
+    const position = { x: 0, y: 600, z: -bound + 1000 };
+    const before = { x: position.x - target.x, y: position.y - target.y, z: position.z - target.z };
+    applyPan(position, target, { x: 0, z: -500 });
+    clampPanTargetWithCamera(target, position, 4000, 4000);
+    expect(target.z).toBeCloseTo(-bound, 10);
+    expect(position.x - target.x).toBeCloseTo(before.x, 10);
+    expect(position.y - target.y).toBeCloseTo(before.y, 10);
+    expect(position.z - target.z).toBeCloseTo(before.z, 10);
+  });
+
+  it("stops both axes at a corner without rotating", () => {
+    const target = { x: bound, y: 0, z: -bound };
+    const position = { x: bound - 700, y: 600, z: -bound + 700 };
+    const before = { x: position.x - target.x, z: position.z - target.z };
+    applyPan(position, target, { x: 400, z: -400 });
+    clampPanTargetWithCamera(target, position, 4000, 4000);
+    expect(target.x).toBeCloseTo(bound, 10);
+    expect(target.z).toBeCloseTo(-bound, 10);
+    expect(position.x - target.x).toBeCloseTo(before.x, 10);
+    expect(position.z - target.z).toBeCloseTo(before.z, 10);
+  });
+
+  it("slides along a blocked edge instead of sticking", () => {
+    // At the east bound, panning south-east keeps the free (south)
+    // component and drops only the blocked (east) one.
+    const target = { x: bound, y: 0, z: 0 };
+    const position = { x: bound - 1000, y: 600, z: 1000 };
+    applyPan(position, target, { x: 300, z: 200 });
+    clampPanTargetWithCamera(target, position, 4000, 4000);
+    expect(target.x).toBeCloseTo(bound, 10);
+    expect(target.z).toBeCloseTo(200, 10);
+    expect(position.x - target.x).toBeCloseTo(-1000, 10);
+    expect(position.z - target.z).toBeCloseTo(1000, 10);
+  });
+
+  it("leaves in-bounds pans untouched", () => {
+    const target = { x: 100, y: 0, z: -200 };
+    const position = { x: 100, y: 600, z: 800 };
+    applyPan(position, target, { x: 10, z: -20 });
+    clampPanTargetWithCamera(target, position, 4000, 4000);
+    expect(target).toEqual({ x: 110, y: 0, z: -220 });
+    expect(position).toEqual({ x: 110, y: 600, z: 780 });
+  });
+
+  it("never moves the camera height", () => {
+    const target = { x: 99999, y: 50, z: -99999 };
+    const position = { x: 0, y: 600, z: 1000 };
+    clampPanTargetWithCamera(target, position, 4000, 4000);
+    expect(position.y).toBe(600);
+    expect(target.y).toBe(50);
   });
 });
 

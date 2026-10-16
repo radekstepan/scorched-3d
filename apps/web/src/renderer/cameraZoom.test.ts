@@ -269,8 +269,9 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     expect(canvasSource).toContain("controls.maxDistance");
     expect(canvasSource).toContain("controls.zoomSpeed");
     // The anchored mode migrates the orbit target toward the cursor, so the
-    // tick must re-clamp it to the map after controls.update().
-    expect(canvasSource).toContain("clampPanTarget(controls.target");
+    // tick must re-clamp it to the map after controls.update() — carrying
+    // the camera with the clamped delta so the angle survives the edge.
+    expect(canvasSource).toContain("clampPanTargetWithCamera(controls.target");
   });
 
   it("scales the orbit ceiling to the doubled map", () => {
