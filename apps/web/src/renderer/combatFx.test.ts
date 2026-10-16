@@ -5,11 +5,14 @@ import {
   HUSK_SMOKE_END,
   MAX_SCORCH_MARKS,
   ballisticPosition,
+  ballisticVelocity,
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_SLEW_RATE,
   GRAVITY,
   mulberry32,
+  solveBallistic,
+  solveDirect,
   TURRET_LIMIT,
   type TNTMap,
   type UnitKind,
@@ -20,6 +23,12 @@ import {
   muzzlePoint,
   projectileGlowFalloff,
   projectileGlowRadius,
+  projectileTailLength,
+  projectileTailOpacity,
+  PROJECTILE_TAIL_MAX,
+  PROJECTILE_TAIL_MIN,
+  PROJECTILE_TAIL_OPACITY_MAX,
+  PROJECTILE_TAIL_OPACITY_MIN,
   SHOT_GLOW_LIGHTS,
   SHOT_GLOW_OPACITY,
   SHOT_GLOW_PEAK,
@@ -1052,6 +1061,12 @@ describe("CombatFx unit death", () => {
     for (let n = 0; n < 4000 && fx.killCount < 2; n++) fx.update(1 / 60);
     expect(fx.killCount).toBe(2);
     expect(fx.aliveCount).toBe(1);
+    // A lethal volley's sibling round can still be airborne when the second
+    // kill lands (task 114's barrel-lay gating shifted volley timing, so
+    // this seed now kills with a round in flight): let in-flight rounds
+    // land first — with one hull alive none may be *fired* past this point.
+    for (let n = 0; n < 600 && fx.shotCount > 0; n++) fx.update(1 / 60);
+    expect(fx.shotCount).toBe(0);
     // One live hull left: the skirmish goes quiet — no shots, no new fire.
     const fired = fx.totalFired;
     for (let n = 0; n < 600; n++) {
@@ -2249,5 +2264,165 @@ describe("CombatFx structure fire (HQ forts)", () => {
     // The burst routes into the structures hook (the canvas wrecks the HQ).
     expect(splashes).toHaveLength(1);
     fx.dispose();
+  });
+});
+
+describe("CombatFx projectile warp tail", () => {
+  function flatEnv(ground: number) {
+    return { groundY: () => ground, blastFeatures: () => {} };
+  }
+
+  /** Step until at least one round is in flight (shots live many ticks). */
+  function stepToShot(fx: CombatFx, maxSteps = 4000): void {
+    for (let n = 0; n < maxSteps && fx.shotCount === 0; n++) fx.update(1 / 60);
+    expect(fx.shotCount).toBeGreaterThan(0);
+  }
+
+  /** Every warp-tail cone in the scene graph (tails ride heads as children). */
+  function tailCones(scene: THREE.Scene): THREE.Mesh[] {
+    const cones: THREE.Mesh[] = [];
+    scene.traverse((c) => {
+      if (c instanceof THREE.Mesh && c.geometry?.type === "ConeGeometry") cones.push(c);
+    });
+    return cones;
+  }
+
+  it("stretches linearly with speed between the clamps (pure length)", () => {
+    expect(projectileTailLength(0)).toBe(PROJECTILE_TAIL_MIN);
+    expect(projectileTailLength(-50)).toBe(PROJECTILE_TAIL_MIN);
+    expect(projectileTailLength(Number.NaN)).toBe(PROJECTILE_TAIL_MIN);
+    expect(projectileTailLength(1e6)).toBe(PROJECTILE_TAIL_MAX);
+    // Mid-band: 0.06 s of flight — a flash bolt streaks 78, a hunkered
+    // shell only 31.2, so fast rounds visibly out-streak slow ones.
+    expect(projectileTailLength(1300)).toBeCloseTo(78, 5);
+    expect(projectileTailLength(520)).toBeCloseTo(31.2, 5);
+    expect(projectileTailLength(1300)).toBeGreaterThan(projectileTailLength(520));
+    // Monotonic: faster never trails shorter.
+    let prev = -Infinity;
+    for (let s = 0; s <= 2000; s += 25) {
+      const len = projectileTailLength(s);
+      expect(len).toBeGreaterThanOrEqual(prev);
+      expect(len).toBeGreaterThanOrEqual(PROJECTILE_TAIL_MIN);
+      expect(len).toBeLessThanOrEqual(PROJECTILE_TAIL_MAX);
+      prev = len;
+    }
+  });
+
+  it("stays more transparent than the head across the opacity band (pure opacity)", () => {
+    expect(projectileTailOpacity(0)).toBe(PROJECTILE_TAIL_OPACITY_MIN);
+    expect(projectileTailOpacity(-50)).toBe(PROJECTILE_TAIL_OPACITY_MIN);
+    expect(projectileTailOpacity(Number.NaN)).toBe(PROJECTILE_TAIL_OPACITY_MIN);
+    expect(projectileTailOpacity(1e6)).toBe(PROJECTILE_TAIL_OPACITY_MAX);
+    // The whole band sits well under the opaque head (opacity 1).
+    expect(PROJECTILE_TAIL_OPACITY_MAX).toBeLessThan(0.5);
+    // Monotonic: faster never trails fainter.
+    let prev = -Infinity;
+    for (let s = 0; s <= 2000; s += 25) {
+      const o = projectileTailOpacity(s);
+      expect(o).toBeGreaterThanOrEqual(prev);
+      expect(o).toBeGreaterThanOrEqual(PROJECTILE_TAIL_OPACITY_MIN);
+      expect(o).toBeLessThanOrEqual(PROJECTILE_TAIL_OPACITY_MAX);
+      expect(o).toBeLessThan(1);
+      prev = o;
+    }
+  });
+
+  it("breathes along a shell arc as gravity works, holds steady for bolts", () => {
+    const speedAt = (v: { x: number; y: number; z: number }, t: number, g: number): number => {
+      const u = ballisticVelocity(v, t, g);
+      return Math.hypot(u.x, u.y, u.z);
+    };
+    // Flat hammer shell: symmetric arc, apex mid-flight where gravity has
+    // bled the vertical speed.
+    const shell = solveBallistic({ x: 0, y: 100, z: 0 }, { x: 800, y: 100, z: 0 }, 520, GRAVITY);
+    expect(shell).not.toBeNull();
+    const apexT = shell!.velocity.y / GRAVITY;
+    const muzzle = speedAt(shell!.velocity, 0, GRAVITY);
+    const apex = speedAt(shell!.velocity, apexT, GRAVITY);
+    const impact = speedAt(shell!.velocity, shell!.duration, GRAVITY);
+    expect(apex).toBeLessThan(muzzle);
+    expect(impact).toBeCloseTo(muzzle, 5);
+    expect(projectileTailLength(apex)).toBeLessThan(projectileTailLength(muzzle));
+    expect(projectileTailLength(impact)).toBeCloseTo(projectileTailLength(muzzle), 5);
+    expect(projectileTailOpacity(apex)).toBeLessThan(projectileTailOpacity(muzzle));
+    expect(projectileTailOpacity(impact)).toBeCloseTo(projectileTailOpacity(muzzle), 5);
+    // Flat bolt (no gravity): constant speed, constant tail end to end.
+    const bolt = solveDirect({ x: 0, y: 100, z: 0 }, { x: 800, y: 100, z: 0 }, 1300);
+    expect(bolt).not.toBeNull();
+    for (const t of [0, bolt!.duration / 2, bolt!.duration]) {
+      expect(speedAt(bolt!.velocity, t, 0)).toBeCloseTo(1300, 5);
+      expect(projectileTailLength(speedAt(bolt!.velocity, t, 0))).toBeCloseTo(78, 5);
+    }
+  });
+
+  it("trails one tinted cone per live round, posed from its speed", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    stepToShot(fx);
+    // Exactly one tail per live round, parented to its head (never pooled,
+    // never scene-level): heads carry the cones as children.
+    const cones = tailCones(scene);
+    expect(cones).toHaveLength(fx.shotCount);
+    for (const cone of cones) {
+      expect(cone.parent).not.toBe(scene);
+      // Child at the head origin with no local rotation: it inherits the
+      // head's velocity orientation and trails down local -Z by geometry.
+      expect(cone.position.length()).toBeCloseTo(0, 5);
+      expect(cone.quaternion.length()).toBeCloseTo(1, 5);
+      expect(cone.quaternion.x).toBeCloseTo(0, 5);
+      expect(cone.quaternion.y).toBeCloseTo(0, 5);
+      expect(cone.quaternion.z).toBeCloseTo(0, 5);
+      // Tapered cone stretched behind the head, additive and faint.
+      expect(cone.scale.x).toBeCloseTo(1, 5);
+      expect(cone.scale.y).toBeCloseTo(1, 5);
+      expect(cone.scale.z).toBeGreaterThanOrEqual(PROJECTILE_TAIL_MIN);
+      expect(cone.scale.z).toBeLessThanOrEqual(PROJECTILE_TAIL_MAX);
+      const mat = cone.material as THREE.MeshBasicMaterial;
+      expect(mat.transparent).toBe(true);
+      expect(mat.blending).toBe(THREE.AdditiveBlending);
+      expect(mat.opacity).toBeGreaterThanOrEqual(PROJECTILE_TAIL_OPACITY_MIN);
+      expect(mat.opacity).toBeLessThanOrEqual(PROJECTILE_TAIL_OPACITY_MAX);
+      // Tail wears its head's weapon tint.
+      const head = cone.parent as THREE.Mesh;
+      expect(mat.color.getHex()).toBe((head.material as THREE.MeshBasicMaterial).color.getHex());
+    }
+    // The test accessor tracks the same pose per live shot.
+    for (let i = 0; i < fx.shotCount; i++) {
+      const tail = fx.shotTailAt(i);
+      expect(tail).not.toBeNull();
+      expect(tail!.length).toBeGreaterThanOrEqual(PROJECTILE_TAIL_MIN);
+      expect(tail!.length).toBeLessThanOrEqual(PROJECTILE_TAIL_MAX);
+      expect(tail!.opacity).toBeGreaterThanOrEqual(PROJECTILE_TAIL_OPACITY_MIN);
+      expect(tail!.opacity).toBeLessThanOrEqual(PROJECTILE_TAIL_OPACITY_MAX);
+    }
+    expect(fx.shotTailAt(fx.shotCount)).toBeNull();
+    fx.dispose();
+  });
+
+  it("drops tails with their rounds on arrival and on clear (no sim impact)", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    stepToShot(fx);
+    // Tails track live rounds 1:1 every tick — landing volleys take their
+    // cones with them (explosions bloom, no cone lingers) and fresh
+    // volleys bring new ones.
+    for (let n = 0; n < 600; n++) {
+      fx.update(1 / 60);
+      expect(tailCones(scene).length).toBe(fx.shotCount);
+    }
+    const fired = fx.totalFired;
+    expect(fired).toBeGreaterThan(0);
+    fx.clearTransients();
+    expect(fx.shotCount).toBe(0);
+    expect(tailCones(scene)).toHaveLength(0);
+    expect(fx.shotTailAt(0)).toBeNull();
+    expect(fx.totalFired).toBe(fired);
+    // Skirmish resumes with fresh tails — tails never gate firing.
+    stepToShot(fx);
+    expect(tailCones(scene)).toHaveLength(fx.shotCount);
+    fx.dispose();
+    expect(tailCones(scene)).toHaveLength(0);
   });
 });

@@ -84,7 +84,9 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  * - `battle_sprites_projectiles.go` renders cannon shells as ballistic
  *   bodies but plasma bolts/beams as head→tail oriented strokes with a
  *   dynamic light riding the bolt — mirrored here by orienting bolt meshes
- *   along their velocity and pooling point lights for muzzle/explosion pops.
+ *   along their velocity, trailing a tapered additive warp tail behind
+ *   every round (stretched by its instantaneous speed), and pooling point
+ *   lights for muzzle/explosion pops.
  * - Retail turret aim is yaw-relative-to-heading from the AimFrom piece
  *   (spec 06 §3.3), traversed by the COB script within its limits: hulls
  *   turn to face the target at a limited rate while the turret/barrel
@@ -119,6 +121,15 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
 
 interface Shot {
   mesh: THREE.Mesh;
+  /**
+   * Warp tail: a tapered additive cone parented to the head mesh (local
+   * origin, trailing down local -Z), so it inherits the head's position
+   * and velocity orientation for free — only its stretch (scale.z) and
+   * opacity are re-posed per tick from the instantaneous speed.
+   */
+  tail: THREE.Mesh;
+  /** Per-shot tail material (weapon tint + per-tick opacity, disposed with the shot). */
+  tailMat: THREE.MeshBasicMaterial;
   start: THREE.Vector3;
   vel: THREE.Vector3;
   gravity: number;
@@ -411,6 +422,54 @@ export function projectileGlowRadius(falloff: number): number {
   const f = Math.min(Math.max(falloff, 0), 1);
   return Math.max(SHOT_GLOW_RADIUS * (0.6 + 0.4 * f), 1);
 }
+
+/**
+ * In-flight warp tail: every round drags a tapered, more transparent tail
+ * behind its head along the flight line (nanolathe's head→tail beam-stroke
+ * read, adapted from 2D line strokes to a 3D additive cone). The tail spans
+ * a fixed window of flight time behind the head, so its stretch is the
+ * instantaneous speed times `PROJECTILE_TAIL_WINDOW`, clamped: fast flat
+ * bolts streak long, slow lobbed shells trail short, and a shell's tail
+ * visibly breathes along its arc — shrinking toward the apex as gravity
+ * bleeds its speed, stretching again on the descent. Opacity scales weakly
+ * with the same speed, always well under the opaque head. Pure for tests.
+ */
+/** Seconds of flight the tail spans behind the head (length = speed × window). */
+export const PROJECTILE_TAIL_WINDOW = 0.06;
+/** Tail clamp, world units (never a nub, never a cross-map streak). */
+export const PROJECTILE_TAIL_MIN = 12;
+export const PROJECTILE_TAIL_MAX = 90;
+/** Tail opacity band (additive over the head's opaque 1.0). */
+export const PROJECTILE_TAIL_OPACITY_MIN = 0.18;
+export const PROJECTILE_TAIL_OPACITY_MAX = 0.42;
+/** Reference speed for full tail opacity: the fastest muzzle velocity (flash bolt). */
+export const PROJECTILE_TAIL_REF_SPEED = 1300;
+
+/** Tail stretch for an instantaneous `speed` (world units/s), clamped. */
+export function projectileTailLength(speed: number): number {
+  if (!(speed > 0)) return PROJECTILE_TAIL_MIN;
+  return Math.min(Math.max(speed * PROJECTILE_TAIL_WINDOW, PROJECTILE_TAIL_MIN), PROJECTILE_TAIL_MAX);
+}
+
+/** Tail opacity for an instantaneous `speed` (world units/s), clamped. */
+export function projectileTailOpacity(speed: number): number {
+  if (!(speed > 0)) return PROJECTILE_TAIL_OPACITY_MIN;
+  const k = Math.min(speed / PROJECTILE_TAIL_REF_SPEED, 1);
+  return PROJECTILE_TAIL_OPACITY_MIN + (PROJECTILE_TAIL_OPACITY_MAX - PROJECTILE_TAIL_OPACITY_MIN) * k;
+}
+
+/**
+ * Shared warp-tail geometry: a unit cone with its wide base at the local
+ * origin opening forward (+Z) and its tip at -Z, so a tail parented to a
+ * head mesh trails behind it when the head lookAts along its velocity and
+ * scale.z stretches it to `projectileTailLength(speed)`. Owned by the fx.
+ */
+function makeWarpTailGeometry(): THREE.ConeGeometry {
+  const geo = new THREE.ConeGeometry(2.4, 1, 8);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, 0, -0.5);
+  return geo;
+}
 /** Scratch yaw quaternion for scorch instance orientation (no per-mark alloc). */
 const _yawQuat = new THREE.Quaternion();
 /** Scratch shot velocity for per-tick orientation (no per-shot alloc). */
@@ -573,6 +632,7 @@ export class CombatFx {
   private elevGoal = new Map<number, number>();
   private boltGeo = new THREE.BoxGeometry(3, 3, 18);
   private shellGeo = new THREE.SphereGeometry(3.2, 8, 6);
+  private tailGeo = makeWarpTailGeometry();
   private flashGeo = new THREE.SphereGeometry(7, 10, 8);
   private shockGeo = new THREE.SphereGeometry(10, 14, 10);
   /** Layered-explosion shared geos: fireball, smoke puff, shock ring, glow. */
@@ -796,6 +856,17 @@ export class CombatFx {
     return this.shotGlowMats[i]?.opacity ?? 0;
   }
 
+  /**
+   * Warp-tail state of live shot `i` (null when absent), for tests: the
+   * tail stretch (world units) and opacity, both posed from the
+   * instantaneous speed every tick.
+   */
+  shotTailAt(i: number): { length: number; opacity: number } | null {
+    const shot = this.shots[i];
+    if (!shot) return null;
+    return { length: shot.tail.scale.z, opacity: shot.tailMat.opacity };
+  }
+
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
   aimState(index: number): { hull: number; turret: number } | null {
     return this.aim[index] ? { ...this.aim[index]! } : null;
@@ -1009,8 +1080,7 @@ export class CombatFx {
    */
   clearTransients(): void {
     for (const shot of this.shots) {
-      this.scene.remove(shot.mesh);
-      (shot.mesh.material as THREE.Material).dispose();
+      this.removeShotVisuals(shot);
     }
     this.shots = [];
     for (const flash of this.flashes) {
@@ -1081,6 +1151,7 @@ export class CombatFx {
     this.shotGlowGeo.dispose();
     this.boltGeo.dispose();
     this.shellGeo.dispose();
+    this.tailGeo.dispose();
     this.flashGeo.dispose();
     this.shockGeo.dispose();
     this.fireGeo.dispose();
@@ -1986,9 +2057,25 @@ export class CombatFx {
     );
     mesh.position.copy(start);
     mesh.frustumCulled = false;
+    // Warp tail: a tapered additive cone in the weapon tint, parented to
+    // the head so it trails the flight line from the first tick (posed
+    // from the muzzle speed here, re-posed from the instantaneous speed
+    // every tick in `advanceShots`).
+    const tailMat = new THREE.MeshBasicMaterial({
+      color: roundColor,
+      transparent: true,
+      opacity: projectileTailOpacity(Math.hypot(sol.velocity.x, sol.velocity.y, sol.velocity.z)),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const tail = new THREE.Mesh(this.tailGeo, tailMat);
+    tail.scale.set(1, 1, projectileTailLength(Math.hypot(sol.velocity.x, sol.velocity.y, sol.velocity.z)));
+    mesh.add(tail);
     this.scene.add(mesh);
     this.shots.push({
       mesh,
+      tail,
+      tailMat,
       start,
       vel: new THREE.Vector3(sol.velocity.x, sol.velocity.y, sol.velocity.z),
       gravity: roundGravity,
@@ -2399,6 +2486,17 @@ export class CombatFx {
     ex.pointsMat.dispose();
   }
 
+  /**
+   * Drop a shot's visuals: the head leaves the scene (its child tail goes
+   * with it) and both per-shot materials dispose — the shared head/tail
+   * geometries stay with the fx. Every removal path funnels through here.
+   */
+  private removeShotVisuals(shot: Shot): void {
+    this.scene.remove(shot.mesh);
+    (shot.mesh.material as THREE.Material).dispose();
+    shot.tailMat.dispose();
+  }
+
   private advanceShots(dt: number): void {
     // No rounds in flight: skip the stands fetch + scratch work entirely.
     if (this.shots.length === 0) return;
@@ -2436,8 +2534,7 @@ export class CombatFx {
           _shotAt.set(p.x, p.y, p.z);
           const at = _shotAt;
           const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
-          this.scene.remove(shot.mesh);
-          (shot.mesh.material as THREE.Material).dispose();
+          this.removeShotVisuals(shot);
           this.shots.splice(this.shots.indexOf(shot), 1);
           this.stuck += 1;
           this.env?.strikeTree?.(stuckFid);
@@ -2473,8 +2570,7 @@ export class CombatFx {
             _shotAt.set(hit.x, hit.y, hit.z);
             const at = _shotAt;
             const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
-            this.scene.remove(shot.mesh);
-            (shot.mesh.material as THREE.Material).dispose();
+            this.removeShotVisuals(shot);
             this.shots.splice(this.shots.indexOf(shot), 1);
             this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
             this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
@@ -2495,14 +2591,20 @@ export class CombatFx {
         _shotLook.copy(shot.mesh.position).add(_shotVel);
         shot.mesh.lookAt(_shotLook);
       }
+      // Warp tail: stretch + opacity from the instantaneous speed, so a
+      // shell's tail breathes along its arc as gravity works (short/faint
+      // at the apex, long/bright on the descent) while bolts hold steady.
+      // The tail rides the head as a child — position/orientation are free.
+      const speed = _shotVel.length();
+      shot.tail.scale.set(1, 1, projectileTailLength(speed));
+      shot.tailMat.opacity = projectileTailOpacity(speed);
       if (shot.age >= shot.dur) done.push(shot);
     }
     for (const shot of done) {
       _shotAt.copy(shot.mesh.position);
       const at = _shotAt;
       const color = (shot.mesh.material as THREE.MeshBasicMaterial).color.getHex();
-      this.scene.remove(shot.mesh);
-      (shot.mesh.material as THREE.Material).dispose();
+      this.removeShotVisuals(shot);
       this.shots.splice(this.shots.indexOf(shot), 1);
       this.explode(at, color, shot.kind, false, shot.attacker, true, shot.attack);
       this.spawnFlash(at, color, FLASH_MAX_AGE * 0.6);
