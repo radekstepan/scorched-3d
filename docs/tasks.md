@@ -16,18 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-don't zoom in so close to fly through actual ground/water etc.
+Units on larger maps are genuinely lost. If a team discovers enemy, the other units know their last location. Look at how the AI is implemented in the nanolathe repo to fix this/improve this.
 
-the red light on HQ should show circulating red light, like on a lighthouse, it's not radiating in and out, it's circling inside directing the cone of light in a particular angle that's moving.
+The fog should be slowly moving.
 
-Greenreach. At some point each army just creates a line and nobody moves. Very stationary, it shouldn't be like that. On Dust Plains that's how they all start.
+The fireflies look "flashing" at the moment. It should be gentle pulsating glow and all of them should reflect against the terrain and trees, not just those close to the trees.
 
-Looking at the water, the very last tile by the edge has lighter color and there is a visible hard line separating the last tiles from the rest.
+The closeup zoom level is a bit too close. Back off a bit from max zoom. Right now what happens is we get too close and the view angle turns completely vertical. Stop that, keep the angle.
 
-Can the reflection of a projectile flying against the ground match somewhat the actual projectile? Right now it's a circle.
+The red HQ light should not be showing the 2 red "cones", the cones is just a faded glow of light that reflects against the surrounding surfaces, is diffused and travels firther without a harsh border.
 
-Some fireflies look "stuck" in a tree and illuminte an area too much. I want gentle illumination of a small area fading away from all the fireflies.
+Make the projectiles reflecting against the surroundings a bit more subtle on night map and more sublte on day map.
 
-On Dust Plains one of the HQ is set in the ground such that the driveway out is in a "pass" that's hard for units to climb out of. Make the building sit higher up to clear local terrain or adjust the terrain.
-
-Add subtle fog here and there, white fog on a day map.
+On Dust Plains we fixed the HQ position such that it's at a high enough elevation. See if we can place the HQs further inland to not have to build a little "hill" for it.
