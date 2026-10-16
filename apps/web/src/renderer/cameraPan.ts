@@ -55,6 +55,15 @@ export const MIN_ZOOM_DISTANCE = 15;
  * doubled battlefield frameable.
  */
 export const MAX_ZOOM_DISTANCE = 8400;
+/**
+ * Minimum eye height above the local terrain/water surface (world units).
+ * 6 clears the 2-unit near plane with room to spare, rides above the ~2
+ * units of water swell crests, and absorbs the bilinear-vs-mesh height
+ * mismatch — while staying well under the 15-unit zoom floor, so steep
+ * close-ups of a surface-seated target never touch it. Only grazing
+ * descents (zooming into a slope, orbiting low over a rise) land here.
+ */
+export const CAMERA_SURFACE_CLEARANCE = 6;
 
 /** How far past the map half-extents the orbit target may travel (fraction). */
 export const PAN_EDGE_MARGIN = 0.25;
@@ -259,6 +268,29 @@ export function isRigidPan(
     Math.abs(dTargetX - dPositionX) <= RIGID_PAN_EPSILON &&
     Math.abs(dTargetZ - dPositionZ) <= RIGID_PAN_EPSILON
   );
+}
+
+/**
+ * Lift the camera eye above the local surface (terrain, or the water sheet
+ * when it's the higher of the two — callers pass the max). OrbitControls'
+ * own guardrails are target-relative: cursor-anchored zoom flies the
+ * camera down the pointer ray toward the dirt, and the polar clamp only
+ * holds the eye above the target's horizontal plane, so zooming into a
+ * slope or orbiting low over a rise happily buries the camera. This is the
+ * terrain-collision floor: run it after the XZ clamps (it reads the final
+ * column) with no jump exemption — an underground eye is never a valid
+ * request. The target is untouched, so the focus stays put while the view
+ * pitches up slightly at the floor, mirroring `clampCameraToWorld`.
+ * Non-finite surfaces (no height sample) leave the camera alone.
+ */
+export function clampCameraAboveSurface(
+  position: Vec3,
+  surfaceY: number,
+  clearance: number = CAMERA_SURFACE_CLEARANCE,
+): void {
+  if (!Number.isFinite(surfaceY) || !Number.isFinite(clearance)) return;
+  const floor = surfaceY + clearance;
+  if (position.y < floor) position.y = floor;
 }
 
 /**

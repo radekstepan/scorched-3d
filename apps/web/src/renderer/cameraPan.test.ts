@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  CAMERA_SURFACE_CLEARANCE,
   DEFAULT_PAN_SPEED,
   DEFAULT_ZOOM_SPEED,
   MAX_ZOOM_DISTANCE,
@@ -19,6 +20,7 @@ import {
   ZOOM_SPEED_MAX,
   ZOOM_SPEED_MIN,
   applyPan,
+  clampCameraAboveSurface,
   clampCameraToWorld,
   clampCameraToWorldWithTarget,
   clampPanSpeed,
@@ -764,5 +766,52 @@ describe("pan-back wall through real OrbitControls (task 136)", () => {
     expect(camera.position.z).toBeCloseTo(bz, 6);
     expect(controls.target.x).toBeCloseTo(0, 9);
     expect(controls.target.z).toBeCloseTo(0, 9);
+  });
+});
+
+describe("clampCameraAboveSurface", () => {
+  it("lifts a buried eye to the surface plus the default clearance", () => {
+    const position = { x: 10, y: 95, z: -30 };
+    clampCameraAboveSurface(position, 100);
+    expect(position).toEqual({ x: 10, y: 100 + CAMERA_SURFACE_CLEARANCE, z: -30 });
+  });
+
+  it("leaves a high eye alone and never touches X/Z", () => {
+    const position = { x: 10, y: 500, z: -30 };
+    clampCameraAboveSurface(position, 100);
+    expect(position).toEqual({ x: 10, y: 500, z: -30 });
+  });
+
+  it("holds an eye resting exactly on the floor", () => {
+    const position = { x: 0, y: 100 + CAMERA_SURFACE_CLEARANCE, z: 0 };
+    clampCameraAboveSurface(position, 100);
+    expect(position.y).toBe(100 + CAMERA_SURFACE_CLEARANCE);
+  });
+
+  it("honors an explicit clearance override", () => {
+    const position = { x: 0, y: 0, z: 0 };
+    clampCameraAboveSurface(position, 100, 2);
+    expect(position.y).toBe(102);
+  });
+
+  it("ignores non-finite surfaces and clearances instead of NaN-ing the camera", () => {
+    for (const surfaceY of [NaN, Infinity, -Infinity]) {
+      const position = { x: 1, y: 2, z: 3 };
+      clampCameraAboveSurface(position, surfaceY);
+      expect(position).toEqual({ x: 1, y: 2, z: 3 });
+    }
+    const position = { x: 1, y: 2, z: 3 };
+    clampCameraAboveSurface(position, 100, NaN);
+    expect(position).toEqual({ x: 1, y: 2, z: 3 });
+  });
+
+  it("sizes the clearance between the near plane and the zoom floor", () => {
+    // Above the 2-unit near plane (and the ~2-unit swell crests) with
+    // margin, so the eye and its frustum stay out of the surface — yet
+    // well under the 15-unit zoom floor, so steep close-ups of a
+    // surface-seated target never touch this clamp.
+    expect(CAMERA_SURFACE_CLEARANCE).toBe(6);
+    expect(CAMERA_SURFACE_CLEARANCE).toBeGreaterThan(2 * 2);
+    expect(CAMERA_SURFACE_CLEARANCE).toBeLessThan(MIN_ZOOM_DISTANCE);
   });
 });

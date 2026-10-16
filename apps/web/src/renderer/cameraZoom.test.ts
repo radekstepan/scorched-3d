@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, effectiveZoomSpeed } from "./cameraPan";
+import { CAMERA_SURFACE_CLEARANCE, DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, clampCameraAboveSurface, effectiveZoomSpeed } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -256,6 +256,136 @@ describe("cursor-anchored wheel zoom", () => {
   });
 });
 
+describe("surface collision on zoom", () => {
+  // OrbitControls' guardrails are target-relative: cursor-anchored zoom
+  // flies the camera down the pointer ray toward the dirt, and the polar
+  // clamp only holds the eye above the target's horizontal plane — so
+  // zooming into a slope or skimming low over a rise buries the camera.
+  // The canvas tick answers with clampCameraAboveSurface on the final
+  // column (ground, or the water sheet when shown and higher). These
+  // tests drive a real control instance through the wheel path against
+  // analytic surfaces, first without the clamp (the fly-through) and
+  // then with it applied per tick exactly like the canvas does.
+
+  /** Low close-up pose: 12 units up, ~61 out — already leaning in. */
+  function makeLowRig(): ZoomRig {
+    const { el, listeners } = makeStubDom();
+    const camera = new THREE.PerspectiveCamera(48, WIDTH / HEIGHT, 2, 14000);
+    camera.position.set(0, 12, 60);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.zoomToCursor = true;
+    controls.target.set(0, 0, 0);
+    controls.update();
+    const wheel = listeners.get("wheel");
+    if (!wheel) throw new Error("OrbitControls did not subscribe to wheel events");
+    return {
+      camera,
+      controls,
+      fireWheel: (clientX, clientY, deltaY) =>
+        wheel({ clientX, clientY, deltaY, preventDefault() {} }),
+    };
+  }
+
+  /** Gentle hill (peak 25) sitting under the zoom flight path. */
+  const hill = (x: number, z: number): number =>
+    25 * Math.exp(-(x * x + (z - 35) * (z - 35)) / (2 * 15 * 15));
+  /** Flat lake: still water 4 units over a flat lakebed, like the canvas' max(ground, water). */
+  const lake = (_x: number, _z: number): number => Math.max(0, 4);
+
+  function zoomFlight(
+    surface: (x: number, z: number) => number,
+    clamped: boolean,
+  ): { minClearance: number; finalClearance: number; rig: ZoomRig } {
+    const rig = makeLowRig();
+    let minClearance = Infinity;
+    for (let i = 0; i < 60; i++) {
+      rig.fireWheel(400, 450, -120);
+      rig.controls.update();
+      if (clamped) {
+        clampCameraAboveSurface(
+          rig.camera.position,
+          surface(rig.camera.position.x, rig.camera.position.z),
+        );
+      }
+      minClearance = Math.min(
+        minClearance,
+        rig.camera.position.y - surface(rig.camera.position.x, rig.camera.position.z),
+      );
+    }
+    const finalClearance =
+      rig.camera.position.y - surface(rig.camera.position.x, rig.camera.position.z);
+    return { minClearance, finalClearance, rig };
+  }
+
+  function expectFinitePose(rig: ZoomRig): void {
+    for (const v of [
+      rig.camera.position.x,
+      rig.camera.position.y,
+      rig.camera.position.z,
+      rig.controls.target.x,
+      rig.controls.target.y,
+      rig.controls.target.z,
+    ]) {
+      expect(Number.isFinite(v)).toBe(true);
+    }
+  }
+
+  it("dives into a hillside when zooming without the surface clamp (the bug)", () => {
+    const { minClearance, rig } = zoomFlight(hill, false);
+    // Tens of units inside the hill — min/max distance never saw it.
+    expect(minClearance).toBeLessThan(-10);
+    expect(distanceOf(rig.camera, rig.controls.target)).toBeGreaterThanOrEqual(
+      MIN_ZOOM_DISTANCE - 1e-6,
+    );
+  });
+
+  it("dives under the water sheet when zooming without the surface clamp (the bug)", () => {
+    const { minClearance, rig } = zoomFlight(lake, false);
+    expect(minClearance).toBeLessThan(0);
+    expect(rig.camera.position.y).toBeLessThan(4);
+  });
+
+  it("rides above the hillside when the tick clamps the eye", () => {
+    const { minClearance, finalClearance, rig } = zoomFlight(hill, true);
+    expect(minClearance).toBeGreaterThanOrEqual(CAMERA_SURFACE_CLEARANCE - 1e-9);
+    // Settles resting on the floor, focus untouched.
+    expect(finalClearance).toBeCloseTo(CAMERA_SURFACE_CLEARANCE, 9);
+    expectFinitePose(rig);
+  });
+
+  it("rides above the water sheet when the tick clamps the eye", () => {
+    const { minClearance, finalClearance, rig } = zoomFlight(lake, true);
+    expect(minClearance).toBeGreaterThanOrEqual(CAMERA_SURFACE_CLEARANCE - 1e-9);
+    expect(finalClearance).toBeCloseTo(CAMERA_SURFACE_CLEARANCE, 9);
+    expectFinitePose(rig);
+  });
+
+  it("keeps a low orbit over a neighboring rise out of the dirt", () => {
+    // Target seated in a valley, camera swung low over a 20-unit rise:
+    // the polar clamp is target-relative, so update() keeps the buried
+    // pose — the canvas floor must lift it.
+    const { el } = makeStubDom();
+    const camera = new THREE.PerspectiveCamera(48, WIDTH / HEIGHT, 2, 14000);
+    camera.position.set(0, 2, 30);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.target.set(0, 0, 0);
+    controls.update();
+    expect(camera.position.y).toBeLessThan(20);
+    clampCameraAboveSurface(camera.position, 20);
+    expect(camera.position.y).toBe(20 + CAMERA_SURFACE_CLEARANCE);
+    expect(camera.position.x).toBe(0);
+    expect(camera.position.z).toBe(30);
+  });
+});
+
 describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const canvasSource = readFileSync(join(here, "TerrainCanvas.tsx"), "utf8");
@@ -278,6 +408,17 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     // 320x256 cells ≈ 5104 world units wide: the zoom-out ceiling sits at
     // twice the classic 4200 so the whole battlefield stays frameable.
     expect(canvasSource).toMatch(/controls\.maxDistance\s*=\s*MAX_ZOOM_DISTANCE/);
+  });
+
+  it("holds the eye above the terrain/water surface every tick", () => {
+    // OrbitControls' guardrails are target-relative, so the tick lifts the
+    // final camera column above the local surface: ground, or the water
+    // sheet when it's shown and higher — with no jump exemption, since an
+    // underground eye is never a valid request.
+    expect(canvasSource).toContain("clampCameraAboveSurface(camera.position, surfaceY)");
+    expect(canvasSource).toMatch(
+      /Math\.max\(groundY\(camera\.position\.x, camera\.position\.z\), water\.position\.y\)/,
+    );
   });
 
   it("lets the wheel dolly in closer than the old 30-unit floor", () => {
