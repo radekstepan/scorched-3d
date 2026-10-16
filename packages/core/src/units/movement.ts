@@ -10,6 +10,7 @@ import {
   type ThreatMemory,
 } from "./retaliation.js";
 import { outnumbered, disengageRadiusFor } from "./strategy.js";
+import { SIDESTEP_ARRIVE_RADIUS } from "./combat.js";
 import {
   CRUSH_DRAG,
   destinationTooWet,
@@ -704,8 +705,10 @@ function tickStunned(
  * the patrol anchor — position memories skip the disengage bound, see
  * below) so the caller drops the memory and resumes patrol.
  * Inside weapons-range stand-off the hull holds and faces the threat while
- * the memory stays fresh; pinned against a slope it holds like an ordered
- * hull instead of skipping its frozen leg away. With `tactics`, a hull
+ * the memory stays fresh — or walks a carried `sidestep` point (see
+ * `firingSidestep`) and clears it on arrival; pinned against a slope it
+ * holds like an ordered hull instead of skipping its frozen leg away. With
+ * `tactics`, a hull
  * that would drive alone into a stronger force holds in place facing the
  * threat instead — waiting for backup, not suiciding — while the memory
  * stays fresh so it re-engages (or gives up by the usual gates) once the
@@ -751,6 +754,12 @@ function pursueStep(
   // the live roster when the challenger is still up — the count survives the
   // march, so consistent fire preempts mid-push, not just on arrival).
   const foeChallenger = threat.challenger ? foes?.[threat.challenger.attacker] : undefined;
+  // A carried sidestep survives only on the hold: while closing, the flank
+  // geometry moves under it, so it is stale by arrival — drop it here and
+  // let the sweep re-evaluate fresh once the hull holds (see `pursueStandOff`
+  // below). Outnumbered holders keep it through the wait and walk it when
+  // the odds change.
+  const holding = Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind);
   const memory: ThreatMemory = {
     attacker: threat.attacker,
     x: tx,
@@ -768,6 +777,7 @@ function pursueStep(
           },
         }
       : {}),
+    ...(holding && threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
   };
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });
@@ -786,7 +796,27 @@ function pursueStep(
   ) {
     return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
   }
-  if (Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind)) {
+  if (holding) {
+    // Firing-position footwork: a holder carrying a sidestep point walks the
+    // short lateral shuffle instead of standing still — through the same
+    // drive (turn caps, grip, slope gating), so it reads as deliberate
+    // footwork, not a slide. The turret tracks the threat independently
+    // while the hull shuttles, so the gun never leaves the target mid-step.
+    // Arrival clears the point (the sweep re-arms the cooldown, never the
+    // point); slope-pinned hulls hold like an ordered hull with the point
+    // surviving for a later tick.
+    const step = memory.sidestep;
+    if (step && Number.isFinite(step.x) && Number.isFinite(step.z)) {
+      if (Math.hypot(step.x - mover.x, step.z - mover.z) <= SIDESTEP_ARRIVE_RADIUS) {
+        const { sidestep: _arrived, ...rest } = memory;
+        return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: rest };
+      }
+      const shuffle = driveToward(kind, mover, step, dt, spacing, terrain, undefined, crush);
+      if (shuffle.skipped) {
+        return { ...mover, hull: shuffle.mover.hull, stuck: 0, threat: memory };
+      }
+      return { ...shuffle.mover, threat: memory };
+    }
     return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
   }
   const driven = driveToward(kind, mover, { x: tx, z: tz }, dt, spacing, terrain, undefined, crush);

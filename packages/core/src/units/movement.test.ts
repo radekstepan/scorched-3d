@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
-import { HULL_TURN_RATE } from "./facing.js";
+import { HULL_TURN_RATE, yawToTarget } from "./facing.js";
+import { THREAT_MEMORY_DURATION } from "./retaliation.js";
 import {
   advanceMover,
   advanceMovers,
@@ -1423,5 +1424,85 @@ describe("faster movement tune", () => {
     const z = (11 - (h - 1) / 2) * CELL_PIXELS;
     const near = { x: worldX(wooded, 17), z };
     expect(featureDrag(wooded, near.x, near.z)).toBe(0.75);
+  });
+});
+
+describe("pursuit sidestep", () => {
+  // Flash holder at (0,0) with a live grudge on a foe at (200,0): inside
+  // the 220 stand-off, inside the 650 anchor leash, inside disengage.
+  const route: RoutePoint[] = [
+    { x: 0, z: 0 },
+    { x: 0, z: 400 },
+  ];
+  const foes = [
+    { x: 0, z: 0 },
+    { x: 200, z: 0 },
+  ];
+  function holder(sidestep?: { x: number; z: number }): Mover {
+    const goal = sidestep ?? foes[1]!;
+    return {
+      ...initMover(route, yawToTarget({ x: 0, z: 0 }, goal)),
+      x: 0,
+      z: 0,
+      threat: {
+        attacker: 1,
+        x: 200,
+        z: 0,
+        ttl: THREAT_MEMORY_DURATION,
+        ...(sidestep ? { sidestep } : {}),
+      },
+    };
+  }
+  const step = (mover: Mover, live = foes): Mover =>
+    advanceMover("flash", mover, route, 1 / 60, 1, null, null, live, null);
+
+  it("walks a carried sidestep while holding at stand-off", () => {
+    const next = step(holder({ x: 0, z: 48 }));
+    // Full-stride step along the pre-aligned hull (72 u/s): purely lateral.
+    expect(next.z).toBeCloseTo(72 / 60, 9);
+    expect(next.x).toBeCloseTo(0, 9);
+    expect(next.threat?.sidestep).toEqual({ x: 0, z: 48 });
+    expect(next.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+  });
+
+  it("stands still without a sidestep (legacy hold)", () => {
+    const next = step(holder());
+    expect(next.x).toBe(0);
+    expect(next.z).toBe(0);
+    expect(next.threat?.sidestep).toBeUndefined();
+  });
+
+  it("clears the sidestep on arrival and turns back to the threat", () => {
+    const next = step(holder({ x: 0, z: 8 }));
+    expect(next.x).toBe(0);
+    expect(next.z).toBe(0);
+    expect(next.threat).toBeDefined();
+    expect(next.threat).not.toHaveProperty("sidestep");
+    // Turning from the step bearing (+z) back toward the foe (+x).
+    expect(next.hull).toBeGreaterThan(0);
+  });
+
+  it("drops a carried sidestep while closing (stale by arrival)", () => {
+    const far = [
+      { x: 0, z: 0 },
+      { x: 500, z: 0 },
+    ];
+    const mover: Mover = {
+      ...initMover(route, yawToTarget({ x: 0, z: 0 }, far[1]!)),
+      x: 0,
+      z: 0,
+      threat: {
+        attacker: 1,
+        x: 500,
+        z: 0,
+        ttl: THREAT_MEMORY_DURATION,
+        sidestep: { x: 0, z: 48 },
+      },
+    };
+    const next = step(mover, far);
+    // Still closing on the foe — but the stale point is gone.
+    expect(next.x).toBeGreaterThan(0);
+    expect(next.threat?.attacker).toBe(1);
+    expect(next.threat).not.toHaveProperty("sidestep");
   });
 });

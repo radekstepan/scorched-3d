@@ -1232,3 +1232,133 @@ describe("UnitMovement active battlefield", () => {
     movement.dispose();
   });
 });
+
+describe("UnitMovement firing footwork", () => {
+  function makeDuelMovement(
+    spawns: { x: number; z: number }[],
+    teams: number[],
+    kinds: UnitKind[],
+    treeStands?: () => { x: number; z: number; groundY: number; standing: boolean }[],
+  ): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = spawns.map((_, i) => ({
+      kind: kinds[i] ?? "flash",
+      cellX: 10 + i,
+      cellZ: 10,
+      rotation: 0,
+      team: teams[i],
+    }));
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(pos.x, 100, pos.z);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, {
+      groundY: () => 100,
+      ...(treeStands ? { treeStands } : {}),
+    });
+    return { movement, units: group };
+  }
+
+  it("flanks a mate stacked on the same target, then holds the opened angle", () => {
+    // Flash + stump (team 0) hold on a hammer (team 1) from ~26° apart —
+    // stacked inside the flank angle, so the second gun opens away.
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 0, z: 100 },
+        { x: 200, z: 0 },
+      ],
+      [0, 0, 1],
+      ["flash", "stump", "hammer"],
+    );
+    movement.threatenUnit(0, 2, 200, 0);
+    movement.threatenUnit(1, 2, 200, 0);
+    movement.threatenUnit(2, 0, 0, 0);
+    // Nothing steps before the staggered cooldown (≈5.6 sim-seconds in for
+    // hull 1): the first seconds hold statue-still, exactly as before.
+    for (let n = 0; n < 300; n++) movement.update(1 / 60);
+    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
+    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
+    // Past the cooldown the stacked mate sidesteps to the far side of the
+    // line (away from hull 0 at z=0): +x/+z off its seat.
+    for (let n = 0; n < 120 && !movement.moverState(1)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    const spot = movement.moverState(1)?.threat?.sidestep;
+    expect(spot?.x).toBeCloseTo(21.47, 1);
+    expect(spot?.z).toBeCloseTo(142.93, 1);
+    // The shuffle walks through the drive and clears on arrival…
+    for (let n = 0; n < 300 && movement.moverState(1)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
+    expect(movement.moverState(1)!.z).toBeGreaterThan(125);
+    // …and with the angle opened past the stack gate, hull 0 never stepped:
+    // one flank was enough, no lockstep shuffle.
+    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
+    expect(Math.abs(movement.moverState(0)!.x)).toBeLessThan(1);
+    expect(Math.abs(movement.moverState(0)!.z)).toBeLessThan(1);
+    movement.dispose();
+  });
+
+  it("sidesteps out of a blocked lane toward clear ground", () => {
+    // Flash vs hammer 200 apart with one crown centered on the lane: the
+    // muzzle-to-muzzle line clips it, both laterals miss it.
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+      () => [{ x: 100, z: 0, groundY: 104, standing: true }],
+    );
+    movement.threatenUnit(0, 1, 200, 0);
+    movement.threatenUnit(1, 0, 0, 0);
+    // Hull 1 (stagger ≈1.4s) evaluates first on pristine geometry: the lane
+    // clips the crown, both laterals clear — the roster tie-break takes the
+    // minus side (z +48 off its seat).
+    for (let n = 0; n < 600 && !movement.moverState(1)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    expect(movement.moverState(1)?.threat?.sidestep).toEqual({ x: 200, z: 48 });
+    // The holder walks the step and clears it on arrival.
+    for (let n = 0; n < 600 && movement.moverState(1)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
+    expect(movement.moverState(1)!.z).toBeGreaterThan(30);
+    movement.dispose();
+  });
+
+  it("holds an open 1v1 lane without ever stepping", () => {
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+    );
+    movement.threatenUnit(0, 1, 200, 0);
+    movement.threatenUnit(1, 0, 0, 0);
+    // Ten engaged seconds — past every stagger and cooldown: open lanes,
+    // no mates, nothing to gain, so both guns hold their seats exactly.
+    for (let n = 0; n < 600; n++) movement.update(1 / 60);
+    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
+    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
+    expect(movement.moverState(0)!.x).toBeCloseTo(0, 9);
+    expect(movement.moverState(0)!.z).toBeCloseTo(0, 9);
+    expect(movement.moverState(1)!.x).toBeCloseTo(200, 9);
+    expect(movement.moverState(1)!.z).toBeCloseTo(0, 9);
+    movement.dispose();
+  });
+});

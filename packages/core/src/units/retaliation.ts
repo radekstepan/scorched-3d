@@ -94,6 +94,19 @@ export interface ThreatMemory {
    * (or on retarget), so stale chips never preempt later assaults.
    */
   challenger?: ThreatChallenger;
+  /**
+   * Firing-position sidestep: a nearby lateral point the hull should shuffle
+   * to while holding at stand-off (see `firingSidestep` in combat.ts, which
+   * names it, and the renderer sweep, which attaches it on a cooldown).
+   * Carried only on live-duel memories (attacker >= 0) already inside
+   * stand-off: the pursuit drive walks to it and clears it on arrival (see
+   * `SIDESTEP_ARRIVE_RADIUS`), drops it while closing (stale by the time the
+   * hull arrives — re-evaluated fresh on the hold), and never carries it
+   * across a re-hit or a re-seek (fresh information wins; the sweep
+   * re-attaches after `SIDESTEP_COOLDOWN` when still warranted). Absent
+   * means hold facing the threat, exactly as before.
+   */
+  sidestep?: { x: number; z: number };
 }
 
 /**

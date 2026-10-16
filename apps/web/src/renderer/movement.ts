@@ -7,6 +7,7 @@ import {
   clearThreat,
   eyeHeight,
   findWorldPath,
+  firingSidestep,
   formationTargets,
   groupSpeedCap,
   hasOrder,
@@ -15,11 +16,15 @@ import {
   huntNoticeRadiusFor,
   initMover,
   isScoutKind,
+  muzzleHeight,
   notifyThreat,
   orderMover,
+  outnumbered,
+  pursueStandOff,
   seekEngage,
   seekStructure,
   shouldHold,
+  SIDESTEP_COOLDOWN,
   slewTilt,
   snappedFormationTargets,
   squadFocus,
@@ -126,6 +131,14 @@ export class UnitMovement {
    * everyone pristine (counts only), matching headless history.
    */
   private damage: readonly number[] | null = null;
+  /**
+   * Last firing-position sidestep per hull, sim seconds (see
+   * `maybeSidestep`): a holder shuffles at most once per
+   * `SIDESTEP_COOLDOWN`, staggered by index so the squad never moves as one.
+   * Sparse — hulls that never stepped read their stagger default. Advanced
+   * only by `update`, so sidestep cadence replays deterministically.
+   */
+  private lastSidestepAt: number[] = [];
 
   constructor(
     units: THREE.Group,
@@ -453,6 +466,9 @@ export class UnitMovement {
         }
       }
     }
+    // One shared wood snapshot for the sweep's sidestep pass (same-tick
+    // stands the sight picture reads — every holder judges the same wood).
+    const stands = this.env.treeStands?.() ?? [];
     for (let i = 0; i < this.movers.length; i++) {
       let mover = this.movers[i]!;
       const attacker = mover.threat?.attacker;
@@ -489,8 +505,90 @@ export class UnitMovement {
           next = this.reconTowardEnemy(next, i, teams, foes, alive) ?? next;
         }
       }
-      this.movers[i] = next;
+      // Firing-position footwork last: holders already engaged keep thinking
+      // about better ground (clear of wood, off a mate's line) on top of
+      // whatever the acquisition above decided.
+      this.movers[i] = this.maybeSidestep(next, i, teams, foes, alive, threats, stands, hp ?? undefined);
     }
+  }
+
+  /**
+   * Attach a firing-position sidestep to a holder's live duel memory (see
+   * core `firingSidestep` + `ThreatMemory.sidestep`): a hull already inside
+   * stand-off of a live enemy shuffles one short lateral step toward clearer
+   * ground or a flanking angle instead of standing statue-still while its
+   * gun works. Refuses exactly like the rest of the sweep — ordered/holding
+   * hulls (player orders win), wrecks, position memories (advances and HQ
+   * assaults steer by commitment, not footwork), closing hulls (already
+   * moving, and a mid-close step is stale by arrival), outnumbered hulls
+   * (waiting for backup, not fidgeting), hulls already stepping, and hulls
+   * inside `SIDESTEP_COOLDOWN` of their last shuffle (staggered by index so
+   * the squad never moves as one). The cooldown burns only when a step
+   * attaches — a holder with nothing to gain re-evaluates next tick, so a
+   * falling tree or an arriving mate answers immediately. Pure per tick:
+   * returns the mover with the step attached, or untouched.
+   */
+  private maybeSidestep(
+    mover: Mover,
+    self: number,
+    teams: readonly (number | undefined)[],
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+    threats: (ThreatMemory | undefined)[],
+    stands: TreeStand[],
+    hp?: readonly number[] | null,
+  ): Mover {
+    const memory = mover.threat;
+    if (!memory || memory.ttl <= 0 || memory.attacker < 0) return mover;
+    if (memory.sidestep) return mover;
+    if (mover.hold || hasOrder(mover)) return mover;
+    if (!alive[self] || this.destroyed[self]) return mover;
+    const target = memory.attacker;
+    if (target >= foes.length || !alive[target]) return mover;
+    const me = foes[self];
+    const foe = foes[target];
+    if (
+      !me || !foe ||
+      !Number.isFinite(me.x) || !Number.isFinite(me.z) ||
+      !Number.isFinite(foe.x) || !Number.isFinite(foe.z)
+    ) {
+      return mover;
+    }
+    if (Math.hypot(foe.x - me.x, foe.z - me.z) > pursueStandOff(this.kinds[self] ?? "flash")) {
+      return mover;
+    }
+    if (outnumbered(self, me, foe, foes, teams, alive, hp ?? undefined)) return mover;
+    const last = this.lastSidestepAt[self] ?? -((self * 1.37) % SIDESTEP_COOLDOWN);
+    if (this.elapsed - last < SIDESTEP_COOLDOWN) return mover;
+    // Teammates engaging the same target (live grudges, pre-tick snapshot —
+    // the same discipline as the squad focus): stacking on one's line is
+    // what a flank step opens away from.
+    const allies: { x: number; z: number }[] = [];
+    for (let j = 0; j < threats.length; j++) {
+      if (j === self || !alive[j]) continue;
+      if (teams[j] === undefined || teams[j] !== teams[self]) continue;
+      if (threats[j]?.attacker !== target) continue;
+      const at = foes[j];
+      if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) allies.push({ x: at.x, z: at.z });
+    }
+    const groundY = this.env.groundY;
+    const spot = firingSidestep(
+      {
+        x: me.x,
+        y: groundY(me.x, me.z) + muzzleHeight(this.kinds[self] ?? "flash"),
+        z: me.z,
+      },
+      {
+        x: foe.x,
+        y: groundY(foe.x, foe.z) + muzzleHeight(this.kinds[target] ?? "flash"),
+        z: foe.z,
+      },
+      stands,
+      { allies, selfIndex: self, targetIndex: target },
+    );
+    if (!spot) return mover;
+    this.lastSidestepAt[self] = this.elapsed;
+    return { ...mover, threat: { ...memory, sidestep: spot } };
   }
 
   /**

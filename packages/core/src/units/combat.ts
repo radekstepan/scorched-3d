@@ -935,6 +935,161 @@ export function flightStickChance(crossedCount: number, kind: UnitKind): number 
 }
 
 /**
+ * Firing-position footwork: a gun holding at stand-off should keep thinking
+ * about better ground — out of the wood, off a mate's line — instead of
+ * standing statue-still while its turret does all the work. `firingSidestep`
+ * scores the two lateral candidates (one short shuffle each way off the
+ * firing line) and names the better seat; the renderer sweep attaches it to
+ * the holder's threat memory on a cooldown (see `ThreatMemory.sidestep`),
+ * and the pursuit drive walks it like any other short leg.
+ *
+ * Restraint is the point: the step is small (`SIDESTEP_OFFSET`, a couple of
+ * hull lengths), rare (`SIDESTEP_COOLDOWN` between steps, staggered per hull
+ * so the squad never shuffles as one), and only ever taken for a strictly
+ * better seat or a genuine flank — an open 1v1 lane holds forever. This is
+ * the continuous twin of the forest-futility reposition (see
+ * `FOREST_STICK_REPOSITION_HITS`): that one fires after consecutive stuck
+ * rounds prove the lane blocked; this one keeps the gun off the blocked
+ * lane (and off its mate's line) before the embers strand.
+ */
+
+/** Lateral sidestep distance off the firing line, world units. */
+export const SIDESTEP_OFFSET = 48;
+/** Seconds between firing-position sidesteps on one hull. */
+export const SIDESTEP_COOLDOWN = 7;
+/** Arrival radius around a sidestep point: inside this the step is done. */
+export const SIDESTEP_ARRIVE_RADIUS = 12;
+/**
+ * Flank trigger: two friendlies engaging the same target from inside this
+ * angular separation (radians, measured at the target) read as stacked on
+ * one line, and the evaluator sidesteps to open a flanking angle. ~29°.
+ */
+export const FLANK_STACK_ANGLE = 0.5;
+
+export interface SidestepOptions {
+  /**
+   * Live teammates already engaging the same target (world XZ): when one
+   * shares the firing line inside `FLANK_STACK_ANGLE`, the step flanks away
+   * from it. Absent/empty means no flanking pressure.
+   */
+  allies?: readonly { x: number; z: number }[] | null;
+  /** Roster indices, breaking exact ties deterministically (no rng). */
+  selfIndex?: number;
+  targetIndex?: number;
+  /** Lateral step distance (defaults to `SIDESTEP_OFFSET`). */
+  offset?: number;
+}
+
+/**
+ * Better firing seat for a gun at `self` engaging `target`: the better of
+ * the two lateral candidates one `offset` off the firing line, or null when
+ * the gun should hold. Wood scores the seat — crossed crowns on the lane
+ * dominate, trees crowding the seat break near-ties — and a mate stacked on
+ * the same line (inside `FLANK_STACK_ANGLE` at the target) pulls the step to
+ * the far side, opening a flanking angle instead of doubling the lane. A
+ * flank never steps into worse wood (a clearer consolation step, else hold),
+ * and an open unshared lane always holds: no improvement, no fidget.
+ * Candidate lanes reuse the shooter's height (the seat lift barely changes
+ * over one shuffle). Pure; exact ties break on the roster indices.
+ */
+export function firingSidestep(
+  self: CombatVec3,
+  target: CombatVec3,
+  trees: readonly TreeStand[],
+  opts?: SidestepOptions,
+): { x: number; z: number } | null {
+  if (
+    !self || !target ||
+    !Number.isFinite(self.x) || !Number.isFinite(self.y) || !Number.isFinite(self.z) ||
+    !Number.isFinite(target.x) || !Number.isFinite(target.y) || !Number.isFinite(target.z)
+  ) {
+    return null;
+  }
+  const dx = target.x - self.x;
+  const dz = target.z - self.z;
+  const dist = Math.hypot(dx, dz);
+  if (!(dist > 1e-6)) return null;
+  const offset = opts?.offset ?? SIDESTEP_OFFSET;
+  if (!(offset > 0)) return null;
+  // Perpendicular of the firing line: +1 reads 90° left of self→target.
+  const px = -dz / dist;
+  const pz = dx / dist;
+  const plus = { x: self.x + px * offset, z: self.z + pz * offset };
+  const minus = { x: self.x - px * offset, z: self.z - pz * offset };
+  // Wood score: crossed crowns on the lane dominate (×1000 — a blocked lane
+  // always outweighs a crowded seat), trees crowding the seat add the rest.
+  const crowdRadius = TREE_CANOPY_RADIUS * 1.5;
+  const scoreOf = (x: number, y: number, z: number): number => {
+    const lane = treesOnSegment({ x, y, z }, target, trees).length;
+    let crowd = 0;
+    for (const tree of trees) {
+      if (!tree.standing) continue;
+      if (Math.hypot(tree.x - x, tree.z - z) <= crowdRadius) crowd++;
+    }
+    return lane * 1000 + crowd;
+  };
+  const s0 = scoreOf(self.x, self.y, self.z);
+  const sPlus = scoreOf(plus.x, self.y, plus.z);
+  const sMinus = scoreOf(minus.x, self.y, minus.z);
+  // Flank pressure: the nearest-angular ally on this target, as seen from
+  // the target. Inside the stack angle the step opens away from it (the far
+  // side of the firing line); past it there is nothing to flank.
+  let flankPref = 0;
+  const allies = opts?.allies ?? [];
+  if (allies.length > 0) {
+    const mx = self.x - target.x;
+    const mz = self.z - target.z;
+    let bestAngle = FLANK_STACK_ANGLE;
+    for (const ally of allies) {
+      if (!ally || !Number.isFinite(ally.x) || !Number.isFinite(ally.z)) continue;
+      const ax = ally.x - target.x;
+      const az = ally.z - target.z;
+      const aLen = Math.hypot(ax, az);
+      if (!(aLen > 1e-6)) continue;
+      const cos = (mx * ax + mz * az) / (dist * aLen);
+      const angle = Math.acos(Math.min(Math.max(cos, -1), 1));
+      if (!(angle < bestAngle)) continue;
+      bestAngle = angle;
+      // Ally's side of my firing line in the target frame: cross(m, a) < 0
+      // reads plus-side (verified: self (0,0), target (400,0), ally (0,100)
+      // crosses negative and stands on +z, the plus candidate) — so the
+      // flank prefers the opposite sign. Dead-on-line reads +1 either way.
+      const cross = mx * az - mz * ax;
+      flankPref = cross < 0 ? -1 : 1;
+    }
+  }
+  const improvesPlus = sPlus < s0;
+  const improvesMinus = sMinus < s0;
+  if (flankPref === 0) {
+    // No stacking: move only for strictly clearer ground.
+    if (improvesPlus && sPlus <= sMinus) {
+      if (sPlus < sMinus || defaultSidestepSide(opts) > 0) return plus;
+      return minus;
+    }
+    if (improvesMinus) return minus;
+    return null;
+  }
+  // Stacked: flank away, but never into worse wood.
+  if (flankPref > 0 && sPlus <= s0) return plus;
+  if (flankPref < 0 && sMinus <= s0) return minus;
+  // The preferred flank thickens the lane: take a clearer consolation step
+  // toward the mate's side over standing stacked in worsening wood, else
+  // hold — a bad flank is worse than no flank.
+  if (improvesPlus) return plus;
+  if (improvesMinus) return minus;
+  return null;
+}
+
+/** Deterministic tie-break side (+1/-1) from the roster indices. */
+function defaultSidestepSide(opts?: SidestepOptions): number {
+  const rawA = opts?.selfIndex;
+  const rawB = opts?.targetIndex;
+  const a = typeof rawA === "number" && Number.isInteger(rawA) && rawA >= 0 ? rawA : 0;
+  const b = typeof rawB === "number" && Number.isInteger(rawB) && rawB >= 0 ? rawB : 0;
+  return (a * 31 + b * 17) % 2 === 0 ? 1 : -1;
+}
+
+/**
  * Terrain collision for projectiles (flat tracers + ballistic shells).
  * Shots previously flew their analytic arc straight to the aimed impact and
  * only ever checked trees mid-flight, so any ridge between the muzzle and

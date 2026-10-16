@@ -13,6 +13,7 @@ import {
   ELEVATION_MAX,
   ELEVATION_MIN,
   ELEVATION_SLEW_RATE,
+  firingSidestep,
   flightClearsTerrain,
   flightClearsTrees,
   flightStickChance,
@@ -35,6 +36,7 @@ import {
   scatterRadius,
   SHOT_DELAY_MAX,
   SHOT_DELAY_MIN,
+  SIDESTEP_OFFSET,
   solveBallistic,
   solveBallisticHigh,
   solveDirect,
@@ -755,5 +757,100 @@ describe("trunksOnBarrel", () => {
   it("costs nothing on open ground", () => {
     const seg = segOf();
     expect(trunksOnBarrel(seg.a, seg.b, [])).toEqual([]);
+  });
+});
+
+describe("firingSidestep", () => {
+  const tree = (x: number, z: number, groundY = 8): TreeStand => ({ x, z, groundY, standing: true });
+  // Flat 400-unit firing line at y=30; candidates sit ±48 off it.
+  const self = { x: 0, y: 30, z: 0 };
+  const target = { x: 400, y: 30, z: 0 };
+
+  it("holds an open unshared lane (no improvement, no fidget)", () => {
+    expect(firingSidestep(self, target, [])).toBeNull();
+    expect(firingSidestep(self, target, [], { allies: [] })).toBeNull();
+  });
+
+  it("sidesteps to the clearer side when the lane crosses wood", () => {
+    // One crown centered on the lane; both lateral lanes miss it.
+    const spot = firingSidestep(self, target, [tree(200, 0)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot).not.toBeNull();
+    // Symmetric tie — the roster indices pick minus (hash (0+17)%2 = 1).
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+    // The mirror indices take the mirror side, deterministically.
+    const mirror = firingSidestep(self, target, [tree(200, 0)], {
+      selfIndex: 1,
+      targetIndex: 1,
+    })!;
+    expect(mirror.x).toBeCloseTo(0, 9);
+    expect(mirror.z).toBeCloseTo(SIDESTEP_OFFSET, 9);
+    expect(firingSidestep(self, target, [tree(200, 0)], { selfIndex: 1, targetIndex: 1 })).toEqual(
+      mirror,
+    );
+  });
+
+  it("prefers the strictly clearer candidate over the tied one", () => {
+    // The lane crown plus a second crown on the minus lateral (midpoint
+    // (200,30,-24) sits at its center): only plus clears both.
+    const spot = firingSidestep(self, target, [tree(200, 0), tree(200, -24, 6)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(SIDESTEP_OFFSET, 9);
+  });
+
+  it("steps out of a crowded seat even when the lane itself is clear", () => {
+    // A crown 18 behind the muzzle crowds the seat but misses the flat lane
+    // (closest approach ~19 > r16); both laterals seat clear of it.
+    const spot = firingSidestep(self, target, [tree(-18, 0, 0)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(Math.abs(spot.z)).toBeCloseTo(SIDESTEP_OFFSET, 9);
+  });
+
+  it("flanks away from a mate stacked on the same line", () => {
+    // Ally 100 aside shares the target at ~14° (inside the stack angle):
+    // the step opens to the far side, away from the mate.
+    const spot = firingSidestep(self, target, [], {
+      allies: [{ x: 0, z: 100 }],
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+  });
+
+  it("holds when the mate already holds a flanking angle", () => {
+    // Ally perpendicular to the line (90° at the target): nothing to open,
+    // open lanes — the gun stays put.
+    expect(
+      firingSidestep(self, target, [], { allies: [{ x: 400, z: 300 }] }),
+    ).toBeNull();
+  });
+
+  it("never flanks into worse wood (bad flank loses to the hold)", () => {
+    // Stacked mate pulls to minus, but a crown sits on the minus lateral
+    // (midpoint (200,30,-24) at its center) while the current and plus lanes
+    // stay clear: no consolation improvement either, so the gun holds.
+    expect(
+      firingSidestep(self, target, [tree(200, -24, 6)], {
+        allies: [{ x: 0, z: 100 }],
+        selfIndex: 0,
+        targetIndex: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for degenerate inputs", () => {
+    expect(firingSidestep(self, self, [])).toBeNull();
+    expect(firingSidestep(self, target, [], { offset: 0 })).toBeNull();
+    expect(firingSidestep(self, target, [], { offset: -5 })).toBeNull();
   });
 });
