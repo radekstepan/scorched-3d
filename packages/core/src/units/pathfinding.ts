@@ -37,7 +37,7 @@ import type { UnitField } from "./place.js";
  *   offsets from the selection centroid for ground-position orders, with a
  *   squared-distance cutoff that sends outliers to the bare clicked point.
  *   Mirrored by `formationTargets()`: a deterministic ring fan around the
- *   clicked point so ordered units never stack, no cutoff (roster is 6).
+ *   clicked point so ordered units never stack, no cutoff (roster is 12).
  * - Same spec, MOVEINFO profiles gating cells by slope/depth thresholds per
  *   mover: mirrored by the shared dry + gentle `isWalkable` gate.
  */
@@ -617,7 +617,7 @@ export function findWorldPath(
 /**
  * Deterministic formation fan: slot 0 takes the clicked point, the rest fan
  * out on concentric hex rings (`6 * ring` slots each) at `spacing` world
- * units. No centroid math (roster is 6, not 30 — retail's cutoff never
+ * units. No centroid math (roster is 12, not 30 — retail's cutoff never
  * triggers), so every ordered unit gets its own nearby destination instead
  * of stacking on one point.
  */

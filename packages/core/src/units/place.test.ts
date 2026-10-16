@@ -147,7 +147,8 @@ describe("teamSpan", () => {
     expect(w0).toBe(8);
     expect(w1).toBeLessThan(64);
     expect(e0).toBeGreaterThan(64);
-    expect(e1).toBe(120);
+    // Inclusive east edge stops one cell short of width - MARGIN.
+    expect(e1).toBe(119);
     // West stays west of east with room between.
     expect(w1).toBeLessThan(e0);
   });
@@ -188,26 +189,46 @@ describe("placeUnits even teams", () => {
     expect(placeUnits(field, 9, 2).map((u) => u.team)).toEqual([0, 1]);
     expect(placeUnits(field, 9, 5).map((u) => u.team)).toEqual([0, 0, 0, 1, 1]);
   });
+
+  it("musters the default roster as 6v6", () => {
+    const field = fieldOf("greenreach", 9);
+    const teams = placeUnits(field, 9).map((u) => u.team);
+    expect(teams).toHaveLength(12);
+    expect(teams.filter((t) => t === 0)).toHaveLength(6);
+    expect(teams.filter((t) => t === 1)).toHaveLength(6);
+  });
 });
 
 describe("startingUnitCount", () => {
-  it("covers every preset with an even roster of at least 2v2", () => {
+  it("covers every preset with an even roster of at least 4v4", () => {
     expect(Object.keys(PRESET_UNIT_COUNTS).sort()).toEqual([...PRESETS].sort());
     for (const preset of PRESETS) {
       const count = startingUnitCount(preset);
-      expect(count).toBeGreaterThanOrEqual(4);
+      expect(count).toBeGreaterThanOrEqual(8);
       expect(count % 2).toBe(0);
     }
   });
 
   it("doubles the baseline on Ashen Pass and scales the rest by open land", () => {
     expect(startingUnitCount("highpass")).toBe(UNIT_COUNT * 2);
-    expect(startingUnitCount("dustplains")).toBe(10);
-    expect(startingUnitCount("rivercross")).toBe(10);
+    expect(startingUnitCount("dustplains")).toBe(20);
+    expect(startingUnitCount("rivercross")).toBe(20);
     expect(startingUnitCount("greenreach")).toBe(UNIT_COUNT);
     expect(startingUnitCount("caldera")).toBe(UNIT_COUNT);
     // Cramped isles muster the smallest battle.
     expect(startingUnitCount("archipelago")).toBeLessThan(startingUnitCount("greenreach"));
+  });
+
+  it("fields double the original skirmish: 6v6 at the baseline", () => {
+    expect(UNIT_COUNT).toBe(12);
+    expect(PRESET_UNIT_COUNTS).toEqual({
+      greenreach: 12,
+      archipelago: 8,
+      highpass: 24,
+      caldera: 12,
+      rivercross: 20,
+      dustplains: 20,
+    });
   });
 
   it("falls back to the baseline for unknown presets", () => {

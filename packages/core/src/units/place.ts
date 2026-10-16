@@ -2,8 +2,8 @@ import { CELL_PIXELS, FEATURE_EMPTY, worldHeight, type MapPreset } from "../terr
 import { mulberry32 } from "../terrain/noise.js";
 import { TEAM_IDS, UNIT_KINDS, type PlacedUnit, type TeamId, type UnitKind } from "./types.js";
 
-/** Demo roster size: a couple of units per side, two sides. */
-export const UNIT_COUNT = 6;
+/** Demo roster size: double the original skirmish — 6v6 at the baseline. */
+export const UNIT_COUNT = 12;
 /**
  * Starting roster per map, scaled by accessible (dry, gentle) land measured
  * across seeds — Ashen Pass is ~100% open ground, Dust Plains ~86%, River
@@ -12,12 +12,12 @@ export const UNIT_COUNT = 6;
  * west/east split in `teamOf` is always exact.
  */
 export const PRESET_UNIT_COUNTS: Record<MapPreset, number> = {
-  greenreach: 6,
-  archipelago: 4,
-  highpass: 12,
-  caldera: 6,
-  rivercross: 10,
-  dustplains: 10,
+  greenreach: 12,
+  archipelago: 8,
+  highpass: 24,
+  caldera: 12,
+  rivercross: 20,
+  dustplains: 20,
 };
 /** Roster size a map musters: its scaled count, or the baseline fallback. */
 export function startingUnitCount(preset: MapPreset): number {
@@ -50,7 +50,7 @@ export interface UnitField {
 /**
  * Which side roster slot `index` fights for: the first half of the roster
  * musters west (team 0), the rest east (team 1). Even rosters split exactly
- * (3v3 at the default size); an odd tail slot joins the east so no hull ever
+ * (6v6 at the default size); an odd tail slot joins the east so no hull ever
  * goes unassigned.
  */
 export function teamOf(index: number, count: number): TeamId {
@@ -113,7 +113,11 @@ function dropUnit(
  */
 export function teamSpan(width: number, team: TeamId): [number, number] {
   const mid = Math.floor(width / 2);
-  return team === 0 ? [MARGIN, Math.max(MARGIN, mid - 2)] : [Math.min(width - MARGIN, mid + 2), width - MARGIN];
+  // Bounds are inclusive on both ends; the east edge stops one cell short
+  // of `width - MARGIN` so every spawn honors the in-bounds invariant
+  // (`cellX < width - MARGIN`), mirroring the west `cellX >= MARGIN` edge.
+  const east = Math.max(MARGIN, width - MARGIN - 1);
+  return team === 0 ? [MARGIN, Math.max(MARGIN, mid - 2)] : [Math.min(east, mid + 2), east];
 }
 
 function tryDrop(
