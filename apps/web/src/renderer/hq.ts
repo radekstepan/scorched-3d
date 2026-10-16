@@ -439,12 +439,13 @@ export function setHqBeaconPulse(group: THREE.Group, pulse: number): void {
 
 /**
  * Drive the beacon to `level` 0..1 (clamped): the lens burns at full flash
- * and falls back to faint glass when dark, the PointLight scales to its
- * peak so the works + hall + staging-apron wash holds steady with it, and
- * the core + motes + halo follow through `applyBeaconPulse`. A wrecked HQ
- * stays dark — wrecks never re-light.
+ * and falls back to faint glass when dark, the PointLight scales to `peak`
+ * (default `HQ_BEACON_PEAK` — night passes the boosted peak) so the works
+ * + hall + staging-apron wash holds steady with it, and the core + motes
+ * + halo follow through `applyBeaconPulse`. A wrecked HQ stays dark —
+ * wrecks never re-light.
  */
-export function setHqBeaconLevel(group: THREE.Group, level: number): void {
+export function setHqBeaconLevel(group: THREE.Group, level: number, peak = HQ_BEACON_PEAK): void {
   const l = Math.min(Math.max(level, 0), 1);
   group.userData.hqBeaconLevel = l;
   if (group.userData.hqWrecked) {
@@ -480,7 +481,7 @@ export function setHqBeaconLevel(group: THREE.Group, level: number): void {
     }
   }
   const light = getHqBeaconLight(group);
-  if (light) light.intensity = l * HQ_BEACON_PEAK;
+  if (light) light.intensity = l * peak;
   applyBeaconPulse(group);
 }
 

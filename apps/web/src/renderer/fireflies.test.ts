@@ -7,6 +7,8 @@ import {
   FIREFLY_MAX_LIFT,
   FIREFLY_MIN_LIFT,
   FIREFLY_POOL_COUNT,
+  FIREFLY_POOL_DECAY,
+  FIREFLY_POOL_DISTANCE,
   FIREFLY_POOL_PEAK,
   FIREFLY_POOL_RADIUS,
   FIREFLY_TREE_SPREAD,
@@ -96,6 +98,8 @@ describe("fireflyPoolGlow", () => {
     expect(terrainFragment).toContain("fireflyB");
     expect(terrainFragment).toContain("fireflyGlow");
     expect(terrainFragment).toContain(String(FIREFLY_POOL_RADIUS));
+    // The pool tint burns hot enough to read as real light on dark dirt.
+    expect(terrainFragment).toContain("0.66, 0.88, 0.32");
   });
 });
 
@@ -141,6 +145,13 @@ describe("FireflyFx", () => {
   it("rides two ground-pool lights and re-seats on exaggeration resnap", () => {
     const { scene, fx } = build();
     expect(fx.poolLights()).toHaveLength(FIREFLY_POOL_COUNT);
+    // Pools carry real throw: muzzle-kick-order peak, wide range, physical decay.
+    for (const pool of fx.poolLights()) {
+      expect(pool.distance).toBe(FIREFLY_POOL_DISTANCE);
+      expect(pool.decay).toBe(FIREFLY_POOL_DECAY);
+    }
+    expect(FIREFLY_POOL_PEAK).toBeGreaterThanOrEqual(2600);
+    expect(FIREFLY_POOL_DISTANCE).toBeGreaterThanOrEqual(400);
     expect(fx.glowLevel).toBe(0);
     expect(scene.getObjectByName("fireflies")).toBeDefined();
     fx.resnap();

@@ -24,9 +24,11 @@ import {
   setHqBeaconLevel,
   setHqBeaconPulse,
   setHqFoundation,
+  HQ_BEACON_PEAK,
   HQ_DOOR_TRAVEL,
   type HqFacing,
 } from "./hq";
+import { nightLightScale } from "./night";
 
 /**
  * HQ manager: owns one bunker group per team (see `hq.ts`), its accumulated
@@ -123,6 +125,8 @@ export class HqFx {
   private pendingKind: (UnitKind | null)[] = [];
   /** Beacon sweep clock: every live HQ rotor turns on this shared phase. */
   private clock = 0;
+  /** Night toggle: live beacons burn at the boosted peak while night. */
+  private night = false;
   private env: HqEnv;
   private rng: () => number;
   private disposed = false;
@@ -263,6 +267,14 @@ export class HqFx {
     this.env.onKilled?.(index);
   }
 
+  /**
+   * Night owns the beacon budget: live beacons sweep at the boosted peak
+   * while night, day peak otherwise. Wrecks stay dark either way.
+   */
+  setNight(night: boolean): void {
+    this.night = night;
+  }
+
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
     // Shared beacon phase: one cheap angle + pulse write per live HQ (2
@@ -275,7 +287,7 @@ export class HqFx {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
-      setHqBeaconLevel(group, 1);
+      setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * nightLightScale(this.night));
       setHqBeaconAngle(group, angle);
       setHqBeaconPulse(group, pulse);
       if (this.anim[i]! < 0) {

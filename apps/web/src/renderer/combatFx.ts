@@ -74,6 +74,7 @@ import {
 import { muzzleWorld, getBarrel, getTurret, barrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
+import { nightLightScale } from "./night";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -801,6 +802,8 @@ export class CombatFx {
    * hull does the gross turn via core `aimStep` as before.
    */
   private externalHull = false;
+  /** Night toggle: scales struck light peaks + shot-glow via `nightLightScale`. */
+  private night = false;
 
   constructor(
     scene: THREE.Scene,
@@ -1066,6 +1069,16 @@ export class CombatFx {
   }
 
   /**
+   * Night owns the light budget: muzzle/explosion kicks and riding shot
+   * glows burn at `NIGHT_LIGHT_BOOST` while night, day peaks otherwise.
+   * Applies to kicks struck after the toggle — a mid-decay kick keeps its
+   * struck peak and simply fades from there.
+   */
+  setNight(night: boolean): void {
+    this.night = night;
+  }
+
+  /**
    * Traverse a shelled hull's turret toward its live attacker (the canvas
    * calls this alongside `threatenUnit` on every threat hook): the victim's
    * gun answers the incoming direction even before the scheduler draws the
@@ -1149,7 +1162,7 @@ export class CombatFx {
     }
     light.color.setHex(color);
     light.position.set(at.x, at.y, at.z);
-    light.intensity = Math.max(light.intensity, peak);
+    light.intensity = Math.max(light.intensity, peak * nightLightScale(this.night));
   }
 
   update(dt: number): void {
@@ -2447,7 +2460,7 @@ export class CombatFx {
     }
     light.color.setHex(color);
     light.position.copy(at);
-    light.intensity = peak;
+    light.intensity = peak * nightLightScale(this.night);
   }
 
   /**
@@ -2928,7 +2941,7 @@ export class CombatFx {
       if (!this.env) {
         // Headless (no terrain): lights still ride the rounds (Lambert
         // neighbors), blobs hide — there is no dirt to seat them on.
-        light.intensity = SHOT_GLOW_PEAK;
+        light.intensity = SHOT_GLOW_PEAK * nightLightScale(this.night);
         blob.visible = false;
         continue;
       }
@@ -2939,11 +2952,11 @@ export class CombatFx {
         blob.visible = false;
         continue;
       }
-      light.intensity = SHOT_GLOW_PEAK * falloff;
+      light.intensity = SHOT_GLOW_PEAK * falloff * nightLightScale(this.night);
       blob.visible = true;
       blob.position.set(pos.x, ground + 1.4, pos.z);
       blob.scale.setScalar(projectileGlowRadius(falloff));
-      mat.opacity = SHOT_GLOW_OPACITY * falloff;
+      mat.opacity = SHOT_GLOW_OPACITY * falloff * nightLightScale(this.night);
     }
   }
 

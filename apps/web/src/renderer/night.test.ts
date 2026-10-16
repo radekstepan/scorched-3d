@@ -8,9 +8,11 @@ import {
   applyDayNight,
   DAY_LIGHTING,
   dayNightLighting,
+  NIGHT_LIGHT_BOOST,
   NIGHT_LIGHTING,
   NIGHT_MIN_HEMI_INTENSITY,
   NIGHT_MIN_SUN_INTENSITY,
+  nightLightScale,
   type DayNightTargets,
 } from "./night";
 
@@ -79,6 +81,25 @@ describe("day/night lighting presets", () => {
     expect(luminance(NIGHT_LIGHTING.background)).toBeLessThan(luminance(DAY_LIGHTING.background));
     expect(luminance(NIGHT_LIGHTING.fog)).toBeLessThan(luminance(DAY_LIGHTING.fog));
   });
+
+  it("runs the moon dimmer than the day sun on every channel", () => {
+    expect(NIGHT_LIGHTING.sunIntensity).toBeLessThan(DAY_LIGHTING.sunIntensity);
+    // Hemi matches day intensity at most — its dark blue colors do the dimming.
+    expect(NIGHT_LIGHTING.hemiIntensity).toBeLessThanOrEqual(DAY_LIGHTING.hemiIntensity);
+    for (const key of ["terrainSun", "terrainSky", "terrainGround", "waterSun"] as const) {
+      const night = NIGHT_LIGHTING[key];
+      const day = DAY_LIGHTING[key];
+      for (let i = 0; i < 3; i++) expect(night[i]!).toBeLessThan(day[i]!);
+    }
+  });
+});
+
+describe("nightLightScale", () => {
+  it("burns point lights hotter by night, untouched by day", () => {
+    expect(NIGHT_LIGHT_BOOST).toBeGreaterThan(1);
+    expect(nightLightScale(false)).toBe(1);
+    expect(nightLightScale(true)).toBe(NIGHT_LIGHT_BOOST);
+  });
 });
 
 describe("applyDayNight", () => {
@@ -131,6 +152,13 @@ describe("night sky shader + canvas wiring", () => {
     expect(canvas).toContain("fireflyGlow: { value: 0 }");
     expect(canvas).toContain("fireflies.resnap()");
     expect(canvas).toContain("fireflies.dispose()");
+  });
+
+  it("hands the night toggle to every light budget (combat, fire, HQ)", () => {
+    const canvas = readFileSync(join(here, "TerrainCanvas.tsx"), "utf8");
+    expect(canvas).toContain("combat.setNight(");
+    expect(canvas).toContain("fire.setNight(");
+    expect(canvas).toContain("hq?.setNight(");
   });
 
   it("exposes a Night toggle in the View panel (default off)", () => {

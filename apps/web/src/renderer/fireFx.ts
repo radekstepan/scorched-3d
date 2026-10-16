@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BURN_DURATION, MAX_FIRES, MAX_SMOKE, type DamageField } from "@scorched-3d/core";
+import { nightLightScale } from "./night";
 
 /** Burning trees emit a two-puff smoke column (lower + upper); smoulder gets one. */
 export const SMOKE_PER_BURNING = 2;
@@ -11,6 +12,8 @@ export const FIRE_SMOKE_RISE = 70;
 export const SMOULDER_SMOKE_RISE = 46;
 /** Ember spark rise height above the canopy, world units. */
 export const EMBER_RISE = 44;
+/** Ground-glow disc opacity by day (scaled by `nightLightScale` at night). */
+export const FIRE_GLOW_OPACITY = 0.2;
 
 /**
  * Burn progress 0 (fresh ignition, tall white-hot flames) .. 1 (about to
@@ -130,7 +133,7 @@ export class FireFx {
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0xff8a2a,
       transparent: true,
-      opacity: 0.2,
+      opacity: FIRE_GLOW_OPACITY,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -172,6 +175,20 @@ export class FireFx {
   /** Visible ground-glow discs (one per burning tree shown). */
   get glowCount(): number {
     return this.glowMesh.count;
+  }
+
+  /** Ground-glow disc opacity (day base × night boost, for tests). */
+  get glowOpacity(): number {
+    return (this.glowMesh.material as THREE.MeshBasicMaterial).opacity;
+  }
+
+  /**
+   * Night owns the firelight: ground-glow discs pool brighter on the earth
+   * beneath burning canopies while night, day opacity otherwise.
+   */
+  setNight(night: boolean): void {
+    (this.glowMesh.material as THREE.MeshBasicMaterial).opacity =
+      FIRE_GLOW_OPACITY * nightLightScale(night);
   }
 
   /**

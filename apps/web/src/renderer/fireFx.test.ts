@@ -11,11 +11,13 @@ import {
 import {
   burnProgress,
   coreFlameTint,
+  FIRE_GLOW_OPACITY,
   FireFx,
   MAX_FIRE_EMBERS,
   outerFlameTint,
   SMOKE_PER_BURNING,
 } from "./fireFx";
+import { NIGHT_LIGHT_BOOST } from "./night";
 
 function positions(n: number): { x: number; z: number }[] {
   return Array.from({ length: n }, (_, i) => ({ x: i * 100, z: 0 }));
@@ -37,6 +39,17 @@ describe("FireFx", () => {
     expect(fire.smokeCount).toBe(SMOKE_PER_BURNING + 1);
     // Burning spark plus a dim leftover ember on the smouldering wreck.
     expect(fire.emberCount).toBe(2);
+    fire.dispose();
+  });
+
+  it("pools ground glow brighter by night, day opacity by day", () => {
+    const scene = new THREE.Scene();
+    const fire = new FireFx(scene);
+    expect(fire.glowOpacity).toBeCloseTo(FIRE_GLOW_OPACITY, 9);
+    fire.setNight(true);
+    expect(fire.glowOpacity).toBeCloseTo(FIRE_GLOW_OPACITY * NIGHT_LIGHT_BOOST, 9);
+    fire.setNight(false);
+    expect(fire.glowOpacity).toBeCloseTo(FIRE_GLOW_OPACITY, 9);
     fire.dispose();
   });
 

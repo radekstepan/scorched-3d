@@ -336,6 +336,21 @@ describe("hq warning beacon", () => {
     expect(getHqBeaconLight(group)!.intensity).toBe(0);
   });
 
+  it("scales the wash light to a caller peak (night boost), wrecks stay dark", () => {
+    const group = buildHq(0);
+    setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * 1.6);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK * 1.6, 9);
+    setHqBeaconLevel(group, 0.5, HQ_BEACON_PEAK * 1.6);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK * 0.8, 9);
+    // Omitted peak keeps the legacy day behavior.
+    setHqBeaconLevel(group, 1);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK, 9);
+    // A boosted drive never re-lights a wreck.
+    poseHqWreck(group);
+    setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * 1.6);
+    expect(getHqBeaconLight(group)!.intensity).toBe(0);
+  });
+
   it("washes a wide staging area around the works, not just the canopy", () => {
     const group = buildHq(0);
     const light = getHqBeaconLight(group)!;

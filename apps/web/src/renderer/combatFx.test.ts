@@ -48,6 +48,7 @@ import {
 } from "./combatFx";
 import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
+import { NIGHT_LIGHT_BOOST } from "./night";
 
 function makeUnits(): THREE.Group {
   const group = new THREE.Group();
@@ -2880,5 +2881,58 @@ describe("CombatFx turret traverse overshoot", () => {
     const pose = fx.aimState(0)!;
     expect(getTurret(units.children[0] as THREE.Group)!.rotation.y).toBeCloseTo(pose.turret, 10);
     fx.dispose();
+  });
+});
+
+describe("CombatFx night light boost", () => {
+  function flatEnv(ground: number) {
+    return { groundY: () => ground, blastFeatures: () => {} };
+  }
+
+  function kickPeak(fx: CombatFx): number {
+    const lights = fx["lights" as never] as THREE.PointLight[];
+    return Math.max(...lights.map((l) => l.intensity));
+  }
+
+  it("strikes muzzle/explosion kicks hotter by night, day peaks by day", () => {
+    const scene = new THREE.Scene();
+    const fx = new CombatFx(scene, makeUnits(), mulberry32(21), flatEnv(100));
+    fx.glowAt({ x: 10, y: 120, z: 30 }, 0xff7a22, 1400);
+    expect(kickPeak(fx)).toBeCloseTo(1400, 6);
+    fx.clearTransients();
+    expect(kickPeak(fx)).toBe(0);
+    fx.setNight(true);
+    fx.glowAt({ x: 10, y: 120, z: 30 }, 0xff7a22, 1400);
+    expect(kickPeak(fx)).toBeCloseTo(1400 * NIGHT_LIGHT_BOOST, 6);
+    fx.clearTransients();
+    fx.setNight(false);
+    fx.glowAt({ x: 10, y: 120, z: 30 }, 0xff7a22, 1400);
+    expect(kickPeak(fx)).toBeCloseTo(1400, 6);
+    fx.dispose();
+  });
+
+  it("rides shot glow hotter by night (locked-step seeds, same round)", () => {
+    // Twin skirmishes on the same seed step in lockstep, so both carry the
+    // same round at the same height — the only difference is the toggle.
+    const day = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
+    const night = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
+    night.setNight(true);
+    let compared = 0;
+    for (let n = 0; n < 4000 && compared < 4; n++) {
+      day.update(1 / 60);
+      night.update(1 / 60);
+      expect(night.shotCount).toBe(day.shotCount);
+      for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+        const d = day.shotGlowIntensityAt(i);
+        if (d > 0) {
+          expect(night.shotGlowIntensityAt(i)).toBeCloseTo(d * NIGHT_LIGHT_BOOST, 6);
+          expect(night.shotGlowOpacityAt(i)).toBeCloseTo(day.shotGlowOpacityAt(i) * NIGHT_LIGHT_BOOST, 6);
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
+    day.dispose();
+    night.dispose();
   });
 });

@@ -11,6 +11,7 @@ import {
 } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
 import { HQ_BEACON_PERIOD } from "./hq";
+import { NIGHT_LIGHT_BOOST } from "./night";
 import { HealthBars } from "./healthBars";
 import {
   foundationDepthOf,
@@ -295,6 +296,27 @@ describe("HqFx", () => {
     const h0 = (halos[0]!.material as THREE.MeshBasicMaterial).opacity;
     expect(h0).toBeGreaterThan(q0);
     expect((halos[1]!.material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(h0, 9);
+    hq.dispose();
+  });
+
+  it("burns live beacons hotter by night and drops back by day", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    hq.update(0.1);
+    const light = () => hq.groupAt(0)!.getObjectByName("hq-beacon-light") as THREE.PointLight;
+    const day = light().intensity;
+    expect(day).toBeGreaterThan(0);
+    hq.setNight(true);
+    hq.update(0.1);
+    expect(light().intensity).toBeCloseTo(day * NIGHT_LIGHT_BOOST, 9);
+    hq.setNight(false);
+    hq.update(0.1);
+    expect(light().intensity).toBeCloseTo(day, 9);
+    // Night never re-lights a wreck.
+    for (let n = 0; n < 40; n++) hq.splash(-1000, 0, "hammer", null);
+    hq.setNight(true);
+    hq.update(0.1);
+    expect(light().intensity).toBe(0);
     hq.dispose();
   });
 

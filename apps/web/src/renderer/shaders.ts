@@ -107,8 +107,10 @@ export const terrainFragment = /* glsl */ `
 
     // Firefly ground pools: the terrain shader ignores scene lights, so the
     // two roaming pool lights are mirrored here as additive glow (0 by day).
-    // Falloff 1/(1+(d/110)^2) — see fireflyPoolGlow in fireflies.ts.
-    vec3 poolTint = vec3(0.45, 0.6, 0.22);
+    // Falloff 1/(1+(d/110)^2) — see fireflyPoolGlow in fireflies.ts. The
+    // tint burns hot on purpose: against the darkened moonlight the pools
+    // must read as real light on the dirt, not a faint wash.
+    vec3 poolTint = vec3(0.66, 0.88, 0.32);
     float poolA = fireflyGlow / (1.0 + pow(length(vWorld - fireflyA) / 110.0, 2.0));
     float poolB = fireflyGlow / (1.0 + pow(length(vWorld - fireflyB) / 110.0, 2.0));
     color += poolTint * (poolA + poolB);

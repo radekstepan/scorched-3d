@@ -564,6 +564,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // HQ forts share the same toggle: one wider bar per live works above
     // the roofline, reading live HqFx damage (wrecks show nothing).
     health.setHqCount(hq?.count ?? 0);
+    // Light budgets follow the opening toggle (the tick re-applies on flip).
+    combat.setNight(options.nightMode);
+    fire.setNight(options.nightMode);
+    hq?.setNight(options.nightMode);
     // Occlusion x-ray: a blue silhouette ghost (selection cyan: true hull
     // outline + slight transparent fill) for any unit hidden behind the
     // heightfield or a live canopy from this camera, so occluded hulls stay
@@ -987,6 +991,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (opt.nightMode !== lastNight) {
         lastNight = opt.nightMode;
         applyDayNight(dayNightTargets, lastNight);
+        combat.setNight(lastNight);
+        fire.setNight(lastNight);
+        hq?.setNight(lastNight);
       }
       skyMat.uniforms.time!.value = t;
       fireflies.setNight(opt.nightMode);

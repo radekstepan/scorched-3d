@@ -46,13 +46,13 @@ export const NIGHT_LIGHTING: DayNightLighting = {
   fog: 0x18293f,
   hemiSky: 0x5a7fb0,
   hemiGround: 0x141a26,
-  hemiIntensity: 0.6,
+  hemiIntensity: 0.45,
   sunColor: 0xbdd2f0,
-  sunIntensity: 0.7,
-  terrainSun: [0.6, 0.7, 0.9],
-  terrainSky: [0.26, 0.36, 0.54],
-  terrainGround: [0.07, 0.08, 0.12],
-  waterSun: [0.62, 0.72, 0.92],
+  sunIntensity: 0.55,
+  terrainSun: [0.5, 0.6, 0.75],
+  terrainSky: [0.22, 0.31, 0.48],
+  terrainGround: [0.06, 0.07, 0.09],
+  waterSun: [0.52, 0.62, 0.78],
 };
 
 /** Visibility floor: night intensities must stay at/above these. */
@@ -61,6 +61,20 @@ export const NIGHT_MIN_HEMI_INTENSITY = 0.4;
 
 export function dayNightLighting(night: boolean): DayNightLighting {
   return night ? NIGHT_LIGHTING : DAY_LIGHTING;
+}
+
+/**
+ * Point-light boost at night: with the moonlight darkened, muzzle flashes,
+ * explosions, HQ beacons, and firefly pools all burn hotter so light
+ * sources read as the dominant illumination instead of drowning in the
+ * ambient. Applied by the fx owners (combat, HQ, fireflies) via
+ * `nightLightScale`, never to the moon/hemi preset above.
+ */
+export const NIGHT_LIGHT_BOOST = 1.6;
+
+/** Light-intensity scale for the night toggle: boost by night, 1 by day. */
+export function nightLightScale(night: boolean): number {
+  return night ? NIGHT_LIGHT_BOOST : 1;
 }
 
 export interface DayNightTargets {

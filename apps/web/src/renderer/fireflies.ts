@@ -25,10 +25,10 @@ export const FIREFLY_MAX_LIFT = 15;
 export const FIREFLY_DRIFT_RADIUS = 9;
 /** Ground-pool falloff radius (world units, mirrored in the terrain shader). */
 export const FIREFLY_POOL_RADIUS = 110;
-/** Ground-pool lights: gentler than the HQ beacon (3200/340/1.8). */
+/** Ground-pool lights: muzzle-kick order so the swarm visibly pools light. */
 export const FIREFLY_POOL_COUNT = 2;
-export const FIREFLY_POOL_PEAK = 1500;
-export const FIREFLY_POOL_DISTANCE = 300;
+export const FIREFLY_POOL_PEAK = 2600;
+export const FIREFLY_POOL_DISTANCE = 420;
 export const FIREFLY_POOL_DECAY = 1.8;
 
 export interface FireflyAnchor {
