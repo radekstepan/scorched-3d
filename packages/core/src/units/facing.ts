@@ -57,6 +57,22 @@ export const TURRET_SLEW_RATE: Record<UnitKind, number> = {
 /** Aim error under which a shot may leave the muzzle, radians (~3.4°). */
 export const FIRE_TOLERANCE = 0.06;
 
+/**
+ * Turret swings wider than this (radians) overshoot their goal: the gun
+ * carries too far and has to correct back a little, the way a heavy traverse
+ * does when it slews across the arc. Small corrections stay critically
+ * damped and stop dead on the aim.
+ */
+export const TURRET_OVERSHOOT_SWING = Math.PI / 4;
+
+/**
+ * Extra turret travel past the goal on a far swing, radians (~5.7°).
+ * Deliberately wider than `FIRE_TOLERANCE`, so the settle-back is a visible
+ * correction: shots still gate on `canFire`, so a volley only ever leaves
+ * when the muzzle is truly on the aim — never a wild shot from mid-swing.
+ */
+export const TURRET_OVERSHOOT = 0.1;
+
 /** Wrap an angle to (-PI, PI]. */
 export function wrapAngle(a: number): number {
   const tau = Math.PI * 2;
@@ -91,6 +107,48 @@ export function muzzleYaw(hullYaw: number, turretRel: number): number {
   return hullYaw + turretRel;
 }
 
+export interface TurretSlew {
+  /** Turret-relative yaw after this step. */
+  angle: number;
+  /** Latched overshoot offset (0 once settled): thread it into the next step. */
+  overshoot: number;
+}
+
+/**
+ * Step a turret-relative yaw toward `want` (pre-clamped to the traverse) at
+ * the kind's slew rate, overshooting far swings: when the remaining travel
+ * exceeds `TURRET_OVERSHOOT_SWING`, the gun runs `TURRET_OVERSHOOT` past the
+ * goal before correcting back — the heavy-traverse overcorrect. The latch is
+ * caller state (`overshoot`, 0 at rest): arrival at the exaggerated goal
+ * releases it, a goal jumping far across the arc re-latches the new way, and
+ * the goal stays clamped so the turret never exceeds its traverse stop. The
+ * overshoot only manifests when the caller threads the latch (unthreaded
+ * steps converge dead-on, like before). Aim stays purely geometric — a volley
+ * scheduled exactly as the muzzle crosses the aim still fires on target.
+ */
+export function slewTurret(
+  kind: UnitKind,
+  current: number,
+  want: number,
+  dt: number,
+  latched = 0,
+): TurretSlew {
+  const step = Math.max(dt, 0);
+  if (!(step > 0)) return { angle: current, overshoot: latched };
+  const rate = TURRET_SLEW_RATE[kind] ?? 2.4;
+  const d = wrapAngle(want - current);
+  let hold = latched;
+  if (hold === 0) {
+    if (Math.abs(d) > TURRET_OVERSHOOT_SWING) hold = Math.sign(d) * TURRET_OVERSHOOT;
+  } else if (Math.abs(d) > TURRET_OVERSHOOT_SWING && Math.sign(d) !== Math.sign(hold)) {
+    hold = Math.sign(d) * TURRET_OVERSHOOT;
+  }
+  const goal = clampTurret(kind, want + hold);
+  const angle = stepAngle(current, goal, rate * step);
+  if (hold !== 0 && angle === goal) hold = 0;
+  return { angle, overshoot: hold };
+}
+
 /** Residual aim error between the current aim and the target bearing. */
 export function aimError(targetYaw: number, hullYaw: number, turretRel: number): number {
   return Math.abs(wrapAngle(targetYaw - (hullYaw + turretRel)));
@@ -109,6 +167,8 @@ export function canFire(
 export interface AimState {
   hull: number;
   turret: number;
+  /** Latched turret overshoot (0 at rest): thread it into the next step. */
+  overshoot: number;
   /** True when the muzzle line is on the target (may fire). */
   aimed: boolean;
 }
@@ -118,7 +178,9 @@ export interface AimState {
  * its turn rate, then the turret slews the remainder at its slew rate within
  * its traverse clamp. The hull therefore does the gross motion (a target
  * behind the unit is acquired by turning around) while the turret only
- * refines — never spinning freely.
+ * refines — never spinning freely. The turret leg overshoots far swings (see
+ * `slewTurret`); thread the returned `overshoot` (or pass 0 to converge
+ * dead-on, like before).
  */
 export function aimStep(
   kind: UnitKind,
@@ -126,16 +188,17 @@ export function aimStep(
   turret: number,
   targetYaw: number,
   dt: number,
+  turretOvershoot = 0,
 ): AimState {
   const step = Math.max(dt, 0);
   const hullRate = HULL_TURN_RATE[kind] ?? 1.5;
-  const slewRate = TURRET_SLEW_RATE[kind] ?? 2.4;
   const nextHull = stepAngle(hull, targetYaw, hullRate * step);
   const want = clampTurret(kind, wrapAngle(targetYaw - nextHull));
-  const nextTurret = stepAngle(turret, want, slewRate * step);
+  const slew = slewTurret(kind, turret, want, step, turretOvershoot);
   return {
     hull: nextHull,
-    turret: nextTurret,
-    aimed: aimError(targetYaw, nextHull, nextTurret) <= FIRE_TOLERANCE,
+    turret: slew.angle,
+    overshoot: slew.overshoot,
+    aimed: aimError(targetYaw, nextHull, slew.angle) <= FIRE_TOLERANCE,
   };
 }

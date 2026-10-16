@@ -52,14 +52,13 @@ import {
   scorchForAttack,
   scorchSeed,
   scorchShade,
+  slewTurret,
   solveBallisticHigh,
   solveShotClearing,
-  stepAngle,
   stepElevation,
   THREAT_ENGAGE_RADIUS,
   treesOnSegment,
   trunksOnBarrel,
-  TURRET_SLEW_RATE,
   wrapAngle,
   yawToTarget,
   WEAPON_PROFILES,
@@ -93,6 +92,8 @@ import { disposeScorchTexture, getScorchTexture } from "./craters";
  *   subgroup slews the remainder inside a clamped traverse, and the muzzle
  *   + projectile always leave down the turret line. Shots only fire once
  *   aimed; otherwise the pair keeps traversing and the scheduler retries.
+ *   Far turret swings overshoot their goal a little before correcting back,
+ *   the heavy-traverse overcorrect (see core `slewTurret`).
  * - The retail weapon catalog (spec 06 §2: velocity/range/reload/burst)
  *   becomes per-kind `WEAPON_PROFILES` in core (muzzle velocity/color) plus
  *   a single interval scheduler standing in for per-slot reload timers.
@@ -617,7 +618,7 @@ export class CombatFx {
    */
   private lastKind: UnitKind | null = null;
   /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
-  private aim: { hull: number; turret: number }[] = [];
+  private aim: { hull: number; turret: number; overshoot: number }[] = [];
   /** Attacker → target traverse goals, slewed every frame until aimed. */
   private pending = new Map<number, number>();
   /** Attacker → HQ-team traverse goals for ambient structure fire. */
@@ -871,7 +872,8 @@ export class CombatFx {
 
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
   aimState(index: number): { hull: number; turret: number } | null {
-    return this.aim[index] ? { ...this.aim[index]! } : null;
+    const pose = this.aim[index];
+    return pose ? { hull: pose.hull, turret: pose.turret } : null;
   }
 
   /** Persistent scorch decal count (bounded by MAX_SCORCH_MARKS). */
@@ -1001,7 +1003,38 @@ export class CombatFx {
     if (!Number.isInteger(victim) || !Number.isInteger(attacker)) return;
     if (victim < 0 || attacker < 0 || victim >= count || attacker >= count) return;
     if (victim === attacker || this.destroyed[victim] || this.destroyed[attacker]) return;
-    this.pending.set(victim, attacker);
+    this.aimPending(victim, attacker);
+  }
+
+  /**
+   * Aim an attacker at a hull, releasing the turret-overshoot latch when the
+   * goal changes: the latch belongs to one acquisition, so a re-picked target
+   * traverses fresh instead of inheriting the old swing's extra travel.
+   * Re-setting the live goal keeps the latch (the traverse continues).
+   */
+  private aimPending(attacker: number, target: number): void {
+    if (this.pending.get(attacker) !== target) {
+      this.pending.set(attacker, target);
+      this.releaseOvershoot(attacker);
+    }
+  }
+
+  /** Structure-fire twin of `aimPending` (goals keyed by HQ team). */
+  private aimPendingHq(attacker: number, team: number): void {
+    if (this.pendingHq.get(attacker) !== team) {
+      this.pendingHq.set(attacker, team);
+      this.releaseOvershoot(attacker);
+    }
+  }
+
+  /**
+   * Release an attacker's turret-overshoot latch: a dropped or re-picked goal
+   * aims nowhere yet, so the next acquisition starts unlatched instead of
+   * inheriting the old swing's extra travel.
+   */
+  private releaseOvershoot(attacker: number): void {
+    const pose = this.aim[attacker];
+    if (pose) pose.overshoot = 0;
   }
 
   /**
@@ -1109,6 +1142,7 @@ export class CombatFx {
     this.nudges.clear();
     this.pending.clear();
     this.pendingHq.clear();
+    for (const pose of this.aim) pose.overshoot = 0;
     for (const light of this.lights) light.intensity = 0;
     // In-flight glow goes dark with the shots (persistent scorch, kill
     // flags, and wreck dressing are untouched — glow is transient).
@@ -1577,7 +1611,7 @@ export class CombatFx {
     const bodies = this.units.children as THREE.Group[];
     while (this.aim.length < bodies.length) {
       const i = this.aim.length;
-      this.aim.push({ hull: bodies[i]?.rotation.y ?? 0, turret: 0 });
+      this.aim.push({ hull: bodies[i]?.rotation.y ?? 0, turret: 0, overshoot: 0 });
     }
     if (this.aim.length > bodies.length) this.aim.length = bodies.length;
     if (this.externalHull) {
@@ -1614,18 +1648,20 @@ export class CombatFx {
   /**
    * Slew every pending attacker toward its target at limited hull/turret
    * rates and apply the pose. Hulls do the gross turn, turrets the clamped
-   * refine — so traverse motion is visible even before any shot fires. In
-   * external-hull mode (patrol movement) the hull stays on its travel
-   * heading and only the turret slews the clamped remainder. Structure
-   * goals slew the same way, against the live HQ position by team. Barrels
-   * crank toward their elevation goals alongside (see `slewBarrel`), so the
-   * tube visibly lays before the round leaves.
+   * refine — so traverse motion is visible even before any shot fires — and
+   * far turret swings overshoot their goal a little before correcting back
+   * (see core `slewTurret`). In external-hull mode (patrol movement) the
+   * hull stays on its travel heading and only the turret slews the clamped
+   * remainder. Structure goals slew the same way, against the live HQ
+   * position by team. Barrels crank toward their elevation goals alongside
+   * (see `slewBarrel`), so the tube visibly lays before the round leaves.
    */
   private slewPending(dt: number): void {
     for (const [attacker, target] of this.pending) {
       if (this.destroyed[attacker] || this.destroyed[target]) {
         this.pending.delete(attacker);
         this.elevGoal.delete(attacker);
+        this.releaseOvershoot(attacker);
         continue;
       }
       const body = this.units.children[attacker] as THREE.Group | undefined;
@@ -1634,18 +1670,21 @@ export class CombatFx {
       if (!body || !kind || want === null) {
         this.pending.delete(attacker);
         this.elevGoal.delete(attacker);
+        this.releaseOvershoot(attacker);
         continue;
       }
       const pose = this.aim[attacker];
       if (!pose) continue;
       if (this.externalHull) {
-        const slewRate = TURRET_SLEW_RATE[kind] ?? 2.4;
         const wantRel = clampTurret(kind, wrapAngle(want - pose.hull));
-        pose.turret = stepAngle(pose.turret, wantRel, slewRate * dt);
+        const slew = slewTurret(kind, pose.turret, wantRel, dt, pose.overshoot);
+        pose.turret = slew.angle;
+        pose.overshoot = slew.overshoot;
       } else {
-        const next = aimStep(kind, pose.hull, pose.turret, want, dt);
+        const next = aimStep(kind, pose.hull, pose.turret, want, dt, pose.overshoot);
         pose.hull = next.hull;
         pose.turret = next.turret;
+        pose.overshoot = next.overshoot;
       }
       setUnitAim(body, pose.hull, pose.turret);
       this.slewBarrel(attacker, body, kind, dt);
@@ -1654,6 +1693,7 @@ export class CombatFx {
       if (this.destroyed[attacker]) {
         this.pendingHq.delete(attacker);
         this.elevGoal.delete(attacker);
+        this.releaseOvershoot(attacker);
         continue;
       }
       const hq = this.hqTargetOf(hqTeam);
@@ -1663,18 +1703,21 @@ export class CombatFx {
       if (!body || !kind || want === null) {
         this.pendingHq.delete(attacker);
         this.elevGoal.delete(attacker);
+        this.releaseOvershoot(attacker);
         continue;
       }
       const pose = this.aim[attacker];
       if (!pose) continue;
       if (this.externalHull) {
-        const slewRate = TURRET_SLEW_RATE[kind] ?? 2.4;
         const wantRel = clampTurret(kind, wrapAngle(want - pose.hull));
-        pose.turret = stepAngle(pose.turret, wantRel, slewRate * dt);
+        const slew = slewTurret(kind, pose.turret, wantRel, dt, pose.overshoot);
+        pose.turret = slew.angle;
+        pose.overshoot = slew.overshoot;
       } else {
-        const next = aimStep(kind, pose.hull, pose.turret, want, dt);
+        const next = aimStep(kind, pose.hull, pose.turret, want, dt, pose.overshoot);
         pose.hull = next.hull;
         pose.turret = next.turret;
+        pose.overshoot = next.overshoot;
       }
       setUnitAim(body, pose.hull, pose.turret);
       this.slewBarrel(attacker, body, kind, dt);
@@ -1849,7 +1892,7 @@ export class CombatFx {
         // only admitted enemies are worth reacting to.
         const foe = positions[target]!;
         if (Math.hypot(foe.x - me.x, foe.z - me.z) > admission) continue;
-        this.pending.set(i, target);
+        this.aimPending(i, target);
       } else {
         let best = -1;
         let bestDist = admission;
@@ -1863,7 +1906,7 @@ export class CombatFx {
           }
         }
         if (best < 0) continue;
-        this.pending.set(i, best);
+        this.aimPending(i, best);
       }
     }
   }
@@ -1952,7 +1995,10 @@ export class CombatFx {
     // the traverse rejoins the hull duel instead of lingering on the HQ.
     if (this.env?.isEngaged) {
       for (const attacker of [...this.pendingHq.keys()]) {
-        if (this.env.isEngaged(attacker)) this.pendingHq.delete(attacker);
+        if (this.env.isEngaged(attacker)) {
+          this.pendingHq.delete(attacker);
+          this.releaseOvershoot(attacker);
+        }
       }
     }
     const hqPick = this.pickHqShot();
@@ -2024,7 +2070,7 @@ export class CombatFx {
     const kind = this.unitKind(attackerIdx);
     const pose = this.aim[attackerIdx];
     if (!attacker || !target || !kind || !pose) return true;
-    this.pending.set(attackerIdx, targetIdx);
+    this.aimPending(attackerIdx, targetIdx);
     const want = this.bearing(attackerIdx, targetIdx);
     if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
     return this.launchShot(
@@ -2046,7 +2092,7 @@ export class CombatFx {
     const kind = this.unitKind(attackerIdx);
     const pose = this.aim[attackerIdx];
     if (!attacker || !kind || !pose) return true;
-    this.pendingHq.set(attackerIdx, hq.team);
+    this.aimPendingHq(attackerIdx, hq.team);
     const want = this.bearingToPoint(attackerIdx, hq.x, hq.z);
     if (want === null || !canFire(want, pose.hull, pose.turret)) return false;
     return this.launchShot(

@@ -6,6 +6,7 @@ import {
   MAX_SCORCH_MARKS,
   ballisticPosition,
   ballisticVelocity,
+  canFire,
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_SLEW_RATE,
@@ -2633,6 +2634,137 @@ describe("CombatFx proactive engagement", () => {
     expect(fx.isDestroyedAt(1)).toBe(false);
     expect(fx.isDestroyedAt(2)).toBe(false);
     expect(pendingOf(fx).has(0)).toBe(false);
+    fx.dispose();
+  });
+});
+
+describe("CombatFx turret traverse overshoot", () => {
+  /** Teamed bodies with turrets (mirrors buildUnits traverse groups). */
+  function makeDuel(
+    specs: { kind: UnitKind; team: number; x: number; z: number; rot: number }[],
+  ): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = specs.map((s, n) => ({
+      kind: s.kind,
+      cellX: n + 1,
+      cellZ: n + 1,
+      rotation: s.rot,
+      team: s.team,
+    }));
+    for (const s of specs) {
+      const body = new THREE.Group();
+      body.rotation.y = s.rot;
+      body.position.set(s.x, 100, s.z);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  /** White-box prime: park a turret far off its aim (the fx owns no setter). */
+  function primeTurret(fx: CombatFx, index: number, turret: number): void {
+    (fx as unknown as { aim: { hull: number; turret: number; overshoot: number }[] }).aim[
+      index
+    ]!.turret = turret;
+  }
+
+  /** White-box read of a traverse's overshoot latch (0 once settled). */
+  function overshootOf(fx: CombatFx, index: number): number {
+    return (fx as unknown as { aim: { overshoot: number }[] }).aim[index]!.overshoot;
+  }
+
+  function liveBearing(units: THREE.Group, from: number, to: number): number {
+    const a = units.children[from] as THREE.Group;
+    const b = units.children[to] as THREE.Group;
+    return yawToTarget({ x: a.position.x, z: a.position.z }, { x: b.position.x, z: b.position.z });
+  }
+
+  it("overshoots far turret swings past the aim, then corrects back", () => {
+    const scene = new THREE.Scene();
+    // Attacker already faces its foe (hull on the bearing); only the turret
+    // is parked far off — a pure turret swing with no hull gross motion.
+    const units = makeDuel([
+      { kind: "stump", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "stump", team: 1, x: 0, z: 500, rot: Math.PI },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    fx.update(1 / 60); // size the aim roster
+    primeTurret(fx, 0, -1.2);
+    // Step through the settle: the traverse ends only once the latch has
+    // released onto the aim (the muzzle crosses it in transit, still held).
+    let peak = -Infinity;
+    let settled = false;
+    for (let n = 0; n < 240 && !settled; n++) {
+      fx.update(1 / 60);
+      const pose = fx.aimState(0)!;
+      peak = Math.max(peak, pose.turret);
+      settled = overshootOf(fx, 0) === 0 && canFire(liveBearing(units, 0, 1), pose.hull, pose.turret);
+    }
+    expect(settled).toBe(true);
+    // The turret ran past the aim (~0.1 over) before correcting back.
+    expect(peak).toBeGreaterThan(0.05);
+    // The visible meshes sit exactly on the settled firing line (hull + turret).
+    const body = units.children[0] as THREE.Group;
+    const pose = fx.aimState(0)!;
+    expect(body.rotation.y).toBeCloseTo(pose.hull, 10);
+    expect(getTurret(body)!.rotation.y).toBeCloseTo(pose.turret, 10);
+    fx.dispose();
+  });
+
+  it("fires down the turret line: the firing gun is aimed at its target", () => {
+    const scene = new THREE.Scene();
+    const units = makeDuel([
+      { kind: "flash", team: 0, x: 0, z: 0, rot: Math.PI / 2 },
+      { kind: "flash", team: 1, x: 400, z: 0, rot: -Math.PI / 2 },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(7));
+    // Step to the first volley; both guns face each other, so it leaves fast.
+    for (let n = 0; n < 4000 && fx.totalFired === 0; n++) fx.update(1 / 60);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    const shots = (fx as unknown as { shots: { attacker: number; target: number }[] }).shots;
+    const last = shots[shots.length - 1]!;
+    // The gun that fired is aimed at its mark — turret on the firing line.
+    const pose = fx.aimState(last.attacker)!;
+    expect(canFire(liveBearing(units, last.attacker, last.target), pose.hull, pose.turret)).toBe(true);
+    // And the visible meshes sit exactly on that pose (hull + turret).
+    const body = units.children[last.attacker] as THREE.Group;
+    expect(body.rotation.y).toBeCloseTo(pose.hull, 10);
+    expect(getTurret(body)!.rotation.y).toBeCloseTo(pose.turret, 10);
+    fx.dispose();
+  });
+
+  it("overshoots far turret-only swings while hulls are externally driven", () => {
+    const scene = new THREE.Scene();
+    // Hull parked off the duel (travel heading); the turret alone traverses
+    // the clamped remainder onto the foe.
+    const units = makeDuel([
+      { kind: "stump", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "stump", team: 1, x: 500, z: 300, rot: Math.PI },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    fx.setExternalHull(true);
+    fx.update(1 / 60);
+    primeTurret(fx, 0, -0.5);
+    const want = liveBearing(units, 0, 1); // ≈ 1.03, inside the traverse
+    let peak = -Infinity;
+    let settled = false;
+    for (let n = 0; n < 240 && !settled; n++) {
+      fx.update(1 / 60);
+      const pose = fx.aimState(0)!;
+      peak = Math.max(peak, pose.turret);
+      settled = overshootOf(fx, 0) === 0 && canFire(liveBearing(units, 0, 1), pose.hull, pose.turret);
+    }
+    expect(settled).toBe(true);
+    // Ran ~0.1 past the clamped goal before correcting back...
+    expect(peak).toBeGreaterThan(want + 0.04);
+    // ...the hull never turned (the external drive owns it)...
+    expect((units.children[0] as THREE.Group).rotation.y).toBeCloseTo(0);
+    // ...and the visible turret sits on the settled firing line.
+    const pose = fx.aimState(0)!;
+    expect(getTurret(units.children[0] as THREE.Group)!.rotation.y).toBeCloseTo(pose.turret, 10);
     fx.dispose();
   });
 });
