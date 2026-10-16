@@ -33,6 +33,7 @@ import {
   PEEWEE_EXPLOSION_MAX_AGE,
   projectileGlowFalloff,
   projectileGlowFootprint,
+  projectileGlowLightScale,
   projectileGlowRadius,
   projectileTailLength,
   projectileTailOpacity,
@@ -40,7 +41,9 @@ import {
   PROJECTILE_TAIL_MIN,
   PROJECTILE_TAIL_OPACITY_MAX,
   PROJECTILE_TAIL_OPACITY_MIN,
+  SHOT_GLOW_DAY_SCALE,
   SHOT_GLOW_LIGHTS,
+  SHOT_GLOW_NIGHT_SCALE,
   SHOT_GLOW_OPACITY,
   SHOT_GLOW_PEAK,
   SHOT_GLOW_RANGE,
@@ -3137,9 +3140,12 @@ describe("CombatFx night light boost", () => {
   it("rides shot glow hotter by night (locked-step seeds, same round)", () => {
     // Twin skirmishes on the same seed step in lockstep, so both carry the
     // same round at the same height — the only difference is the toggle.
+    // The shot-glow path follows its own day/night scale, not the shared
+    // muzzle/explosion boost.
     const day = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
     const night = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
     night.setNight(true);
+    const ratio = SHOT_GLOW_NIGHT_SCALE / SHOT_GLOW_DAY_SCALE;
     let compared = 0;
     for (let n = 0; n < 4000 && compared < 4; n++) {
       day.update(1 / 60);
@@ -3148,8 +3154,54 @@ describe("CombatFx night light boost", () => {
       for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
         const d = day.shotGlowIntensityAt(i);
         if (d > 0) {
-          expect(night.shotGlowIntensityAt(i)).toBeCloseTo(d * NIGHT_LIGHT_BOOST, 6);
-          expect(night.shotGlowOpacityAt(i)).toBeCloseTo(day.shotGlowOpacityAt(i) * NIGHT_LIGHT_BOOST, 6);
+          expect(night.shotGlowIntensityAt(i)).toBeCloseTo(d * ratio, 6);
+          expect(night.shotGlowOpacityAt(i)).toBeCloseTo(day.shotGlowOpacityAt(i) * ratio, 6);
+          compared++;
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
+    day.dispose();
+    night.dispose();
+  });
+
+  it("stages the shot glow subtler: washed out by day, gently boosted by night", () => {
+    // Pure scale: day sits well under the legacy full-strength 1.0,
+    // night sits under the shared boost but still above day.
+    expect(projectileGlowLightScale(false)).toBe(SHOT_GLOW_DAY_SCALE);
+    expect(projectileGlowLightScale(true)).toBe(SHOT_GLOW_NIGHT_SCALE);
+    expect(SHOT_GLOW_DAY_SCALE).toBeLessThan(1);
+    expect(SHOT_GLOW_DAY_SCALE).toBeLessThanOrEqual(0.5);
+    expect(SHOT_GLOW_NIGHT_SCALE).toBeLessThan(NIGHT_LIGHT_BOOST);
+    expect(SHOT_GLOW_NIGHT_SCALE).toBeGreaterThan(1);
+    expect(SHOT_GLOW_NIGHT_SCALE).toBeGreaterThan(SHOT_GLOW_DAY_SCALE);
+  });
+
+  it("caps live glow at the subtler day/night peaks (locked-step seeds)", () => {
+    // Same round, both toggles: neither peak may exceed its own staged
+    // cap (peak × falloff ≤ 1 × scale), and day stays far under night.
+    const day = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
+    const night = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21), flatEnv(100));
+    night.setNight(true);
+    let compared = 0;
+    for (let n = 0; n < 4000 && compared < 4; n++) {
+      day.update(1 / 60);
+      night.update(1 / 60);
+      for (let i = 0; i < SHOT_GLOW_LIGHTS; i++) {
+        const d = day.shotGlowIntensityAt(i);
+        if (d > 0) {
+          expect(d).toBeLessThanOrEqual(SHOT_GLOW_PEAK * SHOT_GLOW_DAY_SCALE + 1e-6);
+          expect(night.shotGlowIntensityAt(i)).toBeLessThanOrEqual(
+            SHOT_GLOW_PEAK * SHOT_GLOW_NIGHT_SCALE + 1e-6,
+          );
+          expect(day.shotGlowOpacityAt(i)).toBeLessThanOrEqual(
+            SHOT_GLOW_OPACITY * SHOT_GLOW_DAY_SCALE + 1e-6,
+          );
+          expect(night.shotGlowOpacityAt(i)).toBeLessThanOrEqual(
+            SHOT_GLOW_OPACITY * SHOT_GLOW_NIGHT_SCALE + 1e-6,
+          );
+          // Night still owns the dark field: strictly brighter than day.
+          expect(night.shotGlowIntensityAt(i)).toBeGreaterThan(d);
           compared++;
         }
       }

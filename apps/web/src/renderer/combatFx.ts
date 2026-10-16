@@ -447,6 +447,28 @@ export const SHOT_GLOW_RANGE = 380;
 export const SHOT_GLOW_RADIUS = 32;
 /** Ground-blob peak opacity (additive, seated like the blast glow). */
 export const SHOT_GLOW_OPACITY = 0.22;
+/**
+ * Daylight washout: by day the riding glow reads against a sunlit field, so
+ * it stages at 40% — significantly subtler than the legacy full-strength
+ * day glow. Daylight drowns additive pools; the round itself still reads.
+ */
+export const SHOT_GLOW_DAY_SCALE = 0.4;
+/**
+ * Night glow: still boosted over day (light sources own the dark field),
+ * but staged ~19% under the shared `NIGHT_LIGHT_BOOST` — slightly subtler
+ * than the legacy night glow, which bloomed too hot off the dirt.
+ */
+export const SHOT_GLOW_NIGHT_SCALE = 1.3;
+
+/**
+ * In-flight glow scale for the day/night toggle: daylight washout by day,
+ * the gentler night boost by night. Replaces the shared `nightLightScale`
+ * on the shot-glow path only — muzzle/explosion kicks keep the full boost.
+ * Pure for tests.
+ */
+export function projectileGlowLightScale(night: boolean): number {
+  return night ? SHOT_GLOW_NIGHT_SCALE : SHOT_GLOW_DAY_SCALE;
+}
 
 /**
  * Glow strength 0..1 for a projectile `height` above the dirt: full at the
@@ -1166,10 +1188,11 @@ export class CombatFx {
   }
 
   /**
-   * Night owns the light budget: muzzle/explosion kicks and riding shot
-   * glows burn at `NIGHT_LIGHT_BOOST` while night, day peaks otherwise.
-   * Applies to kicks struck after the toggle — a mid-decay kick keeps its
-   * struck peak and simply fades from there.
+   * Night owns the light budget: muzzle/explosion kicks burn at
+   * `NIGHT_LIGHT_BOOST` while night, day peaks otherwise; riding shot
+   * glows follow their own subtler `projectileGlowLightScale` (washed out
+   * by day, gently boosted by night). Applies to kicks struck after the
+   * toggle — a mid-decay kick keeps its struck peak and simply fades.
    */
   setNight(night: boolean): void {
     this.night = night;
@@ -3072,7 +3095,7 @@ export class CombatFx {
       if (!this.env) {
         // Headless (no terrain): lights still ride the rounds (Lambert
         // neighbors), blobs hide — there is no dirt to seat them on.
-        light.intensity = SHOT_GLOW_PEAK * nightLightScale(this.night);
+        light.intensity = SHOT_GLOW_PEAK * projectileGlowLightScale(this.night);
         blob.visible = false;
         continue;
       }
@@ -3083,7 +3106,7 @@ export class CombatFx {
         blob.visible = false;
         continue;
       }
-      light.intensity = SHOT_GLOW_PEAK * falloff * nightLightScale(this.night);
+      light.intensity = SHOT_GLOW_PEAK * falloff * projectileGlowLightScale(this.night);
       blob.visible = true;
       blob.position.set(pos.x, ground + 1.4, pos.z);
       // Reflection of the round, not a plain circle: the ellipse yaws onto
@@ -3098,7 +3121,7 @@ export class CombatFx {
       const foot = projectileGlowFootprint(v.x, v.y, v.z, falloff);
       blob.rotation.y = foot.yaw;
       blob.scale.set(foot.width, 1, foot.length);
-      mat.opacity = SHOT_GLOW_OPACITY * falloff * nightLightScale(this.night);
+      mat.opacity = SHOT_GLOW_OPACITY * falloff * projectileGlowLightScale(this.night);
     }
   }
 
