@@ -33,8 +33,19 @@ export const FIREFLY_MIN_LIFT = 3;
 export const FIREFLY_MAX_LIFT = 15;
 /** Drift orbit radius around each anchor. */
 export const FIREFLY_DRIFT_RADIUS = 9;
-/** Ground-pool falloff radius (world units, mirrored in the shaders). */
-export const FIREFLY_POOL_RADIUS = 38;
+/**
+ * Drift angular speed in rad/s: the lissajous wander circles each anchor
+ * slightly faster than the original 0.35 amble — livelier motes, same
+ * orbit shape and radius.
+ */
+export const FIREFLY_DRIFT_SPEED = 0.42;
+/**
+ * Ground-pool falloff radius (world units, mirrored in the shaders): each
+ * mote's halo pools slightly tighter than the old 38, so one firefly
+ * illuminates a smaller patch — while the roaming PointLights carry the
+ * glow further (see FIREFLY_POOL_DISTANCE).
+ */
+export const FIREFLY_POOL_RADIUS = 34;
 /** Pool tint shared by the terrain and tree shader terms (GLSL literal). */
 export const FIREFLY_POOL_TINT_GLSL = "0.30, 0.40, 0.14";
 /**
@@ -45,7 +56,12 @@ export const FIREFLY_POOL_TINT_GLSL = "0.30, 0.40, 0.14";
  */
 export const FIREFLY_POOL_COUNT = 6;
 export const FIREFLY_POOL_PEAK = 320;
-export const FIREFLY_POOL_DISTANCE = 150;
+/**
+ * Roaming-pool light reach: the glow travels slightly further than the old
+ * 150 cutoff — peak and decay untouched, so the near-field halo reads the
+ * same and only the throw extends.
+ */
+export const FIREFLY_POOL_DISTANCE = 175;
 export const FIREFLY_POOL_DECAY = 2;
 /**
  * Per-mote share of the swarm's shader-pool light budget. Spreading the
@@ -285,7 +301,7 @@ export function applyFireflyTreeGlow(material: THREE.MeshLambertMaterial, field:
 
 /** Drift offset around the anchor at time `t` (lissajous wander). */
 export function fireflyDrift(radius: number, phase: number, t: number): { x: number; y: number; z: number } {
-  const a = t * 0.35 + phase * Math.PI * 2;
+  const a = t * FIREFLY_DRIFT_SPEED + phase * Math.PI * 2;
   return {
     x: Math.cos(a) * radius,
     y: Math.sin(a * 1.7 + phase * 4) * radius * 0.25,

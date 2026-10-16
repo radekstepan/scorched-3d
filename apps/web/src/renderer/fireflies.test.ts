@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   FIREFLY_COUNT,
   FIREFLY_DRIFT_RADIUS,
+  FIREFLY_DRIFT_SPEED,
   FIREFLY_GLOW_AMP,
   FIREFLY_GLOW_FLOOR,
   FIREFLY_MAX_LIFT,
@@ -151,6 +152,33 @@ describe("fireflyDrift", () => {
       expect(Math.abs(d.y)).toBeLessThanOrEqual(FIREFLY_DRIFT_RADIUS * 0.25 + 1e-9);
     }
   });
+
+  it("drifts slightly faster than the legacy amble, on the same orbit shape", () => {
+    // Legacy wander: hardcoded 0.35 rad/s. The retune names the speed and
+    // lifts it slightly — livelier motes, same lissajous shape + radius.
+    const LEGACY_SPEED = 0.35;
+    expect(FIREFLY_DRIFT_SPEED).toBeGreaterThan(LEGACY_SPEED);
+    expect(FIREFLY_DRIFT_SPEED / LEGACY_SPEED).toBeLessThan(1.3);
+    // fireflyDrift actually runs at the named speed (phase 0: x = cos(w*t)*r).
+    expect(fireflyDrift(9, 0, 1).x).toBeCloseTo(Math.cos(FIREFLY_DRIFT_SPEED) * 9, 9);
+    // ...and covers more ground per second than the legacy curve.
+    const legacyDrift = (radius: number, phase: number, t: number) => {
+      const a = t * LEGACY_SPEED + phase * Math.PI * 2;
+      return {
+        x: Math.cos(a) * radius,
+        y: Math.sin(a * 1.7 + phase * 4) * radius * 0.25,
+        z: Math.sin(a * 0.8 + phase * 2) * radius,
+      };
+    };
+    const travel = (d: (r: number, p: number, t: number) => { x: number; y: number; z: number }) => {
+      const a = d(9, 0.31, 0);
+      const b = d(9, 0.31, 1);
+      return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+    };
+    const ratio = travel(fireflyDrift) / travel(legacyDrift);
+    expect(ratio).toBeGreaterThan(1);
+    expect(ratio).toBeLessThan(1.5);
+  });
 });
 
 describe("fireflyGlow", () => {
@@ -183,6 +211,30 @@ describe("fireflyPoolGlow", () => {
   it("covers a small area: the half-glow radius stays tight", () => {
     expect(FIREFLY_POOL_RADIUS).toBeLessThanOrEqual(40);
     expect(FIREFLY_POOL_DISTANCE).toBeLessThanOrEqual(200);
+  });
+
+  it("pools tighter per mote while the roaming light travels further", () => {
+    // Legacy tune: 38-radius pools, 150-cutoff roaming lights. The retune
+    // shrinks each mote's illuminated patch slightly and extends the
+    // PointLight throw slightly — peak and decay untouched, so the
+    // near-field halo reads the same and only the footprint changes.
+    const LEGACY_RADIUS = 38;
+    const LEGACY_DISTANCE = 150;
+    expect(FIREFLY_POOL_PEAK).toBe(320);
+    expect(FIREFLY_POOL_DECAY).toBe(2);
+    // Smaller area: the half-glow point pulls in, and the old half-glow
+    // distance now reads below half.
+    expect(FIREFLY_POOL_RADIUS).toBeLessThan(LEGACY_RADIUS);
+    expect(FIREFLY_POOL_RADIUS / LEGACY_RADIUS).toBeGreaterThan(0.8);
+    expect(fireflyPoolGlow(LEGACY_RADIUS)).toBeLessThan(0.5);
+    expect(fireflyPoolGlow(FIREFLY_POOL_RADIUS)).toBeCloseTo(0.5, 9);
+    // Further travel: the roaming-light cutoff pushes out, slightly.
+    expect(FIREFLY_POOL_DISTANCE).toBeGreaterThan(LEGACY_DISTANCE);
+    expect(FIREFLY_POOL_DISTANCE / LEGACY_DISTANCE).toBeLessThan(1.3);
+    // Both surfaces mirror the tighter radius — terrain's hand-authored
+    // pool term moves with the constant, leaving no stale 38 behind.
+    expect(terrainFragment).toContain(`${FIREFLY_POOL_RADIUS}.0`);
+    expect(terrainFragment).not.toContain(`${LEGACY_RADIUS}.0`);
   });
 
   it("is mirrored by the terrain shader's one-slot-per-mote pool term", () => {

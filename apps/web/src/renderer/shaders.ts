@@ -112,14 +112,14 @@ export const terrainFragment = /* glsl */ `
     // Firefly ground pools: the terrain shader ignores scene lights, so
     // every mote is mirrored here as additive glow (0 by day) — one slot
     // per firefly, not just the few near a roaming PointLight. Falloff
-    // 1/(1+(d/38)^2) — see fireflyPoolGlow in fireflies.ts. Each pool is a
+    // 1/(1+(d/34)^2) — see fireflyPoolGlow in fireflies.ts. Each pool is a
     // small gentle halo around its own mote: soft tint, quick fade, and a
     // 6/90 budget share so the full-swarm total stays at the tuned
     // lamplight level instead of floodlighting the forests.
     vec3 poolTint = vec3(0.30, 0.40, 0.14);
     float pools = 0.0;
     for (int i = 0; i < 90; i++) {
-      pools += fireflyGlows[i] / (1.0 + pow(length(vWorld - fireflyPools[i]) / 38.0, 2.0));
+      pools += fireflyGlows[i] / (1.0 + pow(length(vWorld - fireflyPools[i]) / 34.0, 2.0));
     }
     color += poolTint * (pools * (6.0 / 90.0));
 
