@@ -16,18 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-the HQ light should not be on a platform with a rod. It should just be a half 3d circle with a light rotating inside it
+put a limit on how far artillery can shoot up, this is ridiculous. also the cannon on it moves form straight to 90 degrees too quickly. give it some realism.
 
-Current 1.5x pan speed should be the new 1x pan speed.
+projectiles should "warp" with a more transparent "tail" as they fly through the air based on velocity and gravity
 
-Current 2x height scale should be the new 1x height scale.
+pan speed 1x should be old 0.75x
 
-I don't like while panning how if I get to a corner the view suddenly flips backwards or something. No, stop the movemembnt if we can't move forward. Retain the angle we are looking at the world.
+default Height scale should be 1x
 
-The waves are still nore realistic. I see shallow and deep water waves, they follow patterns too much still. Looka t what we are doing with the world itself, give it some variation.
+panning is still not fixed, I am moving "off the map". put a bound on how far we can move in either dimension. there should be a virtual rectangle around the whole world.
 
-Still when I keep moving cursor over the world the fps dips to 80, when I stop moving it's 120. Clearly there is an optimization to be had.
+the improved water looks great. When I switch it off I see these "blotches". is it "stand in water? because that "water" seems to be animated too. Also slow down the movement of the water and make it less high.
 
-Clicking onto an area of the map still does not take me to that area with the item that's under the + being centered int he view.
-
-After the last AI update, a bunch of units are "waiting" in their area and nothing is happening. It should be an active battlefield with recon and engagement. Only when I move one opponent closer do they start engaging. But when the one opponent is under attack and finds opposing HQ, the other units on its side do nothing.
+Clicking onto an area of the map still does not take me to that area with the item that's under the + being centered int he view. What I need is to be able to click on a minimap say where it shows the HQ and to be immediately transported there, preserving zoom level and viewing angle AND for the HQ to show in the middle of the screen.
