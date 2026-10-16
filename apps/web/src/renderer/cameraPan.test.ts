@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   DEFAULT_PAN_SPEED,
   DEFAULT_ZOOM_SPEED,
@@ -12,11 +14,13 @@ import {
   PAN_SPEED_FACTOR,
   PAN_SPEED_MAX,
   PAN_SPEED_MIN,
+  RIGID_PAN_EPSILON,
   ZOOM_BASE_SPEED,
   ZOOM_SPEED_MAX,
   ZOOM_SPEED_MIN,
   applyPan,
   clampCameraToWorld,
+  clampCameraToWorldWithTarget,
   clampPanSpeed,
   clampPanTarget,
   clampPanTargetWithCamera,
@@ -25,6 +29,7 @@ import {
   effectiveZoomSpeed,
   isCameraOutsideWorld,
   isPanKey,
+  isRigidPan,
   panInputFromCodes,
   panOffset,
   panStepDistance,
@@ -304,6 +309,152 @@ describe("clampCameraToWorld", () => {
   });
 });
 
+describe("clampCameraToWorldWithTarget", () => {
+  // Standard 320x256 map: world 5104x4080, camera rectangle ±3190 x ±2550.
+  const worldW = 5104;
+  const worldD = 4080;
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+
+  it("stops a pan-back at the wall and retains the viewing angle", () => {
+    // Camera south of the target, both stepping +Z: the camera reaches the
+    // south bound first and the target must stop with it — the old
+    // target-agnostic clamp pinned the camera while the target kept
+    // advancing until it caught the camera and warped the angle.
+    const target = { x: 0, y: 0, z: bz - 1500 };
+    const position = { x: 0, y: 1200, z: bz - 500 };
+    const before = { x: position.x - target.x, y: position.y - target.y, z: position.z - target.z };
+    applyPan(position, target, { x: 0, z: 800 });
+    clampPanTargetWithCamera(target, position, worldW, worldD);
+    clampCameraToWorldWithTarget(position, target, worldW, worldD);
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(target.z).toBeLessThan(position.z);
+    expect(position.x - target.x).toBeCloseTo(before.x, 10);
+    expect(position.y - target.y).toBeCloseTo(before.y, 10);
+    expect(position.z - target.z).toBeCloseTo(before.z, 10);
+  });
+
+  it("stops both axes at a corner without rotating", () => {
+    const target = { x: bx - 1000, y: 0, z: bz - 1000 };
+    const position = { x: bx - 300, y: 1200, z: bz - 300 };
+    const before = { x: position.x - target.x, z: position.z - target.z };
+    applyPan(position, target, { x: 500, z: 500 });
+    clampPanTargetWithCamera(target, position, worldW, worldD);
+    clampCameraToWorldWithTarget(position, target, worldW, worldD);
+    expect(position.x).toBeCloseTo(bx, 10);
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(position.x - target.x).toBeCloseTo(before.x, 10);
+    expect(position.z - target.z).toBeCloseTo(before.z, 10);
+  });
+
+  it("slides along the wall instead of sticking", () => {
+    // Camera at the south bound, panning south-east: the free (east)
+    // component survives and only the blocked (south) one is dropped.
+    const target = { x: 0, y: 0, z: bz - 1000 };
+    const position = { x: -1000, y: 1200, z: bz };
+    applyPan(position, target, { x: 300, z: 200 });
+    clampPanTargetWithCamera(target, position, worldW, worldD);
+    clampCameraToWorldWithTarget(position, target, worldW, worldD);
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(position.x).toBeCloseTo(-700, 10);
+    expect(target.x).toBeCloseTo(300, 10);
+    expect(position.x - target.x).toBeCloseTo(-1000, 10);
+    expect(position.z - target.z).toBeCloseTo(1000, 10);
+  });
+
+  it("leaves in-bounds pans untouched", () => {
+    const target = { x: 100, y: 0, z: -200 };
+    const position = { x: 100, y: 1200, z: 800 };
+    applyPan(position, target, { x: 10, z: -20 });
+    clampPanTargetWithCamera(target, position, 5104, 4080);
+    clampCameraToWorldWithTarget(position, target, 5104, 4080);
+    expect(target).toEqual({ x: 110, y: 0, z: -220 });
+    expect(position).toEqual({ x: 110, y: 1200, z: 780 });
+  });
+
+  it("never moves heights", () => {
+    const target = { x: 0, y: 50, z: 0 };
+    const position = { x: 99999, y: 1200, z: 99999 };
+    clampCameraToWorldWithTarget(position, target, worldW, worldD);
+    expect(position.y).toBe(1200);
+    expect(target.y).toBe(50);
+  });
+});
+
+describe("pan-back wall regression (task 136)", () => {
+  const worldW = 5104;
+  const worldD = 4080;
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+
+  it("holds the camera-target offset through a sustained pan-back (no warp)", () => {
+    // Camera south of the target, panning backwards (+Z) step after step
+    // through the keyboard-pan tick order: every step must keep pushing
+    // +Z (a snapped direction is the warp), and the wall must park the
+    // camera at the south bound with the target a full offset ahead of it.
+    const target = { x: 0, y: 0, z: 0 };
+    const position = { x: 0, y: 1200, z: 1000 };
+    for (let i = 0; i < 40; i++) {
+      const off = panOffset(position, target, { right: 0, forward: -1 }, 500);
+      expect(off.x).toBeCloseTo(0, 10);
+      expect(off.z).toBeCloseTo(500, 10);
+      applyPan(position, target, off);
+      clampPanTargetWithCamera(target, position, worldW, worldD);
+      clampCameraToWorldWithTarget(position, target, worldW, worldD);
+    }
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(target.z).toBeCloseTo(bz - 1000, 10);
+    expect(position.x - target.x).toBeCloseTo(0, 10);
+    expect(position.z - target.z).toBeCloseTo(1000, 10);
+  });
+
+  it("contrast: the target-agnostic camera clamp lets the target catch the camera (the warp)", () => {
+    // The pre-fix tick order for pans: the camera pins at the south bound
+    // while the target keeps advancing, until target and camera coincide
+    // on the ground plane — the forward basis collapses and the view snaps
+    // top-down. Pan paths must use the carrying clamp instead; the plain
+    // one stays for orbit/zoom reel-in only.
+    const target = { x: 0, y: 0, z: 0 };
+    const position = { x: 0, y: 1200, z: 1000 };
+    for (let i = 0; i < 12; i++) {
+      const off = panOffset(position, target, { right: 0, forward: -1 }, 500);
+      applyPan(position, target, off);
+      clampPanTargetWithCamera(target, position, worldW, worldD);
+      clampCameraToWorld(position, worldW, worldD);
+    }
+    expect(position.z).toBeCloseTo(bz, 10);
+    expect(target.z).toBeCloseTo(bz, 10);
+    expect(Math.hypot(position.x - target.x, position.z - target.z)).toBeLessThan(1);
+  });
+});
+
+describe("isRigidPan", () => {
+  it("reads true when target and camera move by the same delta", () => {
+    expect(isRigidPan(300, 200, 300, 200)).toBe(true);
+    expect(isRigidPan(-50, 0, -50, 0)).toBe(true);
+    expect(isRigidPan(0, -120.5, 0, -120.5)).toBe(true);
+  });
+
+  it("tolerates float64 rounding of identical pan offsets", () => {
+    expect(RIGID_PAN_EPSILON).toBe(1e-6);
+    expect(isRigidPan(300, 200, 300 + 1e-9, 200 - 1e-9)).toBe(true);
+    expect(isRigidPan(100, 100, 100 + RIGID_PAN_EPSILON, 100)).toBe(true);
+    expect(isRigidPan(100, 100, 100 + RIGID_PAN_EPSILON * 1.1, 100)).toBe(false);
+  });
+
+  it("reads false when the target is stationary (orbit, zoom, quiet ticks)", () => {
+    expect(isRigidPan(0, 0, 0, 0)).toBe(false);
+    // A pure orbit swings the camera around a fixed target: reel-in, not wall.
+    expect(isRigidPan(0, 0, 50, -30)).toBe(false);
+  });
+
+  it("reads false when target and camera move apart (cursor-anchored zoom)", () => {
+    // Dollying out while the target migrates toward the cursor: the camera
+    // travels far, the target only slightly — the focus must stay put.
+    expect(isRigidPan(10, 5, 300, 150)).toBe(false);
+    expect(isRigidPan(300, 200, 300, -200)).toBe(false);
+  });
+});
+
 describe("isCameraOutsideWorld", () => {
   // Same rectangle the clamp enforces: ±3190 x ±2550 on the 320x256 map.
   const worldW = 5104;
@@ -478,7 +629,139 @@ describe("world-bounds wiring in TerrainCanvas", () => {
     // camera off the map, so the tick must clamp the camera position too —
     // once after keyboard pan, once after controls.update() (right-drag pan,
     // orbit, cursor-anchored zoom, and minimap jumps all flow through it).
-    const sites = canvasSource.match(/clampCameraToWorld\(camera\.position/g) ?? [];
-    expect(sites).toHaveLength(2);
+    // Rigid pans carry the target with the clamped camera delta (the
+    // pan-back wall); only the orbit/zoom branch reels the camera in alone.
+    const carrying =
+      canvasSource.match(/clampCameraToWorldWithTarget\(camera\.position/g) ?? [];
+    const plain = canvasSource.match(/clampCameraToWorld\(camera\.position/g) ?? [];
+    expect(carrying).toHaveLength(2);
+    expect(plain).toHaveLength(1);
+  });
+
+  it("picks the pan-back wall vs the orbit reel-in through the rigid-pan check", () => {
+    // The post-update site snapshots the pre-update pose and branches on
+    // isRigidPan: right-drag pans (target and camera translated together)
+    // hit the wall with the angle retained, while orbit/zoom motion reels
+    // the camera in with the focus point staying put.
+    expect(canvasSource).toContain("isRigidPan(");
+    expect(canvasSource).toMatch(/if \(rigidPan\) clampCameraToWorldWithTarget\(camera\.position/);
+    expect(canvasSource).toMatch(/else clampCameraToWorld\(camera\.position/);
+  });
+});
+
+describe("pan-back wall through real OrbitControls (task 136)", () => {
+  // Headless tick-chain through REAL OrbitControls with the canvas settings
+  // (damping, polar clamp, zoom-to-cursor): snapshot → pan → rigid-pan
+  // branch → clamps. controls.pan() is the programmatic equivalent of a
+  // right-drag (same _panOffset path _handleMouseMovePan feeds).
+  const worldW = 5104;
+  const worldD = 4080;
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+
+  function makePanRig(pos: { x: number; y: number; z: number }, tgt: { x: number; y: number; z: number }) {
+    const doc = { addEventListener() {}, removeEventListener() {} };
+    const el = {
+      style: {},
+      clientWidth: 1200,
+      clientHeight: 800,
+      ownerDocument: doc,
+      getRootNode: () => doc,
+      addEventListener() {},
+      removeEventListener() {},
+      setPointerCapture() {},
+      releasePointerCapture() {},
+      hasPointerCapture: () => false,
+    };
+    const camera = new THREE.PerspectiveCamera(48, 16 / 9, 2, 14000);
+    camera.position.set(pos.x, pos.y, pos.z);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.zoomToCursor = true;
+    controls.target.set(tgt.x, tgt.y, tgt.z);
+    controls.update();
+    return { camera, controls };
+  }
+
+  function tickPanBack(
+    camera: THREE.PerspectiveCamera,
+    controls: OrbitControls,
+  ): { rigid: boolean; dx: number; dy: number; dz: number } {
+    // Mirrors the TerrainCanvas post-update order: the render step refreshes
+    // the camera matrix first (pan math reads object.matrix), then the tick
+    // snapshots the pose, runs the update, and clamps through the branch.
+    camera.updateMatrixWorld();
+    const preTargetX = controls.target.x;
+    const preTargetZ = controls.target.z;
+    const prePosX = camera.position.x;
+    const prePosZ = camera.position.z;
+    controls.pan(0, -120);
+    const rigid = isRigidPan(
+      controls.target.x - preTargetX,
+      controls.target.z - preTargetZ,
+      camera.position.x - prePosX,
+      camera.position.z - prePosZ,
+    );
+    clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
+    if (rigid) clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
+    else clampCameraToWorld(camera.position, worldW, worldD);
+    return {
+      rigid,
+      dx: camera.position.x - controls.target.x,
+      dy: camera.position.y - controls.target.y,
+      dz: camera.position.z - controls.target.z,
+    };
+  }
+
+  it("stops a sustained drag pan-back at the wall with the angle retained", () => {
+    // Camera south of the target; pan(0,-px) drags the view backwards (+Z).
+    const { camera, controls } = makePanRig({ x: 0, y: 1200, z: 1000 }, { x: 0, y: 100, z: 0 });
+    const before = {
+      x: camera.position.x - controls.target.x,
+      y: camera.position.y - controls.target.y,
+      z: camera.position.z - controls.target.z,
+    };
+    for (let tick = 0; tick < 60; tick++) {
+      const { rigid, dx, dy, dz } = tickPanBack(camera, controls);
+      // A damped drag pan translates target and camera together every frame.
+      expect(rigid).toBe(true);
+      // The target never catches the camera: the ground-plane separation
+      // stays whole the entire way into the wall.
+      expect(Math.hypot(dx, dz)).toBeCloseTo(1000, 6);
+      expect(dy).toBeCloseTo(before.y, 6);
+    }
+    expect(camera.position.z).toBeCloseTo(bz, 6);
+    expect(controls.target.z).toBeCloseTo(bz - 1000, 6);
+    expect(camera.position.x - controls.target.x).toBeCloseTo(before.x, 6);
+    expect(camera.position.y - controls.target.y).toBeCloseTo(before.y, 6);
+    expect(camera.position.z - controls.target.z).toBeCloseTo(before.z, 6);
+  });
+
+  it("reels in an orbited-out camera without moving the focus (orbit branch)", () => {
+    // No pan input: a quiet update moves nothing, the branch reads rigid =
+    // false, and the plain clamp reels the camera back while the clamped
+    // target stays put — the task-118 protection is intact.
+    const { camera, controls } = makePanRig({ x: 0, y: 1500, z: 6000 }, { x: 0, y: 0, z: 0 });
+    const preTargetX = controls.target.x;
+    const preTargetZ = controls.target.z;
+    const prePosX = camera.position.x;
+    const prePosZ = camera.position.z;
+    controls.update();
+    const rigid = isRigidPan(
+      controls.target.x - preTargetX,
+      controls.target.z - preTargetZ,
+      camera.position.x - prePosX,
+      camera.position.z - prePosZ,
+    );
+    expect(rigid).toBe(false);
+    clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
+    if (rigid) clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
+    else clampCameraToWorld(camera.position, worldW, worldD);
+    expect(camera.position.z).toBeCloseTo(bz, 6);
+    expect(controls.target.x).toBeCloseTo(0, 9);
+    expect(controls.target.z).toBeCloseTo(0, 9);
   });
 });

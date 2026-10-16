@@ -70,12 +70,21 @@ describe("minimap jump exemption from the camera clamp (task 120)", () => {
   });
 
   it("holds the camera clamp at both sites while a jump-placed camera is out", () => {
-    // Both clampCameraToWorld sites must be conditional on the exemption:
-    // an unconditional clamp yanks the fresh teleport (zoom collapse +
-    // angle swing + out-of-frame jump tick on far-view → HQ clicks).
-    const conditional =
-      canvasSource.match(/if \(!jumpPlacedCamera\) clampCameraToWorld\(camera\.position/g) ?? [];
-    expect(conditional).toHaveLength(2);
+    // Both camera-clamp sites (keyboard pan + post-controls.update) must be
+    // conditional on the exemption: an unconditional clamp yanks the fresh
+    // teleport (zoom collapse + angle swing + out-of-frame jump tick on
+    // far-view → HQ clicks). The keyboard site carries the target (the
+    // pan-back wall); the post-update site branches rigid-pan vs
+    // orbit/zoom inside a single exemption block.
+    const conditionals = canvasSource.match(/if \(!jumpPlacedCamera\)/g) ?? [];
+    expect(conditionals).toHaveLength(2);
+    expect(canvasSource).toMatch(
+      /if \(!jumpPlacedCamera\)\s+clampCameraToWorldWithTarget\(camera\.position/,
+    );
+    expect(canvasSource).toMatch(
+      /if \(!jumpPlacedCamera\) \{\s+if \(rigidPan\) clampCameraToWorldWithTarget\(camera\.position/,
+    );
+    expect(canvasSource).toMatch(/else clampCameraToWorld\(camera\.position/);
   });
 
   it("clears the exemption through the re-entry check", () => {

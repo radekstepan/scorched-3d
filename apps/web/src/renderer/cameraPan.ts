@@ -201,6 +201,67 @@ export function clampCameraToWorld(position: Vec3, worldW: number, worldD: numbe
 }
 
 /**
+ * Clamp the camera position to the world rectangle like
+ * `clampCameraToWorld`, but carry the orbit target with the clamped-away
+ * delta so the position→target offset (yaw/pitch/distance) never changes.
+ *
+ * This is the pan-back wall: the camera sits behind the target, so panning
+ * backwards drives the camera into its bound first. The plain camera clamp
+ * would pin the camera while the target keeps advancing — the target
+ * catches up to the camera, the ground-plane forward basis collapses, and
+ * the view warps (pan direction snaps to the overhead fallback). Carrying
+ * the target with the clamped delta stops backward motion at the bound
+ * instead — per axis, so sliding along the wall still works — while the
+ * viewing angle is retained exactly. Mirror of `clampPanTargetWithCamera`,
+ * which is the equivalent wall for panning forward.
+ *
+ * Only use this for rigid pans (keyboard pan, right-drag pan): orbiting or
+ * zooming at the edge must keep the reel-in behavior of
+ * `clampCameraToWorld` so the focus point stays put. The tick tells them
+ * apart with `isRigidPan`.
+ */
+export function clampCameraToWorldWithTarget(
+  position: Vec3,
+  target: Vec3,
+  worldW: number,
+  worldD: number,
+): void {
+  const bx = (worldW / 2) * (1 + PAN_EDGE_MARGIN);
+  const bz = (worldD / 2) * (1 + PAN_EDGE_MARGIN);
+  const cx = Math.min(bx, Math.max(-bx, position.x));
+  const cz = Math.min(bz, Math.max(-bz, position.z));
+  target.x += cx - position.x;
+  target.z += cz - position.z;
+  position.x = cx;
+  position.z = cz;
+}
+
+/** Tolerance for `isRigidPan`: float64 rounding of identical pan offsets. */
+export const RIGID_PAN_EPSILON = 1e-6;
+
+/**
+ * True when a controls update moved the orbit target and the camera by the
+ * same ground-plane delta — a rigid pan (right-drag, including its damped
+ * glide), as opposed to orbiting or cursor-anchored zooming, which move
+ * target and camera apart. The tick uses it to pick the pan-back wall
+ * (`clampCameraToWorldWithTarget`, angle retained) over the orbit reel-in
+ * (`clampCameraToWorld`, focus retained). A stationary target reads false:
+ * with no pan motion both clamps agree, and pure orbit/zoom must reel in.
+ */
+export function isRigidPan(
+  dTargetX: number,
+  dTargetZ: number,
+  dPositionX: number,
+  dPositionZ: number,
+): boolean {
+  if (dTargetX === 0 && dTargetZ === 0) return false;
+  return (
+    Math.abs(dTargetX - dPositionX) <= RIGID_PAN_EPSILON &&
+    Math.abs(dTargetZ - dPositionZ) <= RIGID_PAN_EPSILON
+  );
+}
+
+/**
  * True when the camera sits outside the world rectangle
  * `clampCameraToWorld` enforces (same bounds, read-only). The tick uses it
  * for the minimap-jump exemption: a jump-placed camera keeps its exact

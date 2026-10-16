@@ -65,11 +65,13 @@ import { WaypointFx } from "./waypoints";
 import {
   applyPan,
   clampCameraToWorld,
+  clampCameraToWorldWithTarget,
   clampPanTargetWithCamera,
   effectivePanSpeed,
   effectiveZoomSpeed,
   isCameraOutsideWorld,
   isPanKey,
+  isRigidPan,
   MAX_ZOOM_DISTANCE,
   MIN_ZOOM_DISTANCE,
   panInputFromCodes,
@@ -1006,11 +1008,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           // Carry the camera with the clamped target delta so hitting an
           // edge stops forward motion instead of flipping the view (the
           // camera must never keep travelling past a stuck target), then
-          // hold the camera itself inside the world rectangle — orbiting
-          // at far zoom would otherwise swing it off the map — unless a
-          // minimap jump placed it (its offset is the requested zoom).
+          // hold the camera itself inside the world rectangle — carrying
+          // the target with it, so panning backwards stops at the wall
+          // behind us instead of letting the target catch the pinned
+          // camera and warp the angle — unless a minimap jump placed it
+          // (its offset is the requested zoom).
           clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
-          if (!jumpPlacedCamera) clampCameraToWorld(camera.position, worldW, worldD);
+          if (!jumpPlacedCamera)
+            clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
           markHoverDirty();
         }
       }
@@ -1036,7 +1041,21 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         markHoverDirty();
       }
 
+      // Snapshot the pre-update pose: right-drag pans translate target and
+      // camera rigidly through controls.update(), while orbiting and
+      // cursor-anchored zooming move them apart — the post-update camera
+      // clamp below needs to tell them apart.
+      const preTargetX = controls.target.x;
+      const preTargetZ = controls.target.z;
+      const prePosX = camera.position.x;
+      const prePosZ = camera.position.z;
       controls.update();
+      const rigidPan = isRigidPan(
+        controls.target.x - preTargetX,
+        controls.target.z - preTargetZ,
+        camera.position.x - prePosX,
+        camera.position.z - prePosZ,
+      );
       // Cursor-anchored zoom migrates the orbit target toward the cursor, so
       // re-clamp it to the map after the update (keyboard pan clamps before).
       // The camera rides the clamped delta (right-drag pan included) so the
@@ -1044,12 +1063,18 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // the camera position itself is held inside the same world rectangle,
       // so orbiting/zooming can never swing the view off the map, unless a
       // minimap jump placed it: the exemption clears once the camera drifts
-      // back inside, so gradual motion is still trimmed every tick.
+      // back inside, so gradual motion is still trimmed every tick. Rigid
+      // pans carry the target with the clamped camera delta (the pan-back
+      // wall: the target must stop with the camera, never catch it and warp
+      // the angle); orbit/zoom reel the camera in alone so the focus stays.
       clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
       if (jumpPlacedCamera && !isCameraOutsideWorld(camera.position, worldW, worldD)) {
         jumpPlacedCamera = false;
       }
-      if (!jumpPlacedCamera) clampCameraToWorld(camera.position, worldW, worldD);
+      if (!jumpPlacedCamera) {
+        if (rigidPan) clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
+        else clampCameraToWorld(camera.position, worldW, worldD);
+      }
 
       movement.update(dt);
       tracks.update(movement, dt);
