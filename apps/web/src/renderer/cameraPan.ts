@@ -28,10 +28,10 @@ export const DEFAULT_ZOOM_SPEED = 1;
 
 /** Absolute speeds behind slider 1x (OrbitControls units for the drag /
  * wheel paths, multiplier on PAN_SPEED_FACTOR for keyboard panning).
- * Pan 1x is 0.75x the task-107 feel (3.375 absolute); zoom 1x doubles the
+ * Pan 1x is 1.2x the task-116 feel (4.05 absolute); zoom 1x doubles the
  * task-87 2x default (4x stock), so the slider reads 1x while zooming
  * 2x faster than the old zoom default. */
-export const PAN_BASE_SPEED = 3.375;
+export const PAN_BASE_SPEED = 4.05;
 export const ZOOM_BASE_SPEED = 4;
 
 /** Slider bounds for the View-menu pan/zoom speed controls. */
@@ -248,8 +248,8 @@ export function clampZoomSpeed(value: number): number {
 
 /**
  * Absolute OrbitControls pan speed for a slider position: the clamped
- * slider value scaled by PAN_BASE_SPEED, so 1x reads as 0.75x the task-107
- * feel (3.375 absolute).
+ * slider value scaled by PAN_BASE_SPEED, so 1x reads as 1.2x the task-116
+ * feel (4.05 absolute).
  */
 export function effectivePanSpeed(value: number): number {
   return clampPanSpeed(value) * PAN_BASE_SPEED;
@@ -267,7 +267,7 @@ export function effectiveZoomSpeed(value: number): number {
 /**
  * Frame step for keyboard panning: zoom-proportional, frame-rate
  * independent, and scaled by the View-menu pan-speed slider through
- * effectivePanSpeed (1x = 0.75x the task-107 feel).
+ * effectivePanSpeed (1x = 1.2x the task-116 feel).
  */
 export function panStepDistance(distance: number, dt: number, speed: number): number {
   return distance * PAN_SPEED_FACTOR * effectivePanSpeed(speed) * dt;
