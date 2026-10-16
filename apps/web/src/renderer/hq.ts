@@ -59,13 +59,17 @@ export const HQ_BEACON_PERIOD = 6;
 /** Beacon PointLight peak intensity (physical falloff, combat-pool order). */
 export const HQ_BEACON_PEAK = 3200;
 /**
- * Beacon falloff range: a faded red wash that travels past the works +
- * hall + staging apron onto the surrounding ground (the renderer windows
+ * Beacon falloff range: a faded red wash that travels well past the works
+ * + hall + staging apron onto the surrounding ground (the renderer windows
  * the cutoff smoothly, so there is no harsh border at the edge).
  */
-export const HQ_BEACON_DISTANCE = 560;
-/** Beacon physical-falloff decay (same curve as the combat pools). */
-export const HQ_BEACON_DECAY = 1.8;
+export const HQ_BEACON_DISTANCE = 900;
+/**
+ * Beacon physical-falloff decay: gentler than the combat pools (1.8), so
+ * the wash disperses more widely and fades softly with distance instead of
+ * dropping off hard — the near-field peak stays `HQ_BEACON_PEAK`.
+ */
+export const HQ_BEACON_DECAY = 1.5;
 /** Beacon dome radius (a bare hemisphere, no mast or platform). */
 export const HQ_BEACON_RADIUS = 2;
 /**

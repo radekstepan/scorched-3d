@@ -526,12 +526,36 @@ describe("hq warning beacon", () => {
     const mouthDist = Math.abs(HQ_EXIT_OFFSET - HQ_BEACON_X);
     expect(HQ_BEACON_DISTANCE).toBeGreaterThan(mouthDist * 3);
     // Peak compensates physical falloff, so the wash still reads at range:
-    // strong at the hall mouth, visible at the old 340 cutoff, faint but
-    // non-dark at the new cutoff edge (a faded glow, not a hard disc).
+    // strong at the hall mouth, clearly lit at the old 560 cutoff, faint
+    // but non-dark at the new cutoff edge (a faded glow, not a hard disc).
     const at = (d: number): number => HQ_BEACON_PEAK / Math.pow(d, HQ_BEACON_DECAY);
-    expect(at(mouthDist)).toBeGreaterThan(0.5);
+    expect(at(mouthDist)).toBeGreaterThan(1);
+    expect(at(560)).toBeGreaterThan(0.1);
     expect(at(340)).toBeGreaterThan(0.05);
-    expect(at(HQ_BEACON_DISTANCE)).toBeGreaterThan(0.02);
+    expect(at(HQ_BEACON_DISTANCE)).toBeGreaterThan(0.05);
+  });
+
+  it("travels further and fades more gently than the legacy beacon curve", () => {
+    // Legacy curve (pre-dispersal): the same peak over a shorter reach
+    // with a harder decay.
+    const LEGACY_PEAK = 3200;
+    const LEGACY_DISTANCE = 560;
+    const LEGACY_DECAY = 1.8;
+    // Near-field peak identical — the dispersal comes from reach + falloff.
+    expect(HQ_BEACON_PEAK).toBe(LEGACY_PEAK);
+    expect(HQ_BEACON_DISTANCE).toBeGreaterThan(LEGACY_DISTANCE);
+    expect(HQ_BEACON_DECAY).toBeLessThan(LEGACY_DECAY);
+    const legacyAt = (d: number): number => LEGACY_PEAK / Math.pow(d, LEGACY_DECAY);
+    const at = (d: number): number => HQ_BEACON_PEAK / Math.pow(d, HQ_BEACON_DECAY);
+    // Brighter at the old cutoff edge: the wash now travels past it.
+    expect(at(LEGACY_DISTANCE)).toBeGreaterThan(legacyAt(LEGACY_DISTANCE));
+    // Gentler fade: far range holds a larger share of the near glow.
+    const near = 60;
+    expect(at(LEGACY_DISTANCE) / at(near)).toBeGreaterThan(
+      legacyAt(LEGACY_DISTANCE) / legacyAt(near),
+    );
+    // And still a fade, not a flood: far reads dimmer than near.
+    expect(at(LEGACY_DISTANCE)).toBeLessThan(at(near));
   });
 
   it("kills the beacon with the wreck and never re-lights", () => {
