@@ -109,6 +109,7 @@ import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
 import { applyDayNight } from "./night";
 import { FIREFLY_COUNT, FIREFLY_POOL_COUNT, FireflyFx, placeFireflies } from "./fireflies";
+import { DAY_FOG_COUNT, DAY_FOG_SEED_XOR, DayFogFx, placeDayFog } from "./dayFog";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 const ORIGIN = new THREE.Vector3();
@@ -309,6 +310,23 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       groundY,
     );
     fireflies.setNight(options.nightMode);
+    // Day ground-fog: a sparse scatter of white mist banks pooled in the
+    // hollows (the fireflies' day-shift mirror: seeded on the map seed with
+    // its own stream, hidden at night). The rest surface folds the water
+    // sheet in, so banks over lakes read as lake mist instead of sinking
+    // under the sheet; the closure reads live heights, so resnaps track.
+    // Fold the sheet in only while it renders (same condition as the
+    // water mesh): with water hidden there is no sheet to stay out of.
+    const fogSurface = (x: number, z: number): number => {
+      const g = groundY(x, z);
+      return optsRef.current.showWater && map.seaLevel > 0 ? Math.max(g, water.position.y) : g;
+    };
+    const dayFog = new DayFogFx(
+      scene,
+      placeDayFog(mulberry32(map.seed ^ DAY_FOG_SEED_XOR), worldW, worldD, DAY_FOG_COUNT, fogSurface),
+      fogSurface,
+    );
+    dayFog.setNight(options.nightMode);
     // Graduated collateral state: caller-owned core DamageField indexed by
     // feature id. Poses and fire visuals are transient views of this field,
     // so exaggeration re-snaps preserve burns instead of resurrecting them.
@@ -973,6 +991,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         movement.resnap();
         hq?.resnap();
         fireflies.resnap();
+        dayFog.resnap();
         tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
@@ -998,6 +1017,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       skyMat.uniforms.time!.value = t;
       fireflies.setNight(opt.nightMode);
       fireflies.update(t);
+      dayFog.setNight(opt.nightMode);
+      dayFog.update(t);
       // Mirror the roaming pools into the terrain shader (it ignores scene
       // lights): positions track the PointLights, each glow tracks its own
       // mote's blink, everything dies by day.
@@ -1236,6 +1257,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       combat.dispose();
       fire.dispose();
       fireflies.dispose();
+      dayFog.dispose();
       selectionRef.current?.([]);
       positionsRef.current?.([]);
       hqRef.current?.([]);
