@@ -946,11 +946,13 @@ export function flightStickChance(crossedCount: number, kind: UnitKind): number 
  * Restraint is the point: the step is small (`SIDESTEP_OFFSET`, a couple of
  * hull lengths), rare (`SIDESTEP_COOLDOWN` between steps, staggered per hull
  * so the squad never shuffles as one), and only ever taken for a strictly
- * better seat or a genuine flank — an open 1v1 lane holds forever. This is
- * the continuous twin of the forest-futility reposition (see
- * `FOREST_STICK_REPOSITION_HITS`): that one fires after consecutive stuck
- * rounds prove the lane blocked; this one keeps the gun off the blocked
- * lane (and off its mate's line) before the embers strand.
+ * better seat or a genuine flank — an open 1v1 lane reads null here. The
+ * sweep answers that null with a combat-strafe orbit instead of a hold
+ * (see `orbitStrafe`), so holders keep circling while this evaluator keeps
+ * judging seats. This is the continuous twin of the forest-futility
+ * reposition (see `FOREST_STICK_REPOSITION_HITS`): that one fires after
+ * consecutive stuck rounds prove the lane blocked; this one keeps the gun
+ * off the blocked lane (and off its mate's line) before the embers strand.
  */
 
 /** Lateral sidestep distance off the firing line, world units. */
@@ -1087,6 +1089,118 @@ function defaultSidestepSide(opts?: SidestepOptions): number {
   const a = typeof rawA === "number" && Number.isInteger(rawA) && rawA >= 0 ? rawA : 0;
   const b = typeof rawB === "number" && Number.isInteger(rawB) && rawB >= 0 ? rawB : 0;
   return (a * 31 + b * 17) % 2 === 0 ? 1 : -1;
+}
+
+/**
+ * Seconds between combat-strafe orbit steps on one hull. Short on purpose:
+ * a holder walks its 48-unit step in well under a second at combat speeds,
+ * so this cadence keeps most of an engaged line visibly footworking —
+ * near-continuous for slow hulls, every other breath for fast ones — while
+ * the per-hull stagger keeps the squad from stepping as one. The
+ * seat-improvement shuffle (`SIDESTEP_COOLDOWN`) stays rare: strict
+ * improvements answer on their own slower clock on top of the orbit.
+ */
+export const ORBIT_STRAFE_COOLDOWN = 2.5;
+
+export interface OrbitStrafeOptions {
+  /** Lateral step distance (defaults to `SIDESTEP_OFFSET`). */
+  offset?: number;
+  /**
+   * Orbit direction override: +1 steps to the plus side of the firing line,
+   * -1 to the minus side. Defaults to the deterministic index hash (see
+   * `defaultSidestepSide`), so each hull circles its target a consistent
+   * way without any rng. Non-finite values read as the default.
+   */
+  direction?: number;
+  /** Roster indices, fixing the default orbit direction (no rng). */
+  selfIndex?: number;
+  targetIndex?: number;
+  /**
+   * Optional terrain probe (world XZ → blocked): candidates the drive could
+   * never reach (inside a cliff, across open water) lose to the mirror side
+   * like bad-wood candidates do, so the sweep never pins a hull grinding
+   * into a wall it cannot climb. The caller owns the surface (the
+   * renderer's `stepBlocked` probe); absent, both candidates read walkable.
+   */
+  blocked?: (x: number, z: number) => boolean;
+}
+
+/**
+ * Combat-strafe orbit: the next footwork point for a gun holding at
+ * stand-off that has no seat improvement worth taking (`firingSidestep`
+ * returned null) — one lateral step circling the target instead of standing
+ * statue-still while the turret works.
+ *
+ * Nanolathe parallel (adapted, deterministic): retail TA `Attack_Chase`
+ * phase 2 never holds — its reachable cycle is close-to-range, then
+ * *repeated strafes* (random points on the engagement-distance circle
+ * around the target), occasionally charging and re-establishing range
+ * (`research/retail-executable-spec/04-units-orders-scripts-and-movement.md`
+ * [R-ORD-01 §3]). This is the repeated-strafe arm only: each step moves the
+ * hull one offset laterally at roughly stand-off distance, and the sweep
+ * re-arms it every `ORBIT_STRAFE_COOLDOWN`, so an even duel reads as a
+ * slow circling brawl instead of two statues trading shells. The
+ * charge/re-establish arms stay out — a substate machine on the threat
+ * memory is a bigger change than the stall needs.
+ *
+ * Restraint survives in miniature: the step never worsens the firing lane
+ * (a candidate crossing more crowns than the current seat loses to the
+ * mirror side, and both-worse holds — a bad strafe is worse than no
+ * strafe), and the sweep still refuses outnumbered hulls (waiting for
+ * backup), closing hulls, advances, and assaults. An optional `blocked`
+ * probe folds terrain into the same preferred-then-mirror fallback, so a
+ * wall on the orbit side mirrors the step instead of pinning the hull.
+ * Pure; exact ties break on the roster indices.
+ */
+export function orbitStrafe(
+  self: CombatVec3,
+  target: CombatVec3,
+  trees: readonly TreeStand[],
+  opts?: OrbitStrafeOptions,
+): { x: number; z: number } | null {
+  if (
+    !self || !target ||
+    !Number.isFinite(self.x) || !Number.isFinite(self.y) || !Number.isFinite(self.z) ||
+    !Number.isFinite(target.x) || !Number.isFinite(target.y) || !Number.isFinite(target.z)
+  ) {
+    return null;
+  }
+  const dx = target.x - self.x;
+  const dz = target.z - self.z;
+  const dist = Math.hypot(dx, dz);
+  if (!(dist > 1e-6)) return null;
+  const offset = opts?.offset ?? SIDESTEP_OFFSET;
+  if (!(offset > 0)) return null;
+  // Perpendicular of the firing line: +1 reads 90° left of self→target,
+  // the same frame `firingSidestep` scores in.
+  const px = -dz / dist;
+  const pz = dx / dist;
+  const plus = { x: self.x + px * offset, z: self.z + pz * offset };
+  const minus = { x: self.x - px * offset, z: self.z - pz * offset };
+  const dir = opts?.direction;
+  const preferPlus =
+    dir === 1 || dir === -1
+      ? dir > 0
+      : defaultSidestepSide({ selfIndex: opts?.selfIndex, targetIndex: opts?.targetIndex }) > 0;
+  // Lane wood only (candidate lanes reuse the shooter's height, like the
+  // seat evaluator): a crowded seat never vetoes a strafe — the seat
+  // shuffle handles crowding on its own clock — but the orbit never steps
+  // onto a more-blocked lane.
+  const lane0 = treesOnSegment(self, target, trees).length;
+  const lanePlus = treesOnSegment({ x: plus.x, y: self.y, z: plus.z }, target, trees).length;
+  const laneMinus = treesOnSegment({ x: minus.x, y: self.y, z: minus.z }, target, trees).length;
+  const blocked = opts?.blocked;
+  // A candidate must keep the lane no worse AND stand on reachable ground;
+  // either veto falls through to the mirror side, then to the hold.
+  const ok = (c: { x: number; z: number }, lane: number): boolean =>
+    lane <= lane0 && !(blocked?.(c.x, c.z) ?? false);
+  const first = preferPlus ? plus : minus;
+  const firstLane = preferPlus ? lanePlus : laneMinus;
+  if (ok(first, firstLane)) return first;
+  const second = preferPlus ? minus : plus;
+  const secondLane = preferPlus ? laneMinus : lanePlus;
+  if (ok(second, secondLane)) return second;
+  return null;
 }
 
 /**

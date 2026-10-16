@@ -1267,7 +1267,7 @@ describe("UnitMovement firing footwork", () => {
     return { movement, units: group };
   }
 
-  it("flanks a mate stacked on the same target, then holds the opened angle", () => {
+  it("orbits from the first seconds, then flank steps open the stacked angle", () => {
     // Flash + stump (team 0) hold on a hammer (team 1) from ~26° apart —
     // stacked inside the flank angle, so the second gun opens away.
     const { movement } = makeDuelMovement(
@@ -1282,30 +1282,32 @@ describe("UnitMovement firing footwork", () => {
     movement.threatenUnit(0, 2, 200, 0);
     movement.threatenUnit(1, 2, 200, 0);
     movement.threatenUnit(2, 0, 0, 0);
-    // Nothing steps before the staggered cooldown (≈5.6 sim-seconds in for
-    // hull 1): the first seconds hold statue-still, exactly as before.
-    for (let n = 0; n < 300; n++) movement.update(1 / 60);
-    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
-    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
-    // Past the cooldown the stacked mate sidesteps to the far side of the
-    // line (away from hull 0 at z=0): +x/+z off its seat.
-    for (let n = 0; n < 120 && !movement.moverState(1)?.threat?.sidestep; n++) {
-      movement.update(1 / 60);
-    }
-    const spot = movement.moverState(1)?.threat?.sidestep;
-    expect(spot?.x).toBeCloseTo(21.47, 1);
-    expect(spot?.z).toBeCloseTo(142.93, 1);
-    // The shuffle walks through the drive and clears on arrival…
-    for (let n = 0; n < 300 && movement.moverState(1)?.threat?.sidestep; n++) {
-      movement.update(1 / 60);
-    }
-    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
-    expect(movement.moverState(1)!.z).toBeGreaterThan(125);
-    // …and with the angle opened past the stack gate, hull 0 never stepped:
-    // one flank was enough, no lockstep shuffle.
-    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
-    expect(Math.abs(movement.moverState(0)!.x)).toBeLessThan(1);
-    expect(Math.abs(movement.moverState(0)!.z)).toBeLessThan(1);
+    // Orbit clock runs ahead of the seat clock: hull 1 (orbit stagger
+    // ≈0.1 s) is already strafing after two seconds, while hull 0 (orbit
+    // stagger 2.5 s, seat stagger 7 s) still holds its seat.
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    const early0 = movement.moverState(0)!;
+    const early1 = movement.moverState(1)!;
+    expect(Math.hypot(early1.x - 0, early1.z - 100)).toBeGreaterThan(10);
+    expect(Math.abs(early0.x)).toBeLessThan(1);
+    expect(Math.abs(early0.z)).toBeLessThan(1);
+    // Past the seat clock the stacked mate flanks to the far side of the
+    // line while both keep orbiting: the pair opens well past the stack
+    // gate instead of shuffling once and freezing.
+    for (let n = 0; n < 480; n++) movement.update(1 / 60);
+    const a = movement.moverState(0)!;
+    const b = movement.moverState(1)!;
+    const c = movement.moverState(2)!;
+    const angleAt = (p: { x: number; z: number }): number => Math.atan2(p.x - c.x, p.z - c.z);
+    let sep = Math.abs(angleAt(a) - angleAt(b));
+    if (sep > Math.PI) sep = 2 * Math.PI - sep;
+    expect(sep).toBeGreaterThan(Math.PI / 4);
+    expect(Math.hypot(a.x - 0, a.z - 0)).toBeGreaterThan(40);
+    expect(Math.hypot(b.x - 0, b.z - 100)).toBeGreaterThan(40);
+    // The hammer faces 2v1 odds, so it waits for backup instead of
+    // strafing — outnumbered holders still hold.
+    expect(Math.abs(c.x - 200)).toBeLessThan(1);
+    expect(Math.abs(c.z - 0)).toBeLessThan(1);
     movement.dispose();
   });
 
@@ -1323,9 +1325,10 @@ describe("UnitMovement firing footwork", () => {
     );
     movement.threatenUnit(0, 1, 200, 0);
     movement.threatenUnit(1, 0, 0, 0);
-    // Hull 1 (stagger ≈1.4s) evaluates first on pristine geometry: the lane
-    // clips the crown, both laterals clear — the roster tie-break takes the
-    // minus side (z +48 off its seat).
+    // Hull 1 (orbit stagger ≈0.1s) strafes first on pristine geometry: the
+    // lane clips the crown and both laterals clear, so the orbit's
+    // roster-side pick lands on the same minus-side point (z +48 off its
+    // seat) the slower seat evaluator would have named.
     for (let n = 0; n < 600 && !movement.moverState(1)?.threat?.sidestep; n++) {
       movement.update(1 / 60);
     }
@@ -1339,7 +1342,7 @@ describe("UnitMovement firing footwork", () => {
     movement.dispose();
   });
 
-  it("holds an open 1v1 lane without ever stepping", () => {
+  it("strafes an open 1v1 lane instead of holding still", () => {
     const { movement } = makeDuelMovement(
       [
         { x: 0, z: 0 },
@@ -1350,15 +1353,95 @@ describe("UnitMovement firing footwork", () => {
     );
     movement.threatenUnit(0, 1, 200, 0);
     movement.threatenUnit(1, 0, 0, 0);
-    // Ten engaged seconds — past every stagger and cooldown: open lanes,
-    // no mates, nothing to gain, so both guns hold their seats exactly.
-    for (let n = 0; n < 600; n++) movement.update(1 / 60);
+    // Hull 1 (orbit stagger ≈0.1s) carries its first strafe half a second
+    // in, while hull 0 (orbit stagger 2.5s) still holds its seat.
+    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    expect(movement.moverState(1)?.threat?.sidestep).toBeDefined();
     expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
-    expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
-    expect(movement.moverState(0)!.x).toBeCloseTo(0, 9);
-    expect(movement.moverState(0)!.z).toBeCloseTo(0, 9);
-    expect(movement.moverState(1)!.x).toBeCloseTo(200, 9);
-    expect(movement.moverState(1)!.z).toBeCloseTo(0, 9);
+    expect(Math.abs(movement.moverState(0)!.x)).toBeLessThan(1);
+    expect(Math.abs(movement.moverState(0)!.z)).toBeLessThan(1);
+    // Ten engaged seconds: both guns circle instead of planting — still
+    // engaged (live memories), still at brawl distance, never statues.
+    for (let n = 0; n < 570; n++) movement.update(1 / 60);
+    const a = movement.moverState(0)!;
+    const b = movement.moverState(1)!;
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.hasThreat(1)).toBe(true);
+    expect(Math.hypot(a.x - 0, a.z - 0)).toBeGreaterThan(50);
+    expect(Math.hypot(b.x - 200, b.z - 0)).toBeGreaterThan(50);
+    expect(Math.hypot(b.x - a.x, b.z - a.z)).toBeGreaterThan(100);
+    expect(Math.hypot(b.x - a.x, b.z - a.z)).toBeLessThan(350);
+    movement.dispose();
+  });
+
+  it("replays an orbiting duel bit-identically", () => {
+    // The strafe carries no rng (index-hashed orbit sides, sim-clock
+    // cadence), so two identical runs land on identical hulls.
+    const run = (): { ax: number; az: number; bx: number; bz: number } => {
+      const { movement } = makeDuelMovement(
+        [
+          { x: 0, z: 0 },
+          { x: 200, z: 0 },
+        ],
+        [0, 1],
+        ["flash", "hammer"],
+      );
+      movement.threatenUnit(0, 1, 200, 0);
+      movement.threatenUnit(1, 0, 0, 0);
+      for (let n = 0; n < 600; n++) movement.update(1 / 60);
+      const a = movement.moverState(0)!;
+      const b = movement.moverState(1)!;
+      movement.dispose();
+      return { ax: a.x, az: a.z, bx: b.x, bz: b.z };
+    };
+    const first = run();
+    const second = run();
+    expect(second.ax).toBe(first.ax);
+    expect(second.az).toBe(first.az);
+    expect(second.bx).toBe(first.bx);
+    expect(second.bz).toBe(first.bz);
+    // Sanity: the replayed duel actually moved (not two identical statues).
+    expect(Math.hypot(first.ax - 0, first.az - 0)).toBeGreaterThan(50);
+  });
+
+  it("holds an outnumbered loser statue-still while the winners orbit", () => {
+    // One flash facing three: the loser waits for backup instead of
+    // strafing, while the winning side circles it.
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+        { x: 200, z: 60 },
+        { x: 200, z: -60 },
+      ],
+      [0, 1, 1, 1],
+      ["flash", "flash", "flash", "flash"],
+    );
+    movement.threatenUnit(0, 1, 200, 0);
+    movement.threatenUnit(1, 0, 0, 0);
+    movement.threatenUnit(2, 0, 0, 0);
+    movement.threatenUnit(3, 0, 0, 0);
+    let victimDrift = 0;
+    let victimStepped = false;
+    for (let n = 0; n < 600; n++) {
+      movement.update(1 / 60);
+      const victim = movement.moverState(0)!;
+      victimDrift = Math.max(victimDrift, Math.hypot(victim.x - 0, victim.z - 0));
+      if (victim.threat?.sidestep) victimStepped = true;
+    }
+    // Engaged the whole time (live memory) yet never a single step.
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(victimStepped).toBe(false);
+    expect(victimDrift).toBeLessThan(1e-9);
+    // Every winner strafes around the loser.
+    for (const [i, sx, sz] of [
+      [1, 200, 0],
+      [2, 200, 60],
+      [3, 200, -60],
+    ] as const) {
+      const winner = movement.moverState(i)!;
+      expect(Math.hypot(winner.x - sx, winner.z - sz)).toBeGreaterThan(30);
+    }
     movement.dispose();
   });
 });

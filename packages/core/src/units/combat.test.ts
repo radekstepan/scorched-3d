@@ -29,6 +29,7 @@ import {
   muzzleForward,
   muzzleHeight,
   nextShotDelay,
+  orbitStrafe,
   pickHostilePair,
   pickSkirmishPair,
   pointInTree,
@@ -852,5 +853,98 @@ describe("firingSidestep", () => {
     expect(firingSidestep(self, self, [])).toBeNull();
     expect(firingSidestep(self, target, [], { offset: 0 })).toBeNull();
     expect(firingSidestep(self, target, [], { offset: -5 })).toBeNull();
+  });
+});
+
+describe("orbitStrafe", () => {
+  const tree = (x: number, z: number, groundY = 8): TreeStand => ({ x, z, groundY, standing: true });
+  // Flat 400-unit firing line at y=30; candidates sit ±48 off it.
+  const self = { x: 0, y: 30, z: 0 };
+  const target = { x: 400, y: 30, z: 0 };
+
+  it("strafes laterally on an open lane instead of holding", () => {
+    // Open unshared lane reads null from the seat evaluator — the orbit
+    // answers with a lateral step, so holders keep circling.
+    const spot = orbitStrafe(self, target, [], { selfIndex: 0, targetIndex: 1 })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+    // Deterministic: same pair, same point, every call.
+    expect(orbitStrafe(self, target, [], { selfIndex: 0, targetIndex: 1 })).toEqual(spot);
+    // The mirror indices circle the mirror way (hash (31+17)%2 = 0).
+    const mirror = orbitStrafe(self, target, [], { selfIndex: 1, targetIndex: 1 })!;
+    expect(mirror.x).toBeCloseTo(0, 9);
+    expect(mirror.z).toBeCloseTo(SIDESTEP_OFFSET, 9);
+  });
+
+  it("honors an explicit direction override and a custom offset", () => {
+    const plus = orbitStrafe(self, target, [], { selfIndex: 0, targetIndex: 1, direction: 1 })!;
+    expect(plus.x).toBeCloseTo(0, 9);
+    expect(plus.z).toBeCloseTo(SIDESTEP_OFFSET, 9);
+    const minus = orbitStrafe(self, target, [], { selfIndex: 1, targetIndex: 1, direction: -1 })!;
+    expect(minus.x).toBeCloseTo(0, 9);
+    expect(minus.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+    const wide = orbitStrafe(self, target, [], { selfIndex: 1, targetIndex: 1, offset: 100 })!;
+    expect(wide.x).toBeCloseTo(0, 9);
+    expect(wide.z).toBeCloseTo(100, 9);
+  });
+
+  it("falls through to the mirror side when the orbit side worsens the lane", () => {
+    // A crown centered on the plus lateral (midpoint (200,30,24)): the
+    // current lane stays clear, so the plus-preferring hull mirrors.
+    const spot = orbitStrafe(self, target, [tree(200, 24, 6)], {
+      selfIndex: 1,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+  });
+
+  it("holds when both laterals cross more wood than the seat", () => {
+    // Crowns on both laterals, current lane clear: a bad strafe loses to
+    // the hold, exactly like a bad flank.
+    expect(
+      orbitStrafe(self, target, [tree(200, 24, 6), tree(200, -24, 6)], {
+        selfIndex: 1,
+        targetIndex: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores a crowded seat (crowding is the seat shuffle's job)", () => {
+    // A crown 18 behind the muzzle crowds the seat but touches no lane:
+    // the orbit steps anyway — the seat evaluator handles the crowd on
+    // its own slower clock.
+    const spot = orbitStrafe(self, target, [tree(-18, 0, 0)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+  });
+
+  it("mirrors around terrain the probe refuses, else holds", () => {
+    // A wall across the plus side mirrors the plus-preferring hull.
+    const mirrored = orbitStrafe(self, target, [], {
+      selfIndex: 1,
+      targetIndex: 1,
+      blocked: (_x, z) => z > 0,
+    })!;
+    expect(mirrored.x).toBeCloseTo(0, 9);
+    expect(mirrored.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+    // Walls on both sides hold — the sweep retries next tick.
+    expect(
+      orbitStrafe(self, target, [], {
+        selfIndex: 1,
+        targetIndex: 1,
+        blocked: () => true,
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null for degenerate inputs", () => {
+    expect(orbitStrafe(self, self, [])).toBeNull();
+    expect(orbitStrafe(self, target, [], { offset: 0 })).toBeNull();
+    expect(orbitStrafe(self, target, [], { offset: -5 })).toBeNull();
+    expect(orbitStrafe({ x: NaN, y: 30, z: 0 }, target, [])).toBeNull();
   });
 });

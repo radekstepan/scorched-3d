@@ -18,13 +18,16 @@ import {
   isScoutKind,
   muzzleHeight,
   notifyThreat,
+  ORBIT_STRAFE_COOLDOWN,
   orderMover,
+  orbitStrafe,
   outnumbered,
   pursueStandOff,
   seekEngage,
   seekStructure,
   shouldHold,
   SIDESTEP_COOLDOWN,
+  stepBlocked,
   slewTilt,
   snappedFormationTargets,
   squadFocus,
@@ -139,6 +142,15 @@ export class UnitMovement {
    * only by `update`, so sidestep cadence replays deterministically.
    */
   private lastSidestepAt: number[] = [];
+  /**
+   * Last combat-strafe orbit step per hull, sim seconds (see
+   * `maybeSidestep`): a holder with no seat improvement worth taking
+   * circles its target at most once per `ORBIT_STRAFE_COOLDOWN`, staggered
+   * by index on its own faster clock so seat shuffles and orbit steps never
+   * gate each other. Sparse like the sidestep clock, and replayed the same
+   * way.
+   */
+  private lastOrbitAt: number[] = [];
 
   constructor(
     units: THREE.Group,
@@ -513,20 +525,27 @@ export class UnitMovement {
   }
 
   /**
-   * Attach a firing-position sidestep to a holder's live duel memory (see
-   * core `firingSidestep` + `ThreatMemory.sidestep`): a hull already inside
-   * stand-off of a live enemy shuffles one short lateral step toward clearer
-   * ground or a flanking angle instead of standing statue-still while its
-   * gun works. Refuses exactly like the rest of the sweep — ordered/holding
-   * hulls (player orders win), wrecks, position memories (advances and HQ
-   * assaults steer by commitment, not footwork), closing hulls (already
-   * moving, and a mid-close step is stale by arrival), outnumbered hulls
-   * (waiting for backup, not fidgeting), hulls already stepping, and hulls
-   * inside `SIDESTEP_COOLDOWN` of their last shuffle (staggered by index so
-   * the squad never moves as one). The cooldown burns only when a step
-   * attaches — a holder with nothing to gain re-evaluates next tick, so a
-   * falling tree or an arriving mate answers immediately. Pure per tick:
-   * returns the mover with the step attached, or untouched.
+   * Attach firing-position footwork to a holder's live duel memory (see core
+   * `firingSidestep` + `orbitStrafe` + `ThreatMemory.sidestep`): a hull
+   * already inside stand-off of a live enemy shuffles one short lateral
+   * step — toward clearer ground or a flanking angle when the seat
+   * evaluator names one, else one combat-strafe orbit step circling the
+   * target — instead of standing statue-still while its gun works. Even
+   * duels on open ground therefore read as slow circling brawls, never
+   * lines of statues; the turret tracks the threat independently while the
+   * hull shuttles, so the gun never leaves the target mid-step. Refuses
+   * exactly like the rest of the sweep — ordered/holding hulls (player
+   * orders win), wrecks, position memories (advances and HQ assaults steer
+   * by commitment, not footwork), closing hulls (already moving, and a
+   * mid-close step is stale by arrival), outnumbered hulls (waiting for
+   * backup, not fidgeting), and hulls already stepping. Seat shuffles run
+   * on the rare `SIDESTEP_COOLDOWN` clock, orbit steps on the faster
+   * `ORBIT_STRAFE_COOLDOWN` clock (each staggered by index so the squad
+   * never moves as one, and neither gates the other), and each clock burns
+   * only when its step attaches — a holder with nothing to gain
+   * re-evaluates next tick, so a falling tree or an arriving mate answers
+   * immediately. Pure per tick: returns the mover with the step attached,
+   * or untouched.
    */
   private maybeSidestep(
     mover: Mover,
@@ -558,37 +577,60 @@ export class UnitMovement {
       return mover;
     }
     if (outnumbered(self, me, foe, foes, teams, alive, hp ?? undefined)) return mover;
-    const last = this.lastSidestepAt[self] ?? -((self * 1.37) % SIDESTEP_COOLDOWN);
-    if (this.elapsed - last < SIDESTEP_COOLDOWN) return mover;
-    // Teammates engaging the same target (live grudges, pre-tick snapshot —
-    // the same discipline as the squad focus): stacking on one's line is
-    // what a flank step opens away from.
-    const allies: { x: number; z: number }[] = [];
-    for (let j = 0; j < threats.length; j++) {
-      if (j === self || !alive[j]) continue;
-      if (teams[j] === undefined || teams[j] !== teams[self]) continue;
-      if (threats[j]?.attacker !== target) continue;
-      const at = foes[j];
-      if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) allies.push({ x: at.x, z: at.z });
-    }
     const groundY = this.env.groundY;
-    const spot = firingSidestep(
-      {
-        x: me.x,
-        y: groundY(me.x, me.z) + muzzleHeight(this.kinds[self] ?? "flash"),
-        z: me.z,
-      },
-      {
-        x: foe.x,
-        y: groundY(foe.x, foe.z) + muzzleHeight(this.kinds[target] ?? "flash"),
-        z: foe.z,
-      },
-      stands,
-      { allies, selfIndex: self, targetIndex: target },
-    );
-    if (!spot) return mover;
-    this.lastSidestepAt[self] = this.elapsed;
-    return { ...mover, threat: { ...memory, sidestep: spot } };
+    const shooter = {
+      x: me.x,
+      y: groundY(me.x, me.z) + muzzleHeight(this.kinds[self] ?? "flash"),
+      z: me.z,
+    };
+    const victim = {
+      x: foe.x,
+      y: groundY(foe.x, foe.z) + muzzleHeight(this.kinds[target] ?? "flash"),
+      z: foe.z,
+    };
+    // Seat improvement first, on its own rare clock: strictly clearer
+    // ground (or a genuine flank) beats a routine orbit step, and the
+    // evaluator re-runs every tick the clock allows until one attaches.
+    const last = this.lastSidestepAt[self] ?? -((self * 1.37) % SIDESTEP_COOLDOWN);
+    if (this.elapsed - last >= SIDESTEP_COOLDOWN) {
+      // Teammates engaging the same target (live grudges, pre-tick snapshot —
+      // the same discipline as the squad focus): stacking on one's line is
+      // what a flank step opens away from.
+      const allies: { x: number; z: number }[] = [];
+      for (let j = 0; j < threats.length; j++) {
+        if (j === self || !alive[j]) continue;
+        if (teams[j] === undefined || teams[j] !== teams[self]) continue;
+        if (threats[j]?.attacker !== target) continue;
+        const at = foes[j];
+        if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) allies.push({ x: at.x, z: at.z });
+      }
+      const spot = firingSidestep(shooter, victim, stands, {
+        allies,
+        selfIndex: self,
+        targetIndex: target,
+      });
+      if (spot) {
+        this.lastSidestepAt[self] = this.elapsed;
+        return { ...mover, threat: { ...memory, sidestep: spot } };
+      }
+    }
+    // No seat worth taking: orbit instead of holding. The strafe runs on
+    // its own faster clock (staggered off-phase from the seat clock so the
+    // two never lockstep), and the drive-terrain probe vetoes candidates
+    // the hull could never reach — the judge mirrors the step around a
+    // wall, and holds only when both sides are unreachable.
+    const lastOrbit = this.lastOrbitAt[self] ?? -((self * 2.39) % ORBIT_STRAFE_COOLDOWN);
+    if (this.elapsed - lastOrbit < ORBIT_STRAFE_COOLDOWN) return mover;
+    const field = this.field;
+    const kind = this.kinds[self] ?? "flash";
+    const orbit = orbitStrafe(shooter, victim, stands, {
+      selfIndex: self,
+      targetIndex: target,
+      ...(field ? { blocked: (x: number, z: number) => stepBlocked(field, me.x, me.z, x, z, kind) } : {}),
+    });
+    if (!orbit) return mover;
+    this.lastOrbitAt[self] = this.elapsed;
+    return { ...mover, threat: { ...memory, sidestep: orbit } };
   }
 
   /**
