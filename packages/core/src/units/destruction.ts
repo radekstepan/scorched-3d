@@ -51,17 +51,18 @@ export const BLAST_RADIUS: Record<UnitKind, number> = {
   stump: 44,
   hammer: 64,
   commander: 48,
-  // Infantry popgun: the smallest splash on the field.
-  peewee: 28,
+  // Infantry automatic rifle: the smallest splash on the field — a rifle
+  // crack, not a cannon blast.
+  peewee: 20,
 };
 
 /**
  * Peewee grenade blast radius: the close-range lob hits harder than the
- * peashooter (see `PEEWEE_GRENADE_UNIT_DAMAGE`) but stays under the Flash's
- * 36, so the "peewee bolt is the smallest splash" doctrine still holds for
- * primary guns and no light infantry out-splashes a tank.
+ * rifle bullet (see `PEEWEE_GRENADE_UNIT_DAMAGE`) but stays under the
+ * Flash's 36, so the "peewee bolt is the smallest splash" doctrine still
+ * holds for primary guns and no light infantry out-splashes a tank.
  */
-export const PEEWEE_GRENADE_BLAST_RADIUS = 32;
+export const PEEWEE_GRENADE_BLAST_RADIUS = 24;
 
 /** Blast radius for a shot: grenades use the lob radius, everything else the kind table. */
 export function blastRadiusFor(kind: UnitKind, attack: AttackMode = "round"): number {
@@ -81,20 +82,21 @@ export function scorchForKind(kind: UnitKind): { radius: number; intensity: numb
     case "flash":
       return { radius: 18, intensity: 0.45 };
     case "peewee":
-      return { radius: 14, intensity: 0.4 };
+      return { radius: 10, intensity: 0.36 };
   }
 }
 
 /**
- * Scorch decal for a shot: grenade lobs scar slightly bigger than peashooter
- * bolts (16 vs 14) but stay under the Flash's 18, matching the blast-radius
- * doctrine above. Every other attack reads its kind table unchanged.
+ * Scorch decal for a shot: grenade lobs scar slightly bigger than rifle
+ * bullets (12 vs 10) but stay under the Flash's 18, matching the
+ * blast-radius doctrine above. Every other attack reads its kind table
+ * unchanged.
  */
 export function scorchForAttack(
   kind: UnitKind,
   attack: AttackMode = "round",
 ): { radius: number; intensity: number } {
-  if (attack === "grenade" && kind === "peewee") return { radius: 16, intensity: 0.42 };
+  if (attack === "grenade" && kind === "peewee") return { radius: 12, intensity: 0.38 };
   return scorchForKind(kind);
 }
 

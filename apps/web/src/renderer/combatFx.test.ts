@@ -25,6 +25,9 @@ import {
   CombatFx,
   impactPoint,
   muzzlePoint,
+  PEEWEE_BLAST_SCALE,
+  PEEWEE_BULLET_SCALE,
+  PEEWEE_EXPLOSION_MAX_AGE,
   projectileGlowFalloff,
   projectileGlowRadius,
   projectileTailLength,
@@ -405,6 +408,63 @@ describe("CombatFx", () => {
     }
     expect(fired).toBe(true);
     expect(fx.grenadeCount).toBe(0);
+    fx.dispose();
+  });
+
+  it("fires small rifle bullets that crack instead of booming", () => {
+    // Brawling duel at 400: peewee bolts leave shrunken and their impacts
+    // stage a scaled-down, shorter blast stack.
+    const scene = new THREE.Scene();
+    const duel = makePeeweeDuel(400);
+    const fx = new CombatFx(scene, duel, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 600 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    expect(fx.shotCount).toBeGreaterThan(0);
+    expect(fx.shotScaleAt(0)).toBe(PEEWEE_BULLET_SCALE);
+    expect(fx.shotScaleAt(99)).toBeNull();
+    // Fly the bolt home: the impact cracks small and stages short.
+    let burst = false;
+    for (let n = 0; n < 600 && !burst; n++) {
+      fx.update(1 / 60);
+      burst = fx.explosionCount > 0;
+    }
+    expect(burst).toBe(true);
+    expect(fx.explosionScaleAt(0)).toBe(PEEWEE_BLAST_SCALE);
+    expect(fx.explosionMaxAgeAt(0)).toBe(PEEWEE_EXPLOSION_MAX_AGE);
+    expect(fx.explosionScaleAt(99)).toBeNull();
+    expect(fx.explosionMaxAgeAt(99)).toBeNull();
+    fx.dispose();
+  });
+
+  it("stages full-size bullets and blasts for tank guns", () => {
+    // Tank duel: no shrink anywhere — heads fly at scale 1 and blasts stage
+    // the full stack, longer than the peewee crack.
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21));
+    let fired = false;
+    for (let n = 0; n < 1200 && !fired; n++) {
+      const before = fx.totalFired;
+      fx.update(1 / 60);
+      fired = fx.totalFired > before;
+    }
+    expect(fired).toBe(true);
+    for (let i = 0; i < fx.shotCount; i++) expect(fx.shotScaleAt(i)).toBe(1);
+    let burst = false;
+    for (let n = 0; n < 1200 && !burst; n++) {
+      fx.update(1 / 60);
+      burst = fx.explosionCount > 0;
+    }
+    expect(burst).toBe(true);
+    for (let i = 0; i < fx.explosionCount; i++) {
+      expect(fx.explosionScaleAt(i)).toBe(1);
+      expect(fx.explosionMaxAgeAt(i)).toBeGreaterThan(PEEWEE_EXPLOSION_MAX_AGE);
+    }
     fx.dispose();
   });
 

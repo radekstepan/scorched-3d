@@ -50,7 +50,7 @@ export function hqSpawnStrength(kind: UnitKind): number {
 /**
  * Spawn weight of a kind: inverse strength against the weakest roster
  * member, so the peewee reads 1 and everything stronger reads a fraction
- * (flash ≈ 0.58, stump ≈ 0.32, hammer ≈ 0.12) — weaker units come out more
+ * (flash ≈ 0.28, stump ≈ 0.15, hammer ≈ 0.06) — weaker units come out more
  * often. Unknown kinds (commanders) weigh 0: they never spawn.
  */
 export function spawnWeightFor(kind: UnitKind): number {
@@ -84,7 +84,7 @@ export const HQ_SPAWN_MAX_INTERVAL = 35;
 /**
  * Seconds to build one `kind`: linear in strength from the weakest roster
  * member (15 s) to the strongest (35 s), so stronger units take more time to
- * make (peewee 15, flash ≈ 17, stump ≈ 21, hammer 35 — weighted mean ≈ 17.5 s,
+ * make (peewee 15, flash ≈ 18, stump ≈ 22, hammer 35 — weighted mean ≈ 17 s,
  * twice the legacy cadence so reinforcements join the fight sooner).
  * Unknown kinds fall back to `HQ_SPAWN_INTERVAL`.
  */
@@ -490,16 +490,16 @@ export const HQ_HIT_DAMAGE: Record<UnitKind, number> = {
   // Artillery remains the wall-breaker, but one shell no longer decides it.
   hammer: 0.08,
   commander: 0.05,
-  // Infantry popgun: the lightest chip on the field.
-  peewee: 0.025,
+  // Infantry automatic rifle: the lightest chip on the field.
+  peewee: 0.015,
 };
 
 /**
- * Point-blank HQ damage of one landed peewee grenade: double the peashooter
- * chip, matching the hull-damage doubling above, still the lightest
- * structure hit after the bolt itself.
+ * Point-blank HQ damage of one landed peewee grenade: double the rifle
+ * chip, matching the hull-damage doubling above — at most a light tank
+ * chip, never a wall-breaker.
  */
-export const PEEWEE_GRENADE_HQ_DAMAGE = 0.05;
+export const PEEWEE_GRENADE_HQ_DAMAGE = 0.03;
 
 /** Point-blank HQ damage for a shot: grenade lobs read their lob table. */
 export function hqHitDamage(kind: UnitKind, attack: AttackMode = "round"): number {

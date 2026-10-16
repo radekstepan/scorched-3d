@@ -190,6 +190,12 @@ interface Explosion {
   maxAge: number;
   /** Ground-seated glow radius (kind scorch radius), for tests. */
   glowRadius: number;
+  /**
+   * Visual scale of the blast stack (flash/fire/smoke/sparks): 1 for every
+   * gun except the peewee's automatic rifle (`PEEWEE_BLAST_SCALE`), which
+   * cracks instead of booming. Epic bursts always stage at full scale.
+   */
+  scale: number;
 }
 
 /**
@@ -443,8 +449,24 @@ export const PROJECTILE_TAIL_MAX = 90;
 /** Tail opacity band (additive over the head's opaque 1.0). */
 export const PROJECTILE_TAIL_OPACITY_MIN = 0.18;
 export const PROJECTILE_TAIL_OPACITY_MAX = 0.42;
-/** Reference speed for full tail opacity: the fastest muzzle velocity (flash bolt). */
+/** Reference speed for full tail opacity: the fastest muzzle velocity (flash/peewee bolts). */
 export const PROJECTILE_TAIL_REF_SPEED = 1300;
+
+/**
+ * Peewee automatic-rifle read: the infantry gun fires small fast bullets,
+ * not cannon shells, and its impacts crack instead of booming. Both scales
+ * shrink the shared projectile geos (bolt head + grenade ball, tails ride
+ * along as children) and the layered blast stack (flash shell, fireball,
+ * smoke, sparks, light kick); the ground ring/glow already size from the
+ * core scorch radius, which is the smallest on the field for the peewee.
+ * Epic death bursts always stage full-size regardless of kind.
+ */
+/** Head-mesh scale for peewee-fired projectiles (bolts and grenade lobs). */
+export const PEEWEE_BULLET_SCALE = 0.55;
+/** Blast-stack visual scale for peewee-fired (non-epic) explosions. */
+export const PEEWEE_BLAST_SCALE = 0.55;
+/** Peewee-fired blast staging, seconds: a short crack, not a cannon hang. */
+export const PEEWEE_EXPLOSION_MAX_AGE = 0.7;
 
 /** Tail stretch for an instantaneous `speed` (world units/s), clamped. */
 export function projectileTailLength(speed: number): number {
@@ -868,6 +890,34 @@ export class CombatFx {
     const shot = this.shots[i];
     if (!shot) return null;
     return { length: shot.tail.scale.z, opacity: shot.tailMat.opacity };
+  }
+
+  /**
+   * Head-mesh scale of live shot `i` (null when absent), for tests: 1 for
+   * every gun except the peewee's rifle (`PEEWEE_BULLET_SCALE`).
+   */
+  shotScaleAt(i: number): number | null {
+    const shot = this.shots[i];
+    if (!shot) return null;
+    return shot.mesh.scale.x;
+  }
+
+  /**
+   * Blast-stack visual scale of live explosion `i` (null when absent), for
+   * tests: `PEEWEE_BLAST_SCALE` for peewee-fired cracks, 1 otherwise (epic
+   * bursts always stage full-size).
+   */
+  explosionScaleAt(i: number): number | null {
+    const ex = this.explosions[i];
+    if (!ex) return null;
+    return ex.scale;
+  }
+
+  /** Staging duration of live explosion `i` (null when absent), for tests. */
+  explosionMaxAgeAt(i: number): number | null {
+    const ex = this.explosions[i];
+    if (!ex) return null;
+    return ex.maxAge;
   }
 
   /** Current aim pose of a unit (hull + turret-relative yaws), for tests. */
@@ -2237,6 +2287,9 @@ export class CombatFx {
     );
     mesh.position.copy(start);
     mesh.frustumCulled = false;
+    // The peewee's rifle fires small bullets: shrink the shared head geo
+    // (the warp tail rides along as a child, so the streak shrinks too).
+    if (kind === "peewee") mesh.scale.setScalar(PEEWEE_BULLET_SCALE);
     // Warp tail: a tapered additive cone in the weapon tint, parented to
     // the head so it trails the flight line from the first tick (posed
     // from the muzzle speed here, re-posed from the instantaneous speed
@@ -2270,8 +2323,8 @@ export class CombatFx {
     this.lastKind = kind;
     if (lobGrenade) this.lobs += 1;
 
-    this.spawnMuzzle(start, roundColor, roundFlash);
-    this.kickLight(start, roundColor);
+    this.spawnMuzzle(start, roundColor, roundFlash, kind === "peewee" ? PEEWEE_BULLET_SCALE : 1);
+    this.kickLight(start, roundColor, kind === "peewee" ? 2600 * PEEWEE_BULLET_SCALE : 2600);
     this.kickRecoil(attackerIdx, attacker, barrelDir);
     return true;
   }
@@ -2347,9 +2400,9 @@ export class CombatFx {
    * dirt alike. The pooled point-light kick (see call site) does the actual
    * illumination of whatever is nearby — units or environment.
    */
-  private spawnMuzzle(at: THREE.Vector3, color: number, life: number): void {
-    this.spawnFlash(at, 0xfff3d6, life, 0.8, 1.4, 1);
-    this.spawnFlash(at, color, life * 1.4, HALO_SCALE, HALO_GROWTH, HALO_PEAK);
+  private spawnMuzzle(at: THREE.Vector3, color: number, life: number, scale = 1): void {
+    this.spawnFlash(at, 0xfff3d6, life, 0.8 * scale, 1.4 * scale, 1);
+    this.spawnFlash(at, color, life * 1.4, HALO_SCALE * scale, HALO_GROWTH * scale, HALO_PEAK);
   }
 
   private kickLight(at: THREE.Vector3, color: number, peak = 2600): void {
@@ -2421,6 +2474,8 @@ export class CombatFx {
     const radiusScale = epic ? EPIC_RADIUS_SCALE : 1;
     const puffCount = epic ? EPIC_SMOKE_PUFFS : SMOKE_PER_EXPLOSION;
     const sparkCount = epic ? EPIC_SPARKS : SPARKS_PER_EXPLOSION;
+    // The peewee's rifle cracks: a scaled-down stack with a shorter staging.
+    const blastScale = !epic && kind === "peewee" ? PEEWEE_BLAST_SCALE : 1;
 
     const flashMat = new THREE.MeshBasicMaterial({
       color,
@@ -2457,9 +2512,9 @@ export class CombatFx {
     for (let i = 0; i < puffCount; i++) {
       const puff = new THREE.Mesh(this.smokeGeo, smokeMat);
       const theta = this.rng() * Math.PI * 2;
-      const r = 4 + this.rng() * 10;
-      puff.position.set(Math.cos(theta) * r, this.rng() * 6, Math.sin(theta) * r);
-      puff.scale.setScalar(0.5 + this.rng() * 0.4);
+      const r = (4 + this.rng() * 10) * blastScale;
+      puff.position.set(Math.cos(theta) * r, this.rng() * 6 * blastScale, Math.sin(theta) * r);
+      puff.scale.setScalar((0.5 + this.rng() * 0.4) * blastScale);
       group.add(puff);
       smokes.push(puff);
       // Smoke climbs and drifts downhill with the wash (fixed bias, no extra
@@ -2467,10 +2522,10 @@ export class CombatFx {
       // the uphill slope).
       const lean = wash ? wash.skew * 30 : 0;
       smokeVel[i * 3] =
-        Math.cos(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sx * lean : 0);
-      smokeVel[i * 3 + 1] = 26 + this.rng() * 22;
+        (Math.cos(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sx * lean : 0)) * blastScale;
+      smokeVel[i * 3 + 1] = (26 + this.rng() * 22) * blastScale;
       smokeVel[i * 3 + 2] =
-        Math.sin(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sz * lean : 0);
+        (Math.sin(theta + Math.PI / 2) * (4 + this.rng() * 8) + (wash ? wash.sz * lean : 0)) * blastScale;
     }
 
     // Shockwave ring + lingering glow: ground-seated so the blast footprint
@@ -2514,10 +2569,10 @@ export class CombatFx {
     for (let i = 0; i < sparkCount; i++) {
       const theta = this.rng() * Math.PI * 2;
       const up = 0.4 + this.rng() * 1.2;
-      const speed = 60 + this.rng() * 160;
-      velocities[i * 3] = Math.cos(theta) * speed + (wash ? wash.sx * ejecta : 0);
+      const speed = (60 + this.rng() * 160) * blastScale;
+      velocities[i * 3] = Math.cos(theta) * speed + (wash ? wash.sx * ejecta * blastScale : 0);
       velocities[i * 3 + 1] = up * speed;
-      velocities[i * 3 + 2] = Math.sin(theta) * speed + (wash ? wash.sz * ejecta : 0);
+      velocities[i * 3 + 2] = Math.sin(theta) * speed + (wash ? wash.sz * ejecta * blastScale : 0);
     }
     const sparkGeo = new THREE.BufferGeometry();
     sparkGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -2554,10 +2609,11 @@ export class CombatFx {
       sparks: sparkCount,
       epic,
       age: 0,
-      maxAge: epic ? EPIC_MAX_AGE : EXPLOSION_MAX_AGE,
+      maxAge: epic ? EPIC_MAX_AGE : blastScale < 1 ? PEEWEE_EXPLOSION_MAX_AGE : EXPLOSION_MAX_AGE,
       glowRadius: shape.radius * radiusScale,
+      scale: blastScale,
     });
-    this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600);
+    this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600 * blastScale);
     this.scarGround(at, kind, slope ?? undefined, attack);
     this.damageUnits(at, kind, slope, shooter, hostile, attack);
     // Structures share every blast: an HQ near the impact takes honest
@@ -2864,7 +2920,7 @@ export class CombatFx {
       const ex = this.explosions[i]!;
       ex.age += dt;
       const k = Math.min(ex.age / ex.maxAge, 1);
-      const s = ex.epic ? EPIC_RADIUS_SCALE : 1;
+      const s = ex.epic ? EPIC_RADIUS_SCALE : ex.scale;
       // Flash shell: fast-expanding additive pop.
       ex.flashMesh.scale.setScalar((1 + k * 5) * s);
       ex.flashMat.opacity = 0.9 * (1 - k);
@@ -2880,7 +2936,7 @@ export class CombatFx {
         puff.position.x += ex.smokeVel[s * 3]! * dt;
         puff.position.y += ex.smokeVel[s * 3 + 1]! * dt;
         puff.position.z += ex.smokeVel[s * 3 + 2]! * dt;
-        puff.scale.setScalar(puff.scale.x + dt * 6);
+        puff.scale.setScalar(puff.scale.x + dt * 6 * (ex.epic ? 1 : ex.scale));
       }
       ex.smokeMat.opacity = 0.34 * (1 - k);
       // Shockwave ring: ground footprint racing outward past the scorch.

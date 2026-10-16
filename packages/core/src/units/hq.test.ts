@@ -366,12 +366,13 @@ describe("faster production cadence", () => {
 
 describe("pickNextSpawnUnit", () => {
   it("pins roster bands with stub rolls", () => {
-    // Weights peewee 1 / flash ≈0.58 / stump ≈0.32 / hammer ≈0.12 read
-    // cumulative bands [0, .494) / [.494, .782) / [.782, .939) / [.939, 1).
+    // Weights peewee 1 / flash ≈0.28 / stump ≈0.15 / hammer ≈0.06 read
+    // cumulative bands [0, .672) / [.672, .859) / [.859, .961) / [.961, 1).
     expect(pickNextSpawnUnit(() => 0)).toBe("peewee");
-    expect(pickNextSpawnUnit(() => 0.5)).toBe("flash");
-    expect(pickNextSpawnUnit(() => 0.8)).toBe("stump");
-    expect(pickNextSpawnUnit(() => 0.95)).toBe("hammer");
+    expect(pickNextSpawnUnit(() => 0.5)).toBe("peewee");
+    expect(pickNextSpawnUnit(() => 0.7)).toBe("flash");
+    expect(pickNextSpawnUnit(() => 0.9)).toBe("stump");
+    expect(pickNextSpawnUnit(() => 0.97)).toBe("hammer");
     expect(pickNextSpawnUnit(() => 0.999999)).toBe("hammer");
   });
 

@@ -26,17 +26,18 @@ export const UNIT_HIT_DAMAGE: Record<UnitKind, number> = {
   hammer: 0.16,
   // Commander heavy bolt.
   commander: 0.11,
-  // Infantry peashooter: chips the paint, takes a squad to finish.
-  peewee: 0.045,
+  // Infantry automatic rifle: light chips at a rapid beat — takes a squad
+  // (or a sustained burst) to finish.
+  peewee: 0.03,
 };
 
 /**
  * Point-blank hull damage of one landed peewee grenade: double the
- * peashooter bolt (the close-range payoff for closing to knife-fight range)
+ * rifle bullet (the close-range payoff for closing to knife-fight range)
  * but still well under the hammer's 0.16 — light infantry never out-hits
  * artillery, burst-for-burst or otherwise.
  */
-export const PEEWEE_GRENADE_UNIT_DAMAGE = 0.09;
+export const PEEWEE_GRENADE_UNIT_DAMAGE = 0.06;
 
 /** Point-blank hull damage for a shot: grenade lobs read their lob table. */
 export function unitHitDamage(kind: UnitKind, attack: AttackMode = "round"): number {

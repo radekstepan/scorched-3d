@@ -165,9 +165,9 @@ describe("peewee infantry kind", () => {
         expect(d).toBeLessThanOrEqual(SHOT_DELAY.peewee.max);
       }
     }
-    // Mean peewee refire (~0.36 s) is roughly twice as quick as the tank
-    // mean (~0.72 s): faster rate, lighter hit — the per-hit damage below
-    // stays the weakest on the field to compensate.
+    // Mean peewee refire (~0.19 s) is roughly four times as quick as the
+    // tank mean (~0.72 s): automatic-rifle beat, lighter hit — the per-hit
+    // damage below stays the weakest on the field to compensate.
     const mean = (kind: "peewee" | "flash"): number => {
       const rng = mulberry32(9);
       let total = 0;
@@ -175,6 +175,34 @@ describe("peewee infantry kind", () => {
       return total / 400;
     };
     expect(mean("peewee")).toBeLessThan(mean("flash") / 1.5);
+  });
+
+  it("fires an automatic-rifle beat: small fast bullets, light hits", () => {
+    // Rapid light gun: the whole refire window sits well under the tank
+    // window, and the mean beat is ~4x the tank mean.
+    expect(SHOT_DELAY.peewee).toEqual({ min: 0.09, max: 0.28 });
+    const mean = (kind: "peewee" | "flash"): number => {
+      const rng = mulberry32(9);
+      let total = 0;
+      for (let n = 0; n < 400; n++) total += nextShotDelayFor(kind, rng);
+      return total / 400;
+    };
+    expect(mean("peewee")).toBeLessThan(mean("flash") / 3);
+    // Fast small bullet: the quickest muzzle velocity on the field with the
+    // shortest flash, a rifle crack rather than a cannon boom.
+    for (const kind of UNIT_KINDS) {
+      if (kind === "peewee") continue;
+      expect(WEAPON_PROFILES.peewee.speed).toBeGreaterThanOrEqual(WEAPON_PROFILES[kind].speed);
+      expect(WEAPON_PROFILES.peewee.flashTime).toBeLessThanOrEqual(WEAPON_PROFILES[kind].flashTime);
+    }
+    expect(WEAPON_PROFILES.peewee.speed).toBe(1300);
+    // Light hits to compensate: the weakest per-hit damage on the field,
+    // against hulls and structures alike, with the smallest splash.
+    expect(UNIT_HIT_DAMAGE.peewee).toBe(0.03);
+    expect(HQ_HIT_DAMAGE.peewee).toBe(0.015);
+    expect(BLAST_RADIUS.peewee).toBe(20);
+    expect(PEEWEE_GRENADE_UNIT_DAMAGE).toBe(2 * UNIT_HIT_DAMAGE.peewee);
+    expect(PEEWEE_GRENADE_HQ_DAMAGE).toBe(2 * HQ_HIT_DAMAGE.peewee);
   });
 
   it("lobs grenades inside grenade range, bolts past it", () => {

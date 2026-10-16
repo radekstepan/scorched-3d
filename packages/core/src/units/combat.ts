@@ -49,8 +49,10 @@ export const WEAPON_PROFILES: Record<UnitKind, WeaponProfile> = {
   hammer: { shot: "shell", speed: 520, color: 0xff6a2a, flashTime: 0.18 },
   // Commander: heavy blue-white bolt (D-gun read as a tracer, not a beam).
   commander: { shot: "bolt", speed: 900, color: 0x7fd4ff, flashTime: 0.16 },
-  // Infantry scout: light peashooter bolt, fast tracer, small flash.
-  peewee: { shot: "bolt", speed: 1150, color: 0x9fe8ff, flashTime: 0.1 },
+  // Infantry scout: automatic-rifle tracer — the fastest bolt on the field,
+  // a small bullet with a short flash, fired in a rapid light beat (see
+  // `SHOT_DELAY`) that chips per hit (see `UNIT_HIT_DAMAGE`).
+  peewee: { shot: "bolt", speed: 1300, color: 0x9fe8ff, flashTime: 0.08 },
 };
 
 /**
@@ -69,20 +71,21 @@ export const SHOT_DELAY_MAX = 1.1;
 
 /**
  * Per-kind scheduler bounds: seconds between ambient shots after a volley
- * from `kind` leaves. The walker guns (commander, peewee) cycle roughly
- * twice as fast as the tank guns — the retail Peewee's `emg` slot authors a
- * 0.4 s reload with 3-round bursts against much slower tank pieces, and the
- * demo reads the same split at the ambient scheduler: a rapid light gun that
- * chips per hit (see `UNIT_HIT_DAMAGE`) instead of a slow heavy one. Tank
- * bounds match the legacy global window exactly, so non-walker pacing is
- * bit-identical with or without the table.
+ * from `kind` leaves. The commander cycles roughly twice as fast as the
+ * tank guns; the peewee runs an automatic-rifle beat about four times
+ * quicker than the tanks — the retail Peewee's `emg` slot authors a 0.4 s
+ * reload with 3-round bursts against much slower tank pieces, and the demo
+ * reads the same split at the ambient scheduler: a rapid light gun firing
+ * small fast bullets that chip per hit (see `UNIT_HIT_DAMAGE`) instead of a
+ * slow heavy one. Tank bounds match the legacy global window exactly, so
+ * non-walker pacing is bit-identical with or without the table.
  */
 export const SHOT_DELAY: Record<UnitKind, { min: number; max: number }> = {
   flash: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
   stump: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
   hammer: { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX },
   commander: { min: 0.22, max: 0.65 },
-  peewee: { min: 0.18, max: 0.55 },
+  peewee: { min: 0.09, max: 0.28 },
 };
 
 /** Scheduler bounds for volleys from `kind` (falls back to the global window). */
