@@ -13,7 +13,6 @@ import {
   buildHq,
   doorLiftOf,
   hqBeaconAngleAt,
-  hqBeaconPulseAt,
   hqExitWorld,
   hqFacingFor,
   hqFoundationDropWorld,
@@ -22,7 +21,6 @@ import {
   setDoorLift,
   setHqBeaconAngle,
   setHqBeaconLevel,
-  setHqBeaconPulse,
   setHqFoundation,
   HQ_BEACON_PEAK,
   HQ_DOOR_TRAVEL,
@@ -277,19 +275,16 @@ export class HqFx {
 
   update(dt: number): void {
     if (this.disposed || !(dt > 0)) return;
-    // Shared beacon phase: one cheap angle + pulse write per live HQ (2
-    // rotors total, lights have no shadows), so both works sweep and
-    // breathe in sync.
+    // Shared beacon phase: one cheap angle write per live HQ (2 rotors
+    // total, lights have no shadows), so both works' beams sweep in sync.
     this.clock += dt;
     const angle = hqBeaconAngleAt(this.clock);
-    const pulse = hqBeaconPulseAt(this.clock);
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
       setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * nightLightScale(this.night));
       setHqBeaconAngle(group, angle);
-      setHqBeaconPulse(group, pulse);
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release draws a random
         // kind and starts the door — stronger units also rearm a longer

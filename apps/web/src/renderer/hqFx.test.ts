@@ -10,7 +10,7 @@ import {
   type UnitKind,
 } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
-import { HQ_BEACON_PERIOD } from "./hq";
+import { HQ_BEACON_BEAM_LEN, HQ_BEACON_PERIOD } from "./hq";
 import { NIGHT_LIGHT_BOOST } from "./night";
 import { HealthBars } from "./healthBars";
 import {
@@ -280,22 +280,43 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("breathes the beacon cores in sync with the rotor sweep", () => {
+  it("sweeps both beam cones in sync with a steady burn (no breathing)", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
     const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
-    const halos = groups.map((g) => g.getObjectByName("hq-beacon-halo") as THREE.Mesh);
-    // A quarter period swells both halos together, mid-breath.
+    const beams = groups.map((g) => g.getObjectByName("hq-beacon-beam-a") as THREE.Mesh);
+    const bulbs = groups.map((g) => g.getObjectByName("hq-beacon-bulb") as THREE.Mesh);
+    const opacity = () => (beams[0]!.material as THREE.MeshBasicMaterial).opacity;
+    const burn = () => (bulbs[0]!.material as THREE.MeshLambertMaterial).emissiveIntensity;
+    // Horizontal beam-cone direction of fort 0's first cone (mouth center
+    // relative to the rotor pivot, flattened — the sweep is horizontal).
+    const dirOf = (): { x: number; z: number } => {
+      groups[0]!.updateMatrixWorld(true);
+      const pivot = groups[0]!
+        .getObjectByName("hq-beacon-rotor")!
+        .getWorldPosition(new THREE.Vector3());
+      const tip = beams[0]!.localToWorld(new THREE.Vector3(HQ_BEACON_BEAM_LEN, 0, 0));
+      return { x: tip.x - pivot.x, z: tip.z - pivot.z };
+    };
+    // A quarter period points the cone one way; another quarter turns it a
+    // further quarter turn — the beam angle visibly circles.
     hq.update(HQ_BEACON_PERIOD * 0.25);
-    const q0 = (halos[0]!.material as THREE.MeshBasicMaterial).opacity;
-    const q1 = (halos[1]!.material as THREE.MeshBasicMaterial).opacity;
-    expect(q0).toBeCloseTo(q1, 9);
-    expect(q0).toBeGreaterThan(0);
-    // The half period is the full breath on both forts.
+    const q = dirOf();
+    expect(Math.hypot(q.x, q.z)).toBeCloseTo(HQ_BEACON_BEAM_LEN, 6);
+    const steadyOpacity = opacity();
+    const steadyBurn = burn();
+    expect(steadyOpacity).toBeGreaterThan(0);
+    expect(steadyBurn).toBeGreaterThan(0);
     hq.update(HQ_BEACON_PERIOD * 0.25);
-    const h0 = (halos[0]!.material as THREE.MeshBasicMaterial).opacity;
-    expect(h0).toBeGreaterThan(q0);
-    expect((halos[1]!.material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(h0, 9);
+    const h = dirOf();
+    expect(Math.hypot(h.x, h.z)).toBeCloseTo(HQ_BEACON_BEAM_LEN, 6);
+    expect(q.x * h.x + q.z * h.z).toBeCloseTo(0, 4);
+    // ...with the exact same burn and beam opacity on both forts — the
+    // angle moves, nothing swells in and out.
+    expect(opacity()).toBeCloseTo(steadyOpacity, 9);
+    expect(burn()).toBeCloseTo(steadyBurn, 9);
+    expect((beams[1]!.material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(steadyOpacity, 9);
+    expect((bulbs[1]!.material as THREE.MeshLambertMaterial).emissiveIntensity).toBeCloseTo(steadyBurn, 9);
     hq.dispose();
   });
 
