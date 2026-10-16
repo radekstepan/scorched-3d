@@ -178,14 +178,22 @@ export function nearestIntel(
     Number.isFinite(anchor.z) &&
     typeof leash === "number" &&
     leash > 0;
+  const leash2 = gated ? (leash as number) * (leash as number) : -1;
+  const gatedAnchor = gated ? anchor : null;
   let best: { key: number; x: number; z: number } | null = null;
-  let bestDist = Number.POSITIVE_INFINITY;
+  let bestDist2 = Number.POSITIVE_INFINITY;
   for (const [key, intel] of records) {
     if (!intel || !Number.isFinite(intel.x) || !Number.isFinite(intel.z)) continue;
-    if (gated && Math.hypot(intel.x - anchor.x, intel.z - anchor.z) > (leash as number)) continue;
-    const dist = Math.hypot(intel.x - x, intel.z - z);
-    if (dist < bestDist || (dist === bestDist && (best === null || key < best.key))) {
-      bestDist = dist;
+    if (gatedAnchor) {
+      const lx = intel.x - gatedAnchor.x;
+      const lz = intel.z - gatedAnchor.z;
+      if (lx * lx + lz * lz > leash2) continue;
+    }
+    const dx = intel.x - x;
+    const dz = intel.z - z;
+    const dist2 = dx * dx + dz * dz;
+    if (dist2 < bestDist2 || (dist2 === bestDist2 && (best === null || key < best.key))) {
+      bestDist2 = dist2;
       best = { key, x: intel.x, z: intel.z };
     }
   }
@@ -243,12 +251,15 @@ export function sweepIntel(
         records.delete(key);
         continue;
       }
-      if (
-        confirmRadius > 0 &&
-        Math.hypot(subject.x - intel.x, subject.z - intel.z) > confirmRadius &&
-        teammateAtSpot(team, intel, teams, positions, alive, confirmRadius)
-      ) {
-        records.delete(key);
+      if (confirmRadius > 0) {
+        const mx = subject.x - intel.x;
+        const mz = subject.z - intel.z;
+        if (
+          mx * mx + mz * mz > confirmRadius * confirmRadius &&
+          teammateAtSpot(team, intel, teams, positions, alive, confirmRadius)
+        ) {
+          records.delete(key);
+        }
       }
     }
     if (records.size === 0) board.delete(team);
@@ -264,12 +275,18 @@ function teammateAtSpot(
   alive: readonly boolean[],
   radius: number,
 ): boolean {
+  const r2 = radius > 0 ? radius * radius : -1;
+  const zero = radius === 0;
   for (let j = 0; j < positions.length; j++) {
     if (teams[j] !== team) continue;
     if (alive[j] === false) continue;
     const mate = positions[j];
     if (!mate || !Number.isFinite(mate.x) || !Number.isFinite(mate.z)) continue;
-    if (Math.hypot(mate.x - intel.x, mate.z - intel.z) <= radius) return true;
+    const dx = mate.x - intel.x;
+    const dz = mate.z - intel.z;
+    // Squared reach (a zero radius still admits a mate standing exactly on
+    // the spot, like the old hypot gate; negative/NaN admits nothing).
+    if (dx * dx + dz * dz <= r2 || (zero && dx === 0 && dz === 0)) return true;
   }
   return false;
 }

@@ -721,6 +721,103 @@ export function treesIntersectSegment(
   }
   return false;
 }
+
+/**
+ * Counting twin of `treesOnSegment` for capped penalties: how many standing
+ * trees' wood the segment `a`→`b` enters, stopping early once the count
+ * passes `limit` (returns `limit + 1` then — enough to saturate any capped
+ * penalty exactly). No per-call array either way. Pure; with the default
+ * limit the result equals `treesOnSegment(a, b, trees).length`.
+ *
+ * NOTE: the three probes above/below intentionally inline the same
+ * broadphase + exact tests instead of sharing a per-tree helper — a shared
+ * helper measured 2.5x slower per scan (call + scratch indirection on the
+ * hottest reject path). Keep the three bodies in sync when the geometry
+ * changes.
+ */
+export function countTreesOnSegment(
+  a: CombatVec3,
+  b: CombatVec3,
+  trees: readonly TreeStand[],
+  limit: number = Number.POSITIVE_INFINITY,
+): number {
+  const cap = typeof limit === "number" && limit >= 0 ? limit : 0;
+  const minX = Math.min(a.x, b.x) - TREE_CANOPY_RADIUS;
+  const maxX = Math.max(a.x, b.x) + TREE_CANOPY_RADIUS;
+  const minZ = Math.min(a.z, b.z) - TREE_CANOPY_RADIUS;
+  const maxZ = Math.max(a.z, b.z) + TREE_CANOPY_RADIUS;
+  const minY = Math.min(a.y, b.y) - TREE_CANOPY_RADIUS;
+  const maxY = Math.max(a.y, b.y) + TREE_CANOPY_RADIUS;
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abz = b.z - a.z;
+  const len2 = abx * abx + aby * aby + abz * abz;
+  let count = 0;
+  for (let i = 0; i < trees.length; i++) {
+    const tree = trees[i]!;
+    if (!tree.standing) continue;
+    if (tree.x < minX || tree.x > maxX || tree.z < minZ || tree.z > maxZ) continue;
+    const cy = tree.groundY + TREE_CANOPY_LIFT;
+    if (cy < minY || cy > maxY) continue;
+    let struck = false;
+    // Crown: segment-sphere intersection.
+    if (len2 > 1e-9) {
+      const ox = a.x - tree.x;
+      const oy = a.y - cy;
+      const oz = a.z - tree.z;
+      const t = Math.min(Math.max(-(ox * abx + oy * aby + oz * abz) / len2, 0), 1);
+      const px = a.x + abx * t - tree.x;
+      const py = a.y + aby * t - cy;
+      const pz = a.z + abz * t - tree.z;
+      const r = TREE_CANOPY_RADIUS;
+      struck = px * px + py * py + pz * pz <= r * r;
+    } else {
+      struck = pointInTree(a.x, a.y, a.z, tree);
+    }
+    // Trunk: XZ slab crossing while the segment's Y overlaps the bole.
+    if (!struck) {
+      const tr = TREE_TRUNK_RADIUS;
+      const segMinX = Math.min(a.x, b.x) - tr;
+      const segMaxX = Math.max(a.x, b.x) + tr;
+      const segMinZ = Math.min(a.z, b.z) - tr;
+      const segMaxZ = Math.max(a.z, b.z) + tr;
+      if (
+        tree.x >= segMinX && tree.x <= segMaxX &&
+        tree.z >= segMinZ && tree.z <= segMaxZ &&
+        Math.min(a.y, b.y) <= tree.groundY + TREE_TRUNK_HEIGHT &&
+        Math.max(a.y, b.y) >= tree.groundY
+      ) {
+        // Closest XZ approach of the segment to the trunk axis.
+        const abx2 = b.x - a.x;
+        const abz2 = b.z - a.z;
+        const xz2 = abx2 * abx2 + abz2 * abz2;
+        let cx = a.x;
+        let cz = a.z;
+        let cySeg = a.y;
+        if (xz2 > 1e-9) {
+          const t = Math.min(
+            Math.max(((tree.x - a.x) * abx2 + (tree.z - a.z) * abz2) / xz2, 0),
+            1,
+          );
+          cx = a.x + abx2 * t;
+          cz = a.z + abz2 * t;
+          cySeg = a.y + aby * t;
+        }
+        const ddx = cx - tree.x;
+        const ddz = cz - tree.z;
+        struck =
+          ddx * ddx + ddz * ddz <= tr * tr &&
+          cySeg >= tree.groundY &&
+          cySeg <= tree.groundY + TREE_TRUNK_HEIGHT;
+      }
+    }
+    if (struck) {
+      count++;
+      if (count > cap) return count;
+    }
+  }
+  return count;
+}
 /**
  * True when the whole flight `start` + `velocity` under `gravity` for
  * `duration` seconds avoids every standing tree. Samples the analytic arc
@@ -1021,16 +1118,24 @@ export function firingSidestep(
   // Wood score: crossed crowns on the lane dominate (×1000 — a blocked lane
   // always outweighs a crowded seat), trees crowding the seat add the rest.
   const crowdRadius = TREE_CANOPY_RADIUS * 1.5;
+  const crowd2 = crowdRadius * crowdRadius;
   const scoreOf = (x: number, y: number, z: number): number => {
-    const lane = treesOnSegment({ x, y, z }, target, trees).length;
+    const lane = countTreesOnSegment({ x, y, z }, target, trees);
     let crowd = 0;
     for (const tree of trees) {
       if (!tree.standing) continue;
-      if (Math.hypot(tree.x - x, tree.z - z) <= crowdRadius) crowd++;
+      const cdx = tree.x - x;
+      const cdz = tree.z - z;
+      if (cdx * cdx + cdz * cdz <= crowd2) crowd++;
     }
     return lane * 1000 + crowd;
   };
   const s0 = scoreOf(self.x, self.y, self.z);
+  // Open unshared lane: with no ally stacking this target and not a crown
+  // on the seat or the lane, no step can score below zero — hold without
+  // scanning the candidates. (A stacked lane still flanks: the far side at
+  // equal zero wood is a genuine improvement.)
+  if ((opts?.allies?.length ?? 0) === 0 && s0 === 0) return null;
   const sPlus = scoreOf(plus.x, self.y, plus.z);
   const sMinus = scoreOf(minus.x, self.y, minus.z);
   // Flank pressure: the nearest-angular ally on this target, as seen from
@@ -1185,10 +1290,11 @@ export function orbitStrafe(
   // Lane wood only (candidate lanes reuse the shooter's height, like the
   // seat evaluator): a crowded seat never vetoes a strafe — the seat
   // shuffle handles crowding on its own clock — but the orbit never steps
-  // onto a more-blocked lane.
-  const lane0 = treesOnSegment(self, target, trees).length;
-  const lanePlus = treesOnSegment({ x: plus.x, y: self.y, z: plus.z }, target, trees).length;
-  const laneMinus = treesOnSegment({ x: minus.x, y: self.y, z: minus.z }, target, trees).length;
+  // onto a more-blocked lane. Candidates count capped at the seat's own
+  // lane: anything past it is vetoed either way, so the scan stops early.
+  const lane0 = countTreesOnSegment(self, target, trees);
+  const lanePlus = countTreesOnSegment({ x: plus.x, y: self.y, z: plus.z }, target, trees, lane0);
+  const laneMinus = countTreesOnSegment({ x: minus.x, y: self.y, z: minus.z }, target, trees, lane0);
   const blocked = opts?.blocked;
   // A candidate must keep the lane no worse AND stand on reachable ground;
   // either veto falls through to the mirror side, then to the hold.

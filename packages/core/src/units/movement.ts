@@ -498,14 +498,20 @@ export function spacingScale(
 ): number {
   const me = positions[self];
   if (!me) return 1;
+  // Squared gates (non-positive radii gate nothing: a hypot distance is
+  // never below zero, so the old strict compares read false there too).
+  const stop2 = stopRadius > 0 ? stopRadius * stopRadius : -1;
+  const slow2 = slowRadius > 0 ? slowRadius * slowRadius : -1;
   let scale = 1;
   for (let i = 0; i < positions.length; i++) {
     if (i === self) continue;
     const other = positions[i];
     if (!other) continue;
-    const d = Math.hypot(other.x - me.x, other.z - me.z);
-    if (d < stopRadius) return 0;
-    if (d < slowRadius) scale = Math.min(scale, SLOW_SCALE);
+    const dx = other.x - me.x;
+    const dz = other.z - me.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < stop2) return 0;
+    if (d2 < slow2) scale = Math.min(scale, SLOW_SCALE);
   }
   return scale;
 }
@@ -1094,11 +1100,14 @@ export function predictDrivenPath(
   const total = Math.floor(maxSteps);
   // `advanceMover` takes a mutable route array but never writes it.
   const legs = route as RoutePoint[];
+  const progress2 = PREDICT_PROGRESS * PREDICT_PROGRESS;
   for (let s = 0; s < total; s++) {
     const px = sim.x;
     const pz = sim.z;
     sim = advanceMover(kind, sim, legs, step, 1, terrain ?? null);
-    if (Math.hypot(sim.x - px, sim.z - pz) > PREDICT_PROGRESS) {
+    const mx = sim.x - px;
+    const mz = sim.z - pz;
+    if (mx * mx + mz * mz > progress2) {
       pts.push({ x: sim.x, z: sim.z });
       stall = 0;
     } else if (++stall >= PREDICT_STALL_STEPS) {
@@ -1166,14 +1175,17 @@ function separationComponents(
   let coincident = false;
   const me = positions[self];
   if (!me || !(radius > 0)) return { radial, side, coincident };
+  const r2 = radius * radius;
   for (let i = 0; i < positions.length; i++) {
     if (i === self) continue;
     const other = positions[i];
     if (!other) continue;
     const dx = me.x - other.x;
     const dz = me.z - other.z;
+    // Squared gate: neighbours outside the radius never pay the root — only
+    // pairs that actually shove normalize.
+    if (dx * dx + dz * dz >= r2) continue;
     const d = Math.hypot(dx, dz);
-    if (d >= radius) continue;
     if (d > 1e-6) {
       // Radial shove at unit weight (constant so the pair crosses the stop
       // radius in finite time) + sidestep around the neighbour: the

@@ -165,6 +165,7 @@ export function battleOdds(
   let allyHp = 0;
   let enemyHp = 0;
   if (!(radius > 0)) return { allies, enemies, allyHp, enemyHp };
+  const r2 = radius * radius;
   const clampedSelf = Math.min(Math.max(selfHp, 0), 1);
   allyHp += clampedSelf;
   for (let i = 0; i < positions.length; i++) {
@@ -175,12 +176,16 @@ export function battleOdds(
     const p = positions[i];
     if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.z)) continue;
     if (side === selfSide) {
-      if (Math.hypot(p.x - alliesCenter.x, p.z - alliesCenter.z) <= radius) {
+      const dx = p.x - alliesCenter.x;
+      const dz = p.z - alliesCenter.z;
+      if (dx * dx + dz * dz <= r2) {
         allies++;
         allyHp += healthAt(hp, i);
       }
     } else {
-      if (Math.hypot(p.x - enemiesCenter.x, p.z - enemiesCenter.z) <= radius) {
+      const dx = p.x - enemiesCenter.x;
+      const dz = p.z - enemiesCenter.z;
+      if (dx * dx + dz * dz <= r2) {
         enemies++;
         enemyHp += healthAt(hp, i);
       }
@@ -353,6 +358,8 @@ export function chooseTarget(
   if (!(maxDist > 0)) return -1;
   const anchor = opts?.anchor ?? null;
   const leash = opts?.leash ?? (opts?.scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS);
+  const leash2 = leash > 0 ? leash * leash : -1;
+  const leashZero = leash === 0;
   const focus = opts?.focus ?? -1;
   const threatAttacker = opts?.threatAttacker ?? -1;
   const sight = opts?.sight ?? null;
@@ -366,14 +373,29 @@ export function chooseTarget(
     if (foeSide === undefined || foeSide === side) continue;
     const foe = positions[i];
     if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
-    const dist = Math.hypot(foe.x - me.x, foe.z - me.z);
     // Spotted, not just near: the sight gate replaces the distance gate
     // (each pair carries its own high-ground reach and forest shade), so
     // the spot test runs instead of — never after — the `maxDist` check.
+    // The scoring distance resolves after admission: rejected candidates
+    // never pay the root.
+    let dist = 0;
     if (sight) {
       if (!canSpot(self, i, positions, maxDist, sight, kinds)) continue;
-    } else if (!(dist <= maxDist)) continue;
-    if (anchor && !(Math.hypot(foe.x - anchor.x, foe.z - anchor.z) <= leash)) continue;
+    } else {
+      dist = Math.hypot(foe.x - me.x, foe.z - me.z);
+      if (!(dist <= maxDist)) continue;
+    }
+    if (anchor) {
+      const adx = foe.x - anchor.x;
+      const adz = foe.z - anchor.z;
+      // Squared leash (a zero leash still admits a candidate standing
+      // exactly on the anchor, like the old hypot gate; a negative or NaN
+      // leash admits nothing).
+      const inLeash =
+        adx * adx + adz * adz <= leash2 || (leashZero && adx === 0 && adz === 0);
+      if (!inLeash) continue;
+    }
+    if (sight) dist = Math.hypot(foe.x - me.x, foe.z - me.z);
     const score = targetScore(
       dist,
       healthAt(opts?.hp, i),
@@ -408,7 +430,10 @@ export function chooseTarget(
  * no clocks. Even fights resolve exactly like `acquireHunt` (nearest live
  * enemy inside both gates). With `sight`, the quarry must be spotted
  * (see `chooseTarget` + `canSpot`); without it the legacy distance gate
- * resolves exactly as before.
+ * resolves exactly as before. `knownFocus` skips the focus scan when the
+ * caller already resolved `squadFocus` for this side on this snapshot
+ * (the sweep computes it once per team per tick instead of once per hull);
+ * any other value recomputes it from `threats`, exactly as before.
  */
 export function acquireStrategicHunt<
   M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean },
@@ -423,6 +448,7 @@ export function acquireStrategicHunt<
   hp?: readonly number[] | null,
   kinds?: readonly (UnitKind | undefined)[] | null,
   sight?: SightContext | null,
+  knownFocus?: number | null,
 ): M {
   if (!Number.isInteger(self) || self < 0 || self >= foes.length) return mover;
   if (alive[self] === false) return mover;
@@ -440,7 +466,12 @@ export function acquireStrategicHunt<
   // Scouts are exempt — probing alone is their job; the drive holds them at
   // eyes-on distance until backup arrives, and their memory focuses the squad.
   if (!scout && shouldHold(self, foes, teams, alive, hp)) return mover;
-  const focus = threats ? squadFocus(side, threats, teams, alive) : -1;
+  const focus =
+    typeof knownFocus === "number" && Number.isInteger(knownFocus) && knownFocus >= -1
+      ? knownFocus
+      : threats
+        ? squadFocus(side, threats, teams, alive)
+        : -1;
   const pick = chooseTarget(self, foes, teams, alive, {
     hp,
     focus,
@@ -468,8 +499,12 @@ export function acquireStrategicHunt<
 export interface GunTargetOptions {
   /** Health fractions remaining, parallel to positions; absent reads pristine. */
   hp?: readonly number[] | null;
-  /** Roster indices already under fire (the scheduler's pending aims). */
-  focusCounts?: readonly number[] | null;
+  /**
+   * Roster indices already under fire (the scheduler's pending aims): any
+   * iterable reads live, so callers pass the pending map's values without
+   * copying them into an array first.
+   */
+  focusCounts?: Iterable<number> | null;
   /** Currently-aimed target of this attacker (stay on target, no thrash). */
   sticky?: number;
   /** Admission gate: prefer candidates inside this distance; falls back wide. */
@@ -500,13 +535,14 @@ export function pickStrategicTarget(
   if (side === undefined) return -1;
   const me = positions[attacker];
   if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) return -1;
-  const focusOf = (i: number): number => {
-    const counts = opts?.focusCounts;
-    if (!counts) return 0;
-    let n = 0;
-    for (const t of counts) if (t === i) n++;
-    return n;
-  };
+  // Aims per target, tallied once: the old per-candidate rescan cost
+  // candidates × pending aims per pick.
+  const focusTallies = new Map<number, number>();
+  const pending = opts?.focusCounts;
+  if (pending) {
+    for (const t of pending) focusTallies.set(t, (focusTallies.get(t) ?? 0) + 1);
+  }
+  const focusOf = (i: number): number => focusTallies.get(i) ?? 0;
   const sticky = opts?.sticky ?? -1;
   const maxDist = opts?.maxDist;
   let best = -1;

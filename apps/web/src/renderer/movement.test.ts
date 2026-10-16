@@ -629,3 +629,68 @@ describe("UnitMovement wrecks", () => {
     movement.dispose();
   });
 });
+
+describe("UnitMovement sweep efficiency", () => {
+  function makeTeamed(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "stump", cellX: 40, cellZ: 40, rotation: Math.PI, team: 1 },
+    ];
+    const starts = [new THREE.Vector3(0, 100, 0), new THREE.Vector3(500, 120, 300)];
+    group.userData.units.forEach((u: { rotation: number }, i: number) => {
+      const body = new THREE.Group();
+      body.rotation.y = u.rotation;
+      body.position.copy(starts[i]!);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    });
+    return group;
+  }
+
+  it("queries live HQ positions once per sweep, not once per hull", () => {
+    // Hot-loop sweep: the assault pass used to call the HQ provider per
+    // hull; the sweep now resolves forts once and shares them.
+    const units = makeTeamed();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    let calls = 0;
+    movement.setHqProvider(() => {
+      calls++;
+      return [
+        { x: -1500, z: 0, team: 0 },
+        { x: 1500, z: 0, team: 1 },
+      ];
+    });
+    movement.sweepHunt();
+    expect(calls).toBe(1);
+    movement.sweepHunt();
+    expect(calls).toBe(2);
+    movement.dispose();
+  });
+
+  it("hands its pre-tick snapshot (sides, live flags, health) to the drive", () => {
+    const units = makeTeamed();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    movement.setDamage([0.25, 0.5]);
+    movement.markDestroyed(1);
+    const snapshot = movement.sweepHunt();
+    expect(snapshot.teams).toEqual([0, 1]);
+    expect(snapshot.alive).toEqual([true, false]);
+    // Remaining health: the living hull at 1 - damage, the wreck at zero.
+    expect(snapshot.hp).toEqual([0.75, 0]);
+    movement.dispose();
+  });
+
+  it("reads no damage as unknown health and empty rosters as empty", () => {
+    const units = makeTeamed();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    expect(movement.sweepHunt().hp).toBeNull();
+    movement.dispose();
+    const empty = new UnitMovement(new THREE.Group(), [], { groundY: () => 100 });
+    expect(empty.sweepHunt()).toEqual({ teams: [], alive: [], hp: null });
+    empty.dispose();
+  });
+});

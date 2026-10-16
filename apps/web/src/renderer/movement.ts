@@ -6,6 +6,7 @@ import {
   canSpot,
   canSpotPoint,
   clearThreat,
+  createSpotCache,
   eyeHeight,
   findWorldPath,
   firingSidestep,
@@ -33,6 +34,7 @@ import {
   seekStructure,
   shouldHold,
   SIDESTEP_COOLDOWN,
+  squadFocus,
   stepBlocked,
   slewTilt,
   snappedFormationTargets,
@@ -91,6 +93,31 @@ export interface MovementEnv {
    * snapshot with combat interception and the occlusion x-ray.
    */
   treeStands?: () => TreeStand[];
+}
+
+/**
+ * An enemy fort reduced to its spotting inputs: intel key plus the bunker
+ * roof the scouts pick out. Resolved once per sweep (see
+ * `spottableForts`) and shared by the sight-sharing pass and the per-hull
+ * assault pass, so the works' ground is probed once, not once per hull.
+ */
+interface SpottableFort {
+  team: number;
+  key: number;
+  x: number;
+  z: number;
+  y: number;
+}
+
+/**
+ * Pre-tick roster snapshot the hunt sweep hands to the drive: sides, live
+ * flags, and remaining health. The sweep owns all three reads, so `update`
+ * drives on them instead of rebuilding the same arrays.
+ */
+export interface HuntSnapshot {
+  teams: (number | undefined)[];
+  alive: boolean[];
+  hp: number[] | null;
 }
 
 export class UnitMovement {
@@ -430,20 +457,23 @@ export class UnitMovement {
     * coexist and each hull advances on its nearest) and assaults the fort
     * itself as a structure memory on the team-advance leash, so the side
     * that finds the enemy HQ pushes it instead of standing around.
+    *
+    * Returns the pre-tick roster snapshot (sides, live flags, health) the
+    * drive carries — the sweep owns all three reads either way.
    */
-  sweepHunt(): void {
-    if (this.movers.length === 0) return;
+  sweepHunt(): HuntSnapshot {
     const teams = this.movers.map((_, i) => this.teamAt(i));
-    if (teams.every((t) => t === undefined)) return;
+    const alive = this.movers.map((_, i) => !this.destroyed[i]);
+    const hp = this.health();
+    const snapshot: HuntSnapshot = { teams, alive, hp };
+    if (this.movers.length === 0 || teams.every((t) => t === undefined)) return snapshot;
     // Pre-tick roster snapshot (same discipline as spacing/separation): the
     // drive below resolves live attackers against these positions, and the
     // squad focus reads these memories.
     const foes = this.movers.map((m) => ({ x: m.x, z: m.z }));
-    const alive = this.movers.map((_, i) => !this.destroyed[i]);
     const threats: (ThreatMemory | undefined)[] = this.movers.map((m) =>
       m.threat && m.threat.ttl > 0 ? { ...m.threat } : undefined,
     );
-    const hp = this.health();
     // Seeing surface for the sweep: hunts acquire spotted enemies, not just
     // near ones — ridges hide, high ground extends, wood shrinks (see
     // `visibility.ts`). One snapshot per sweep (eye heights + the shared
@@ -455,13 +485,43 @@ export class UnitMovement {
     // what the side should forget (stale, dead, confirmed-gone), so the
     // per-hull loop below advances on fresh memories only.
     const hqs = this.hqProvider?.() ?? [];
-    this.shareSightings(teams, foes, alive, sight, hqs);
+    const forts = this.spottableForts(hqs);
+    // Observers the per-hull pass will ask about again below: only their
+    // verdicts are worth storing — a hull holding a live grudge never
+    // re-asks, so its sight-sharing spots skip the cache entirely.
+    const reasked = this.movers.map((m, i) => {
+      if (this.destroyed[i] || teams[i] === undefined) return false;
+      if (m.hold || hasOrder(m)) return false;
+      const threat = m.threat;
+      if (!threat || threat.ttl <= 0 || threat.attacker === -1) return true;
+      // A grudge the loop top clears (dead or unknown attacker) still
+      // re-acquires below — only a surviving grudge skips the re-ask.
+      const attacker = threat.attacker;
+      return (
+        attacker === undefined ||
+        attacker >= this.movers.length ||
+        (attacker >= 0 && this.destroyed[attacker] === true)
+      );
+    });
+    this.shareSightings(teams, foes, alive, sight, forts, reasked);
     sweepIntel(this.intel, this.elapsed, teams, foes, alive, (_team, key) =>
       this.locateIntel(key, foes, alive, hqs),
     );
     // One shared wood snapshot for the sweep's sidestep pass (same-tick
     // stands the sight picture reads — every holder judges the same wood).
     const stands = this.env.treeStands?.() ?? [];
+    // Squad focus once per side per sweep, not once per hull: every
+    // acquisition below reads the same pre-tick memories, so the per-team
+    // answer is identical for all of its hulls.
+    const focusByTeam = new Map<number, number>();
+    const focusFor = (team: number): number => {
+      let focus = focusByTeam.get(team);
+      if (focus === undefined) {
+        focus = squadFocus(team, threats, teams, alive);
+        focusByTeam.set(team, focus);
+      }
+      return focus;
+    };
     for (let i = 0; i < this.movers.length; i++) {
       let mover = this.movers[i]!;
       const attacker = mover.threat?.attacker;
@@ -483,12 +543,16 @@ export class UnitMovement {
       const assault =
         mover.threat?.attacker === -1 && mover.threat.structure === true ? mover.threat : undefined;
       const free = mover.threat?.attacker === -1 ? clearThreat(mover) : mover;
-      let next = acquireStrategicHunt(free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds, sight);
+      const side = teams[i];
+      let next = acquireStrategicHunt(
+        free, i, teams, foes, alive, anchor, threats, hp ?? undefined, this.kinds, sight,
+        side === undefined ? -1 : focusFor(side),
+      );
       if (!next.threat || next.threat.ttl <= 0) {
         next =
           assault !== undefined
             ? mover
-            : (this.assaultSpottedHq(next, i, teams, foes, alive, anchor, sight) ??
+            : (this.assaultSpottedHq(next, i, teams, foes, alive, anchor, sight, forts) ??
               this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined));
         // Active recon: a side with no contact yet still sends its scouts —
         // a free peewee ranges toward the enemy anchors instead of guarding
@@ -503,6 +567,26 @@ export class UnitMovement {
       // whatever the acquisition above decided.
       this.movers[i] = this.maybeSidestep(next, i, teams, foes, alive, threats, stands, hp ?? undefined);
     }
+    return snapshot;
+  }
+
+  /**
+   * Enemy forts reduced to their spotting inputs (see `SpottableFort`):
+   * intel keys plus bunker-roof heights, resolved once per sweep for the
+   * sight-sharing and assault passes to share. Order-preserving (sightings
+   * write in provider order) and pure over the provider snapshot.
+   */
+  private spottableForts(
+    hqs: readonly { x: number; z: number; team: number }[],
+  ): SpottableFort[] {
+    const forts: SpottableFort[] = [];
+    for (const hq of hqs) {
+      if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
+      const key = fortIntelKey(hq.team);
+      if (key === null) continue;
+      forts.push({ team: hq.team, key, x: hq.x, z: hq.z, y: this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT });
+    }
+    return forts;
   }
 
   /**
@@ -522,31 +606,33 @@ export class UnitMovement {
     foes: readonly { x: number; z: number }[],
     alive: readonly boolean[],
     sight: SightContext,
-    hqs: readonly { x: number; z: number; team: number }[],
+    forts: readonly SpottableFort[],
+    reasked: readonly boolean[],
   ): void {
+    // Cache-less view for observers the per-hull pass never asks about
+    // again: same surface, same verdicts — just nothing stored.
+    let bare: SightContext | null = null;
+    const uncached = (): SightContext => (bare ??= { ...sight, cache: null });
     for (let i = 0; i < foes.length; i++) {
       if (!alive[i] || this.destroyed[i]) continue;
       const team = teams[i];
       if (team === undefined) continue;
       const me = foes[i];
       if (!me || !Number.isFinite(me.x) || !Number.isFinite(me.z)) continue;
+      const view = reasked[i] !== false ? sight : uncached();
       const notice = huntNoticeRadiusFor(this.kinds[i]);
       for (let j = 0; j < foes.length; j++) {
         if (j === i || !alive[j] || this.destroyed[j]) continue;
         if (teams[j] === undefined || teams[j] === team) continue;
         const foe = foes[j];
         if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
-        if (!canSpot(i, j, foes, notice, sight, this.kinds)) continue;
+        if (!canSpot(i, j, foes, notice, view, this.kinds)) continue;
         rememberSighting(this.intel, team, j, foe.x, foe.z, this.elapsed);
       }
-      for (const hq of hqs) {
-        if (hq.team === team) continue;
-        if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
-        const key = fortIntelKey(hq.team);
-        if (key === null) continue;
-        const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
-        if (!canSpotPoint(i, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) continue;
-        rememberSighting(this.intel, team, key, hq.x, hq.z, this.elapsed, true);
+      for (const fort of forts) {
+        if (fort.team === team) continue;
+        if (!canSpotPoint(i, foes, fort.x, fort.z, fort.y, notice, view, this.kinds)) continue;
+        rememberSighting(this.intel, team, fort.key, fort.x, fort.z, this.elapsed, true);
       }
     }
   }
@@ -625,7 +711,10 @@ export class UnitMovement {
     ) {
       return mover;
     }
-    if (Math.hypot(foe.x - me.x, foe.z - me.z) > pursueStandOff(this.kinds[self] ?? "flash")) {
+    const standoff = pursueStandOff(this.kinds[self] ?? "flash");
+    const sdx = foe.x - me.x;
+    const sdz = foe.z - me.z;
+    if (sdx * sdx + sdz * sdz > standoff * standoff) {
       return mover;
     }
     if (outnumbered(self, me, foe, foes, teams, alive, hp ?? undefined)) return mover;
@@ -735,8 +824,11 @@ export class UnitMovement {
   /**
    * Seeing surface for one sweep tick: per-hull eye heights on the live
    * ground plus the shared tree stands, so hunts and fort spotting read
-   * the same picture. Pure per tick: returns a fresh context, or one with
-   * no wood when the env carries no stands (headless open ground).
+   * the same picture — with a fresh spot cache, so the sight-sharing pass
+   * and the per-hull acquisition pass ask each pair once between them
+   * instead of each marching the terrain. Pure per tick: returns a fresh
+   * context, or one with no wood when the env carries no stands (headless
+   * open ground).
    */
   private sightFor(foes: readonly { x: number; z: number }[]): SightContext {
     const groundY = this.env.groundY;
@@ -745,6 +837,7 @@ export class UnitMovement {
       trees: this.env.treeStands?.() ?? null,
       eyeY: foes.map((p, i) => groundY(p.x, p.z) + eyeHeight(this.kinds[i])),
       kinds: this.kinds,
+      cache: createSpotCache(),
     };
   }
 
@@ -766,29 +859,31 @@ export class UnitMovement {
     alive: readonly boolean[],
     anchor: { x: number; z: number } | null,
     sight: SightContext,
+    forts: readonly SpottableFort[],
   ): Mover | null {
     if (mover.threat && mover.threat.ttl > 0) return null;
     if (mover.hold || hasOrder(mover)) return null;
     if (!alive[self] || this.destroyed[self]) return null;
     const team = teams[self];
     if (team === undefined) return null;
-    const hqs = this.hqProvider?.() ?? [];
-    if (hqs.length === 0) return null;
+    if (forts.length === 0) return null;
     const at = foes[self];
     if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) return null;
     const notice = huntNoticeRadiusFor(this.kinds[self]);
-    for (const hq of hqs) {
-      if (hq.team === team) continue;
-      if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
-      const fortY = this.env.groundY(hq.x, hq.z) + STRUCTURE_SIGHT_LIFT;
-      if (!canSpotPoint(self, foes, hq.x, hq.z, fortY, notice, sight, this.kinds)) continue;
-      if (anchor && Math.hypot(hq.x - anchor.x, hq.z - anchor.z) > TEAM_ADVANCE_LEASH_RADIUS) continue;
+    for (const fort of forts) {
+      if (fort.team === team) continue;
+      if (!canSpotPoint(self, foes, fort.x, fort.z, fort.y, notice, sight, this.kinds)) continue;
+      if (anchor) {
+        const lx = fort.x - anchor.x;
+        const lz = fort.z - anchor.z;
+        if (lx * lx + lz * lz > TEAM_ADVANCE_LEASH_RADIUS * TEAM_ADVANCE_LEASH_RADIUS) continue;
+      }
       return {
         ...mover,
         threat: {
           attacker: -1,
-          x: hq.x,
-          z: hq.z,
+          x: fort.x,
+          z: fort.z,
           ttl: THREAT_MEMORY_DURATION,
           leash: TEAM_ADVANCE_LEASH_RADIUS,
           structure: true,
@@ -844,7 +939,11 @@ export class UnitMovement {
     cx /= n;
     cz /= n;
     const own = this.routes[self]?.[0];
-    if (own && Math.hypot(cx - own.x, cz - own.z) > TEAM_ADVANCE_LEASH_RADIUS) return null;
+    if (own) {
+      const rdx = cx - own.x;
+      const rdz = cz - own.z;
+      if (rdx * rdx + rdz * rdz > TEAM_ADVANCE_LEASH_RADIUS * TEAM_ADVANCE_LEASH_RADIUS) return null;
+    }
     const memory = advanceMemory(cx, cz, TEAM_ADVANCE_LEASH_RADIUS);
     if (!memory) return null;
     return { ...mover, threat: memory };
@@ -913,13 +1012,13 @@ export class UnitMovement {
     this.elapsed += dt;
     // Hunt first: idle hulls notice live enemies (and drop memories of dead
     // attackers) before the drive step, so acquisitions steer same-tick.
-    this.sweepHunt();
+    // The sweep hands back its pre-tick snapshot (sides, live flags,
+    // health) for the drive below — it owns all three reads, so the drive
+    // carries them without rebuilding the same arrays.
+    const { teams, alive, hp } = this.sweepHunt();
     // The drive carries the roster sides, live flags, and health so an
     // outnumbered pursuer holds facing the threat (waiting for backup)
     // instead of charging alone into the stronger force.
-    const teams = this.movers.map((_, i) => this.teamAt(i));
-    const alive = this.movers.map((_, i) => !this.destroyed[i]);
-    const hp = this.health();
     const next = teams.every((t) => t === undefined)
       ? advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush)
       : advanceMovers(this.kinds, this.movers, this.routes, dt, this.field, this.crush, {

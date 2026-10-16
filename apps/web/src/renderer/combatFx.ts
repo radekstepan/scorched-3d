@@ -2112,7 +2112,7 @@ export class CombatFx {
           hp,
           // Pending aims are the squad's current focus (structure aims live
           // in a separate map, so only hull-aim values count).
-          focusCounts: [...this.pending.values()],
+          focusCounts: this.pending.values(),
           maxDist: admission,
         });
         if (target < 0) continue;
@@ -2193,7 +2193,7 @@ export class CombatFx {
       hp,
       // Pending aims are the squad's current focus (structure aims live in
       // a separate map keyed by attacker, so only hull-aim values count).
-      focusCounts: [...this.pending.values()],
+      focusCounts: this.pending.values(),
       sticky: this.pending.get(attacker) ?? -1,
       maxDist: kind ? this.admissionFor(kind) : undefined,
     });

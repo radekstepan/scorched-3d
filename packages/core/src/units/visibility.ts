@@ -1,4 +1,4 @@
-import { treesOnSegment, type CombatVec3, type TreeStand } from "./combat.js";
+import { countTreesOnSegment, type CombatVec3, type TreeStand } from "./combat.js";
 import type { UnitKind } from "./types.js";
 
 /**
@@ -117,6 +117,108 @@ export interface SightContext {
   eyeY?: readonly (number | undefined)[] | null;
   /** Kind per roster index (eye-height fallback). */
   kinds?: readonly (UnitKind | undefined)[] | null;
+  /**
+   * Memoized spot verdicts for one immutable snapshot (see `SpotCache`):
+   * the hunt sweep asks the same pair twice per tick (once to share the
+   * sighting team-wide, once to acquire on it), and the second ask replays
+   * the first instead of re-marching the terrain. Absent, every call
+   * resolves from scratch, exactly as before.
+   */
+  cache?: SpotCache | null;
+}
+
+/**
+ * One memoized spot verdict: the exact inputs the call resolved, plus the
+ * answer. Hits replay only when every input matches exactly — same notice
+ * gate, same endpoints, same eye heights — so a moved hull or a different
+ * gate never reads a stale verdict.
+ */
+export interface SpotVerdict {
+  base: number;
+  ax: number;
+  az: number;
+  ay: number;
+  bx: number;
+  bz: number;
+  by: number;
+  hit: boolean;
+}
+
+/**
+ * Memoized spot verdicts for one immutable sight snapshot. The cache never
+ * changes admission — a hit replays the exact predicate's answer for
+ * identical inputs, and anything else (moved endpoints, a different gate
+ * or eye height, a swapped surface or tree snapshot) recomputes from
+ * scratch. Use one fresh cache per snapshot (the sweep builds one per
+ * tick): entries are only valid while `groundY` and `trees` read the same
+ * world the verdicts were computed against.
+ */
+export interface SpotCache {
+  /** Surface the entries were computed against (identity-rebound on swap). */
+  groundY: ((x: number, z: number) => number) | null;
+  /** Tree snapshot the entries were computed against (identity-rebound). */
+  trees: readonly TreeStand[] | null | undefined;
+  /** Hull-pair verdicts by observer, then candidate (sparse — exact indices). */
+  pairs: SpotVerdict[][];
+  /** Fixed-point verdicts by observer (few forts — scanned, never keyed). */
+  points: SpotVerdict[][];
+}
+
+/** A fresh, unbound spot cache (see `SightContext.cache`). */
+export function createSpotCache(): SpotCache {
+  return { groundY: null, trees: undefined, pairs: [], points: [] };
+}
+
+/**
+ * True while `entry` answers this exact spot question: same notice gate,
+ * same endpoints, same eye heights.
+ */
+function verdictMatches(
+  entry: SpotVerdict,
+  base: number,
+  ax: number,
+  az: number,
+  ay: number,
+  bx: number,
+  bz: number,
+  by: number,
+): boolean {
+  return (
+    entry.base === base &&
+    entry.ax === ax &&
+    entry.az === az &&
+    entry.ay === ay &&
+    entry.bx === bx &&
+    entry.bz === bz &&
+    entry.by === by
+  );
+}
+
+/**
+ * Rebind the cache to this snapshot when the surface or the tree list was
+ * swapped underneath it (entries from the old world drop), or bind a fresh
+ * cache on its first use. Returns false while unbound work remains — the
+ * caller recomputes and stores.
+ */
+function cacheBound(cache: SpotCache, sight: SightContext): boolean {
+  if (cache.groundY !== sight.groundY || cache.trees !== sight.trees) {
+    cache.groundY = sight.groundY;
+    cache.trees = sight.trees;
+    cache.pairs.length = 0;
+    cache.points.length = 0;
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Trees past which the forest penalty cannot grow: `forestPenalty` caps at
+ * `base * SIGHT_FOREST_MAX_FRACTION`, so counting stops here — anything
+ * more reads the same saturated gate. A generous cap only moves the
+ * early-out, never the verdict.
+ */
+function forestSaturation(base: number): number {
+  return Math.max(0, Math.ceil((base * SIGHT_FOREST_MAX_FRACTION) / SIGHT_FOREST_COST));
 }
 
 /** High-ground notice bonus for eyes at `eyeY` over a target at `targetY`. */
@@ -222,6 +324,8 @@ export function sightClearsTerrain(
  * first — even the full high-ground bonus cannot admit past
  * `base + SIGHT_ELEVATION_MAX_BONUS` — so far pairs cost no surface
  * probes. Pure; `kinds` is the caller roster fallback for eye heights.
+ * With `sight.cache`, a repeat ask for identical inputs replays the stored
+ * verdict instead of re-marching the terrain (see `SpotCache`).
  */
 export function canSpot(
   self: number,
@@ -247,17 +351,44 @@ export function canSpot(
   if (dist > base + SIGHT_ELEVATION_MAX_BONUS) return false;
   const eyeA = eyeYFor(self, positions, sight, kinds?.[self]);
   const eyeB = eyeYFor(foe, positions, sight, kinds?.[foe]);
+  const cache = sight.cache ?? null;
+  if (cache && cacheBound(cache, sight)) {
+    const prior = cache.pairs[self]?.[foe];
+    if (prior && verdictMatches(prior, base, me.x, me.z, eyeA, him.x, him.z, eyeB)) {
+      return prior.hit;
+    }
+  }
   const a = { x: me.x, y: eyeA, z: me.z };
   const b = { x: him.x, y: eyeB, z: him.z };
-  if (!sightClearsTerrain(a, b, sight.groundY)) return false;
+  const hit = sightClearsTerrain(a, b, sight.groundY) && dist <= effectiveNotice(base, eyeA, eyeB, crossedTrees(a, b, base, sight));
+  if (cache) {
+    const row = (cache.pairs[self] ??= []);
+    row[foe] = { base, ax: me.x, az: me.z, ay: eyeA, bx: him.x, bz: him.z, by: eyeB, hit };
+  }
+  return hit;
+}
+
+/**
+ * Wood on the sight line, counted only up to the forest-penalty saturation
+ * (see `forestSaturation`): past it the gate cannot shrink further, so the
+ * scan stops early instead of walking the rest of the forest.
+ */
+function crossedTrees(
+  a: CombatVec3,
+  b: CombatVec3,
+  base: number,
+  sight: SightContext,
+): number {
   const trees = sight.trees ?? [];
-  const crossed = trees.length > 0 ? treesOnSegment(a, b, trees).length : 0;
-  return dist <= effectiveNotice(base, eyeA, eyeB, crossed);
+  if (trees.length === 0) return 0;
+  return countTreesOnSegment(a, b, trees, forestSaturation(base));
 }
 
 /**
  * Spot a fixed point (an HQ fort, not a roster row): the same gate as
- * `canSpot` with an explicit target position and world-Y. Pure.
+ * `canSpot` with an explicit target position and world-Y. Pure. With
+ * `sight.cache`, a repeat ask for identical inputs replays the stored
+ * verdict instead of re-marching the terrain (see `SpotCache`).
  */
 export function canSpotPoint(
   self: number,
@@ -277,10 +408,26 @@ export function canSpotPoint(
   const dist = Math.hypot(tx - me.x, tz - me.z);
   if (dist > base + SIGHT_ELEVATION_MAX_BONUS) return false;
   const eyeA = eyeYFor(self, positions, sight, kinds?.[self]);
+  const cache = sight.cache ?? null;
+  if (cache && cacheBound(cache, sight)) {
+    const priors = cache.points[self];
+    if (priors) {
+      for (const prior of priors) {
+        if (verdictMatches(prior, base, me.x, me.z, eyeA, tx, tz, targetY)) return prior.hit;
+      }
+    }
+  }
   const a = { x: me.x, y: eyeA, z: me.z };
   const b = { x: tx, y: targetY, z: tz };
-  if (!sightClearsTerrain(a, b, sight.groundY)) return false;
-  const trees = sight.trees ?? [];
-  const crossed = trees.length > 0 ? treesOnSegment(a, b, trees).length : 0;
-  return dist <= effectiveNotice(base, eyeA, targetY, crossed);
+  const hit = sightClearsTerrain(a, b, sight.groundY) && dist <= effectiveNotice(base, eyeA, targetY, crossedTrees(a, b, base, sight));
+  if (cache) {
+    const verdict: SpotVerdict = { base, ax: me.x, az: me.z, ay: eyeA, bx: tx, bz: tz, by: targetY, hit };
+    const priors = (cache.points[self] ??= []);
+    const at = priors.findIndex((prior) =>
+      verdictMatches(prior, base, me.x, me.z, eyeA, tx, tz, targetY),
+    );
+    if (at >= 0) priors[at] = verdict;
+    else priors.push(verdict);
+  }
+  return hit;
 }
