@@ -246,6 +246,25 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
+  it("breathes the beacon cores in sync with the rotor sweep", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    const groups = [hq.groupAt(0)!, hq.groupAt(1)!];
+    const halos = groups.map((g) => g.getObjectByName("hq-beacon-halo") as THREE.Mesh);
+    // A quarter period swells both halos together, mid-breath.
+    hq.update(HQ_BEACON_PERIOD * 0.25);
+    const q0 = (halos[0]!.material as THREE.MeshBasicMaterial).opacity;
+    const q1 = (halos[1]!.material as THREE.MeshBasicMaterial).opacity;
+    expect(q0).toBeCloseTo(q1, 9);
+    expect(q0).toBeGreaterThan(0);
+    // The half period is the full breath on both forts.
+    hq.update(HQ_BEACON_PERIOD * 0.25);
+    const h0 = (halos[0]!.material as THREE.MeshBasicMaterial).opacity;
+    expect(h0).toBeGreaterThan(q0);
+    expect((halos[1]!.material as THREE.MeshBasicMaterial).opacity).toBeCloseTo(h0, 9);
+    hq.dispose();
+  });
+
   it("kills the beacon on the wreck and keeps it dark", () => {
     const scene = new THREE.Scene();
     const hq = new HqFx(scene, anchors(), { groundY: () => 40 });

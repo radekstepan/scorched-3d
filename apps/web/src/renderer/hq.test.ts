@@ -5,11 +5,15 @@ import {
   doorLiftOf,
   foundationDepthOf,
   getHqBeacon,
+  getHqBeaconBulb,
+  getHqBeaconHalo,
   getHqBeaconLight,
+  getHqBeaconMotes,
   getHqBeaconRotor,
   getHqDoor,
   hqBeaconAngleAt,
   hqBeaconAngleOf,
+  hqBeaconPulseAt,
   hqDoorBaseY,
   hqExitWorld,
   hqFacingFor,
@@ -18,12 +22,15 @@ import {
   setDoorLift,
   setHqBeaconAngle,
   setHqBeaconLevel,
+  setHqBeaconPulse,
   setHqFoundation,
   HQ_BASE_D,
   HQ_BASE_W,
+  HQ_BEACON_BOB,
   HQ_BEACON_COLOR,
   HQ_BEACON_DECAY,
   HQ_BEACON_DISTANCE,
+  HQ_BEACON_HALO_SCALE,
   HQ_BEACON_ORBIT,
   HQ_BEACON_PEAK,
   HQ_BEACON_PERIOD,
@@ -88,11 +95,13 @@ describe("buildHq", () => {
       const solids = group.children.filter((c) => c.type === "Mesh").length;
       expect(solids).toBeGreaterThan(18);
       // Every factory-built surface is a shared-style Lambert (the team
-      // ring keeps its own marker material) with the highlight guard.
+      // ring keeps its own marker material, and the beacon halo is an
+      // additive Basic per the combat/fire glow convention — a light
+      // effect, not a factory surface) with the highlight guard.
       group.traverse((child) => {
         const mesh = child as THREE.Mesh;
         if (mesh.type !== "Mesh") return;
-        if (child.name !== "team-ring") {
+        if (child.name !== "team-ring" && child.name !== "hq-beacon-halo") {
           expect(mesh.material).toBeInstanceOf(THREE.MeshLambertMaterial);
         }
         expect(child.userData.noHighlight).toBe(true);
@@ -158,26 +167,52 @@ describe("hq warning beacon", () => {
       expect(dome!.material).toBeInstanceOf(THREE.MeshLambertMaterial);
       const mat = dome!.material as THREE.MeshLambertMaterial;
       expect(mat.emissive.getHex()).toBe(HQ_BEACON_COLOR);
-      // Translucent lens so the rotor reads through it.
+      // Clear glass so the core reads through it — never an opaque red
+      // disc pasted on top of the light.
       expect(mat.transparent).toBe(true);
-      expect(mat.opacity).toBeLessThan(1);
-      // The light + bulb ride a rotor inside the dome, offset from center.
-      const rotor = getHqBeaconRotor(group);
-      expect(rotor, "beacon rotor must exist").not.toBeNull();
-      expect(rotor!.position.equals(dome!.position)).toBe(true);
+      expect(mat.opacity).toBeLessThan(0.5);
+      // The hot core + wash light sit on the dome's center axis, so the
+      // light reads as emanating from the center.
+      const bulb = getHqBeaconBulb(group);
+      expect(bulb, "hot core must exist").not.toBeNull();
+      expect(bulb!.parent).toBe(group);
+      expect(Math.hypot(bulb!.position.x - HQ_BEACON_X, bulb!.position.z)).toBeCloseTo(0, 9);
+      expect(bulb!.position.y).toBeCloseTo(HQ_BEACON_Y + 1, 9);
+      expect((bulb!.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(HQ_BEACON_COLOR);
       const light = getHqBeaconLight(group);
       expect(light, "beacon light must exist").not.toBeNull();
       expect(light!.isPointLight).toBe(true);
-      expect(light!.parent).toBe(rotor);
+      expect(light!.parent).toBe(group);
       expect(light!.color.getHex()).toBe(HQ_BEACON_COLOR);
       expect(light!.distance).toBe(HQ_BEACON_DISTANCE);
-      const radial = Math.hypot(light!.position.x, light!.position.z);
-      expect(radial).toBeCloseTo(HQ_BEACON_ORBIT, 9);
-      const bulb = group.getObjectByName("hq-beacon-bulb");
-      expect(bulb, "rotor bulb must exist").not.toBeNull();
-      expect(bulb!.parent).toBe(rotor);
+      expect(Math.hypot(light!.position.x - HQ_BEACON_X, light!.position.z)).toBeCloseTo(0, 9);
+      // Twin arc motes ride the rotor around the core: the visible sweep
+      // inside the glass.
+      const rotor = getHqBeaconRotor(group);
+      expect(rotor, "beacon rotor must exist").not.toBeNull();
+      expect(rotor!.position.equals(dome!.position)).toBe(true);
+      const motes = getHqBeaconMotes(group);
+      expect(motes, "twin arc motes").toHaveLength(2);
+      for (const mote of motes) {
+        expect(mote.parent).toBe(rotor);
+        expect(Math.hypot(mote.position.x, mote.position.z)).toBeCloseTo(HQ_BEACON_ORBIT, 9);
+      }
+      expect(motes[0]!.position.x).toBeCloseTo(-motes[1]!.position.x, 9);
+      // A faint additive halo shell breathes past the lens: light radiating
+      // outward, following the combat/fire glow convention.
+      const halo = getHqBeaconHalo(group);
+      expect(halo, "beacon halo must exist").not.toBeNull();
+      expect(halo!.position.equals(dome!.position)).toBe(true);
+      const haloGeo = halo!.geometry as THREE.SphereGeometry;
+      expect(haloGeo.parameters.radius).toBeCloseTo(HQ_BEACON_RADIUS * HQ_BEACON_HALO_SCALE, 9);
+      const haloMat = halo!.material as THREE.MeshBasicMaterial;
+      expect(haloMat.blending).toBe(THREE.AdditiveBlending);
+      expect(haloMat.depthWrite).toBe(false);
+      expect(haloMat.opacity).toBeLessThan(0.5);
+      expect(halo!.visible).toBe(true);
       // Guarded like every other factory surface.
       expect(dome!.userData.noHighlight).toBe(true);
+      expect(halo!.userData.noHighlight).toBe(true);
     }
   });
 
@@ -214,16 +249,68 @@ describe("hq warning beacon", () => {
     expect(hqBeaconAngleOf(group)).toBeCloseTo(0, 9);
     setHqBeaconAngle(group, Math.PI);
     expect(hqBeaconAngleOf(group)).toBeCloseTo(Math.PI, 9);
-    // The light orbits with the rotor: a half turn mirrors its offset.
-    const light = getHqBeaconLight(group)!;
+    // An arc mote orbits with the rotor: a half turn mirrors its offset.
+    const mote = getHqBeaconMotes(group)[0]!;
     const rotor = getHqBeaconRotor(group)!;
     const pivot = rotor.getWorldPosition(new THREE.Vector3());
     setHqBeaconAngle(group, 0);
-    const parked = light.getWorldPosition(new THREE.Vector3());
+    const parked = mote.getWorldPosition(new THREE.Vector3());
     setHqBeaconAngle(group, Math.PI);
-    const flipped = light.getWorldPosition(new THREE.Vector3());
+    const flipped = mote.getWorldPosition(new THREE.Vector3());
     expect(flipped.x - pivot.x).toBeCloseTo(-(parked.x - pivot.x), 6);
     expect(flipped.z - pivot.z).toBeCloseTo(-(parked.z - pivot.z), 6);
+  });
+
+  it("breathes one smooth swell per period (pure function of time)", () => {
+    // Seam parked dim, full at the half, smooth between.
+    expect(hqBeaconPulseAt(0)).toBeCloseTo(0, 9);
+    expect(hqBeaconPulseAt(HQ_BEACON_PERIOD * 0.5)).toBeCloseTo(1, 9);
+    const quarter = hqBeaconPulseAt(HQ_BEACON_PERIOD * 0.25);
+    expect(quarter).toBeGreaterThan(0);
+    expect(quarter).toBeLessThan(1);
+    // Wraps every period.
+    expect(hqBeaconPulseAt(HQ_BEACON_PERIOD)).toBeCloseTo(0, 9);
+    expect(hqBeaconPulseAt(HQ_BEACON_PERIOD * 1.5)).toBeCloseTo(1, 9);
+    // Degenerate input parks the core dim instead of flashing it somewhere.
+    expect(hqBeaconPulseAt(-1)).toBe(0);
+    expect(hqBeaconPulseAt(NaN)).toBe(0);
+  });
+
+  it("breathes the core + halo from the pulse while the wash holds steady", () => {
+    const group = buildHq(0);
+    setHqBeaconLevel(group, 1);
+    const bulb = getHqBeaconBulb(group)!;
+    const halo = getHqBeaconHalo(group)!;
+    const bulbMat = bulb.material as THREE.MeshLambertMaterial;
+    const haloMat = halo.material as THREE.MeshBasicMaterial;
+    setHqBeaconPulse(group, 0);
+    const dimEmissive = bulbMat.emissiveIntensity;
+    const dimOpacity = haloMat.opacity;
+    const dimScale = halo.scale.x;
+    const dimY = bulb.position.y;
+    setHqBeaconPulse(group, 1);
+    // The core swells, brightens, and rises on the dome axis; the halo
+    // swells and brightens past the lens — while the wash light never
+    // breathes (no blink dark half).
+    expect(bulbMat.emissiveIntensity).toBeGreaterThan(dimEmissive);
+    expect(bulb.scale.x).toBeGreaterThan(1);
+    expect(bulb.position.y - dimY).toBeCloseTo(HQ_BEACON_BOB, 9);
+    expect(haloMat.opacity).toBeGreaterThan(dimOpacity);
+    expect(halo.scale.x).toBeGreaterThan(dimScale);
+    expect(halo.visible).toBe(true);
+    expect(getHqBeaconLight(group)!.intensity).toBeCloseTo(HQ_BEACON_PEAK, 9);
+    // Clamped, never negative or over the faint-halo ceiling.
+    setHqBeaconPulse(group, 99);
+    expect(haloMat.opacity).toBeLessThanOrEqual(0.5);
+    setHqBeaconPulse(group, -99);
+    expect(haloMat.opacity).toBeGreaterThanOrEqual(0);
+    expect(bulb.scale.x).toBeCloseTo(1, 9);
+    // Level 0 parks the whole stack dark and hides the halo.
+    setHqBeaconLevel(group, 0);
+    setHqBeaconPulse(group, 1);
+    expect(haloMat.opacity).toBe(0);
+    expect(halo.visible).toBe(false);
+    expect(bulbMat.emissiveIntensity).toBe(0);
   });
 
   it("drives the lens + wash light from the level, clamped", () => {
@@ -272,10 +359,19 @@ describe("hq warning beacon", () => {
     const bulbMat = (group.getObjectByName("hq-beacon-bulb") as THREE.Mesh)!
       .material as THREE.MeshLambertMaterial;
     expect(bulbMat.emissive.getHex()).toBe(0x000000);
+    const moteMat = (group.getObjectByName("hq-beacon-mote-a") as THREE.Mesh)!
+      .material as THREE.MeshLambertMaterial;
+    expect(moteMat.emissive.getHex()).toBe(0x000000);
+    const halo = getHqBeaconHalo(group)!;
+    expect(halo.visible).toBe(false);
     // Even a full-flash drive stays dark once wrecked.
     setHqBeaconLevel(group, 1);
+    setHqBeaconPulse(group, 1);
     expect(getHqBeaconLight(group)!.intensity).toBe(0);
     expect((getHqBeacon(group)!.material as THREE.MeshLambertMaterial).emissive.getHex()).toBe(0x000000);
+    expect(bulbMat.emissiveIntensity).toBe(0);
+    expect(halo.visible).toBe(false);
+    expect((halo.material as THREE.MeshBasicMaterial).opacity).toBe(0);
   });
 });
 
