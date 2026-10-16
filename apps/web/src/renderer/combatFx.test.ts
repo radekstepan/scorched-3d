@@ -32,6 +32,7 @@ import {
   PEEWEE_BULLET_SCALE,
   PEEWEE_EXPLOSION_MAX_AGE,
   projectileGlowFalloff,
+  projectileGlowFootprint,
   projectileGlowRadius,
   projectileTailLength,
   projectileTailOpacity,
@@ -44,6 +45,7 @@ import {
   SHOT_GLOW_PEAK,
   SHOT_GLOW_RANGE,
   SHOT_GLOW_RADIUS,
+  SHOT_GLOW_TAIL_GAIN,
   TURRET_RECOIL_DURATION,
   TURRET_RECOIL_KICK,
   wreckPopVelocity,
@@ -2423,6 +2425,82 @@ describe("CombatFx projectile glow", () => {
     // Dispose removes every pooled light and blob (no per-frame leak).
     expect(scene.children.filter((c) => (c as THREE.PointLight).isPointLight).length).toBe(0);
     expect(glowBlobs(scene).length).toBe(0);
+  });
+
+  it("orients the ground blob along the flight line (pure footprint)", () => {
+    // Flat fast bolt down +X: yawed onto the bearing, stretched by the full
+    // ground-projected tail — the dirt mirrors the head→tail streak.
+    const flat = projectileGlowFootprint(1300, 0, 0, 1);
+    expect(flat.yaw).toBeCloseTo(Math.PI / 2, 5);
+    expect(flat.width).toBeCloseTo(SHOT_GLOW_RADIUS, 5);
+    expect(flat.length).toBeCloseTo(
+      SHOT_GLOW_RADIUS + projectileTailLength(1300) * SHOT_GLOW_TAIL_GAIN,
+      5,
+    );
+    expect(flat.length).toBeGreaterThan(flat.width * 1.5);
+    // Diagonal bearing lands on atan2, elongated along it.
+    const diag = projectileGlowFootprint(900, 0, 900, 1);
+    expect(diag.yaw).toBeCloseTo(Math.PI / 4, 5);
+    expect(diag.length).toBeGreaterThan(diag.width);
+    // Steep climb foreshortens the tail: near-circular, still yawed.
+    const climb = projectileGlowFootprint(100, 1200, 0, 1);
+    expect(climb.yaw).toBeCloseTo(Math.PI / 2, 5);
+    expect(climb.length - climb.width).toBeLessThan((flat.length - flat.width) / 4);
+    // Straight-vertical flight has no bearing: the legacy plain circle.
+    const dive = projectileGlowFootprint(0, -1300, 0, 1);
+    expect(dive.yaw).toBe(0);
+    expect(dive.length).toBeCloseTo(dive.width, 5);
+    // Hover/zero velocity: the legacy plain circle at any falloff.
+    const still = projectileGlowFootprint(0, 0, 0, 0.5);
+    expect(still.yaw).toBe(0);
+    expect(still.width).toBeCloseTo(projectileGlowRadius(0.5), 5);
+    expect(still.length).toBeCloseTo(still.width, 5);
+    // Width always tracks the legacy disc radius; length never undercuts it.
+    for (const [vx, vy, vz] of [
+      [1300, 0, 0],
+      [0, -500, 300],
+      [60, 20, 10],
+    ]) {
+      for (let f = 0; f <= 1.001; f += 0.25) {
+        const fp = projectileGlowFootprint(vx!, vy!, vz!, f);
+        expect(fp.width).toBeCloseTo(projectileGlowRadius(f), 5);
+        expect(fp.length).toBeGreaterThanOrEqual(fp.width);
+      }
+    }
+  });
+
+  it("seats oriented ellipses under live rounds, tracking velocity", () => {
+    const scene = new THREE.Scene();
+    const units = makeUnits();
+    const fx = new CombatFx(scene, units, mulberry32(21), flatEnv(100));
+    // Exact wiring every tick: each live blob yaws onto its round's bearing
+    // and stretches by its ground-projected tail share — the same
+    // instantaneous vector the head mesh lookAts.
+    let compared = 0;
+    let streaked = 0;
+    for (let n = 0; n < 1200; n++) {
+      fx.update(1 / 60);
+      for (let i = 0; i < fx.shotGlowCount; i++) {
+        const vel = fx.shotVelocityAt(i);
+        const seen = fx.shotGlowFootprintAt(i);
+        if (!vel || !seen) continue; // high arc: falloff hid the blob this tick
+        expect(seen.yaw).toBeCloseTo(Math.atan2(vel.x, vel.z), 5);
+        const speed = Math.hypot(vel.x, vel.y, vel.z);
+        const flat = speed > 0 ? Math.min(Math.hypot(vel.x, vel.z) / speed, 1) : 0;
+        expect(seen.length - seen.width).toBeCloseTo(
+          projectileTailLength(speed) * flat * SHOT_GLOW_TAIL_GAIN,
+          5,
+        );
+        expect(seen.length).toBeGreaterThanOrEqual(seen.width);
+        expect(seen.width).toBeLessThanOrEqual(SHOT_GLOW_RADIUS + 1e-6);
+        compared++;
+        if (seen.length > seen.width * 1.25) streaked++;
+      }
+    }
+    expect(compared).toBeGreaterThan(0);
+    // At least one flat fast bolt streaked its reflection well past circular.
+    expect(streaked).toBeGreaterThan(0);
+    fx.dispose();
   });
 });
 

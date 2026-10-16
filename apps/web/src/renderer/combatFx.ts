@@ -427,8 +427,9 @@ const UP = new THREE.Vector3(0, 1, 0);
  *   trunks/canopies (`features.ts`), rocks, and hulls — with physical
  *   distance/decay falloff, exactly like the muzzle/explosion kick pool.
  * - Pooled additive ground blobs fake the same light on the unlit terrain
- *   shader: a soft disc seated on `env.groundY` under each glowing round,
- *   fading with height above the dirt.
+ *   shader: an oriented ellipse seated on `env.groundY` under each glowing
+ *   round — stretched along the head→tail flight line like the projectile
+ *   itself (see `projectileGlowFootprint`), fading with height above the dirt.
  *
  * Both pools are fixed-size (no per-shot alloc, no per-frame leak): the first
  * `SHOT_GLOW_LIGHTS` live rounds glow, the rest fly dark. Muzzle/explosion
@@ -468,6 +469,47 @@ export function projectileGlowFalloff(height: number): number {
 export function projectileGlowRadius(falloff: number): number {
   const f = Math.min(Math.max(falloff, 0), 1);
   return Math.max(SHOT_GLOW_RADIUS * (0.6 + 0.4 * f), 1);
+}
+
+/**
+ * Ground-blob share of the visible warp tail: the blob's long axis mirrors
+ * the head→tail stroke the projectile draws in the air (nanolathe reads
+ * beams the same way — head→tail oriented strokes with the light riding the
+ * line, `battle_sprites_projectiles.go` — and seats the projectile shadow on
+ * the floor projection). A flat fast bolt streaks a long ellipse, a shell
+ * climbing or diving steeply stamps near-circular, and a shell's blob
+ * breathes along its arc exactly like its tail. The gain caps the tail share
+ * at ~31 units (max tail × gain — about one disc width at full strength),
+ * so the longest blob reads as a reflection of the round, not a cross-map
+ * streak. Pure for tests.
+ */
+export const SHOT_GLOW_TAIL_GAIN = 0.35;
+
+/**
+ * Oriented ground-blob footprint for a projectile flying at instantaneous
+ * velocity (`vx`, `vy`, `vz`) with glow `falloff` 0..1: `yaw` is the
+ * horizontal flight bearing (three.js rotation.y — local +Z lands on the
+ * flight line), `width` the legacy disc radius across the flight, and
+ * `length` the radius plus the ground-projected tail share along it. Hovering
+ * or straight-vertical flight (no horizontal component) falls back to the
+ * plain circle at yaw 0. Pure for tests.
+ */
+export function projectileGlowFootprint(
+  vx: number,
+  vy: number,
+  vz: number,
+  falloff: number,
+): { yaw: number; width: number; length: number } {
+  const width = projectileGlowRadius(falloff);
+  const horiz = Math.hypot(vx, vz);
+  const speed = Math.hypot(horiz, vy);
+  if (!(horiz > 0) || !(speed > 0)) return { yaw: 0, width, length: width };
+  const flat = Math.min(horiz / speed, 1);
+  return {
+    yaw: Math.atan2(vx, vz),
+    width,
+    length: width + projectileTailLength(speed) * flat * SHOT_GLOW_TAIL_GAIN,
+  };
 }
 
 /**
@@ -940,6 +982,33 @@ export class CombatFx {
     const mesh = this.shotGlowMeshes[i];
     if (!mesh || !mesh.visible) return 0;
     return this.shotGlowMats[i]?.opacity ?? 0;
+  }
+
+  /**
+   * Ground-blob footprint of glow slot `i` (null while hidden), for tests:
+   * the flight-bearing yaw (rotation.y) plus the across/along scale the
+   * pose writes from `projectileGlowFootprint` every tick.
+   */
+  shotGlowFootprintAt(i: number): { yaw: number; width: number; length: number } | null {
+    const mesh = this.shotGlowMeshes[i];
+    if (!mesh || !mesh.visible) return null;
+    return { yaw: mesh.rotation.y, width: mesh.scale.x, length: mesh.scale.z };
+  }
+
+  /**
+   * Instantaneous velocity of live shot `i` (null when absent), for tests:
+   * the analytic `ballisticVelocity` at the clamped flight time — the same
+   * vector `advanceShots` orients the head by and `poseShotGlow` seats the
+   * ground blob from.
+   */
+  shotVelocityAt(i: number): { x: number; y: number; z: number } | null {
+    const shot = this.shots[i];
+    if (!shot) return null;
+    return ballisticVelocity(
+      { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
+      Math.min(shot.age, shot.dur),
+      shot.gravity,
+    );
   }
 
   /**
@@ -2973,8 +3042,10 @@ export class CombatFx {
   /**
    * Seat the projectile-glow pool on the live rounds: slot `i` rides
    * `shots[i]` — a weapon-tinted light at the round for Lambert neighbors
-   * (trees, rocks, hulls) plus a ground blob on `env.groundY` under it for
-   * the unlit terrain shader. Both fade with height above the dirt via
+   * (trees, rocks, hulls) plus an oriented ground ellipse on `env.groundY`
+   * under it for the unlit terrain shader, stretched along the head→tail
+   * flight line like the projectile itself (see
+   * `projectileGlowFootprint`). Both fade with height above the dirt via
    * `projectileGlowFalloff`, so low skimmers light the undergrowth while
    * high lobbed arcs go quiet. Slots past the live shots go dark/hidden;
    * with no shots (or no env surface) the blobs hide and only the falloff
@@ -3015,7 +3086,18 @@ export class CombatFx {
       light.intensity = SHOT_GLOW_PEAK * falloff * nightLightScale(this.night);
       blob.visible = true;
       blob.position.set(pos.x, ground + 1.4, pos.z);
-      blob.scale.setScalar(projectileGlowRadius(falloff));
+      // Reflection of the round, not a plain circle: the ellipse yaws onto
+      // the horizontal flight bearing and stretches along it with the
+      // ground-projected warp tail — the same instantaneous vector the head
+      // mesh lookAts in `advanceShots`, so the dirt tracks the airframe.
+      const v = ballisticVelocity(
+        { x: shot.vel.x, y: shot.vel.y, z: shot.vel.z },
+        Math.min(shot.age, shot.dur),
+        shot.gravity,
+      );
+      const foot = projectileGlowFootprint(v.x, v.y, v.z, falloff);
+      blob.rotation.y = foot.yaw;
+      blob.scale.set(foot.width, 1, foot.length);
       mat.opacity = SHOT_GLOW_OPACITY * falloff * nightLightScale(this.night);
     }
   }
