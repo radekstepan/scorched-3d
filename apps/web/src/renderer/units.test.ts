@@ -442,9 +442,11 @@ describe("team ground rings", () => {
 describe("team ring selection emphasis (one circle, thicker on select)", () => {
   it("builds subtle by default and pins the selected/unselected split", () => {
     const ring = buildTeamRing(0);
-    // Quiet marker out of the box: thin band, low opacity.
-    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.35);
+    // Quiet marker out of the box: thin band, low opacity — ~30% more
+    // visible than the original 0.3 so the circle reads at a glance.
+    expect((ring.material as THREE.MeshBasicMaterial).opacity).toBeLessThanOrEqual(0.45);
     expect((ring.material as THREE.MeshBasicMaterial).opacity).toBe(TEAM_RING_OPACITY);
+    expect(TEAM_RING_OPACITY).toBeCloseTo(0.3 * 1.3, 2);
     expect(TEAM_RING_OUTER - TEAM_RING_INNER).toBeLessThanOrEqual(2.5);
     // Pure helpers pin the split: selected is opaque, unselected is subtle.
     expect(teamRingOpacity(false)).toBe(TEAM_RING_OPACITY);

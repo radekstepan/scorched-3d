@@ -218,8 +218,9 @@ export const TEAM_RING_OUTER = 27;
 export const TEAM_RING_INNER_SELECTED = 22;
 /** Team rings sit just above the dirt, under scorch decals + selection. */
 export const TEAM_RING_LIFT = 1.0;
-/** Unselected team-ring opacity: a quiet marker, not a highlight. */
-export const TEAM_RING_OPACITY = 0.3;
+/** Unselected team-ring opacity: a quiet marker, not a highlight — bumped
+ * ~30% over the original 0.3 so the circle reads at a glance. */
+export const TEAM_RING_OPACITY = 0.39;
 /** Selected team-ring opacity: the ring brightens with selection. */
 export const TEAM_RING_OPACITY_SELECTED = 0.9;
 
