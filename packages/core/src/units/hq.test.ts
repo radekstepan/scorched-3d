@@ -44,7 +44,7 @@ import {
 import { BLAST_RADIUS } from "./destruction.js";
 import { UNIT_HIT_DAMAGE } from "./unitDamage.js";
 import { mulberry32 } from "../terrain/noise.js";
-import { generateMap } from "../terrain/generate.js";
+import { classifyTile, generateMap } from "../terrain/generate.js";
 import { FEATURE_EMPTY, FEATURE_FRINGE, worldHeight, type MapPreset } from "../terrain/types.js";
 
 function flatField(width = 64, height = 64, h = 40, seaLevel = 10) {
@@ -497,7 +497,7 @@ describe("hq exit lanes", () => {
     expect(field.features[height * width - 1]).toBe(0);
   });
 
-  it("ships leveled, cleared, dirt-painted lanes for its own forts", () => {
+  it("ships leveled dirt pads and cleared unpainted exit lanes for its own forts", () => {
     const presets: MapPreset[] = [
       "greenreach",
       "archipelago",
@@ -513,9 +513,11 @@ describe("hq exit lanes", () => {
         const tileW = map.width / 2;
         for (const site of map.hqs) {
           const anchor = map.heights[site.cellZ * map.width + site.cellX] ?? 0;
-          const lane = [...hqPadCells(site, map.width, map.height), ...hqRoadCells(site, map.width, map.height)];
+          const pad = hqPadCells(site, map.width, map.height);
+          const road = hqRoadCells(site, map.width, map.height);
+          const lane = [...pad, ...road];
           expect(lane.length).toBeGreaterThan(0);
-          for (const c of hqPadCells(site, map.width, map.height)) {
+          for (const c of pad) {
             expect(
               map.heights[c.cellZ * map.width + c.cellX],
               `${preset} seed ${seed} team ${site.team} pad not level`,
@@ -526,11 +528,34 @@ describe("hq exit lanes", () => {
               map.features[c.cellZ * map.width + c.cellX],
               `${preset} seed ${seed} team ${site.team} feature blocks the lane`,
             ).toBe(FEATURE_EMPTY);
+          }
+          // The construction pad reads seated in dirt; the exit lane past
+          // it keeps the natural ground — cleared of trees, never painted.
+          const padTiles = new Set(pad.map((c) => (c.cellZ >> 1) * tileW + (c.cellX >> 1)));
+          for (const c of pad) {
             const tile = map.tileMap[(c.cellZ >> 1) * tileW + (c.cellX >> 1)] ?? 0;
             expect(
               map.tileKinds[tile],
-              `${preset} seed ${seed} team ${site.team} lane tile not dirt`,
+              `${preset} seed ${seed} team ${site.team} pad tile not dirt`,
             ).toBe("dirt");
+          }
+          for (const c of road) {
+            const tix = (c.cellZ >> 1) * tileW + (c.cellX >> 1);
+            if (padTiles.has(tix)) continue; // shared tile: the pad dirt wins.
+            const tile = map.tileMap[tix] ?? 0;
+            const natural = classifyTile(
+              map.heights,
+              map.width,
+              map.height,
+              map.seaLevel,
+              (c.cellX >> 1) * 2,
+              (c.cellZ >> 1) * 2,
+              map.seed,
+            );
+            expect(
+              map.tileKinds[tile],
+              `${preset} seed ${seed} team ${site.team} exit lane repainted (${natural} expected)`,
+            ).toBe(natural);
           }
           // The finished ground still satisfies the siting guards.
           expect(hqHallClear(map, site.cellX, site.cellZ, site.team)).toBe(true);

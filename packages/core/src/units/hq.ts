@@ -154,9 +154,10 @@ export const HQ_PAD_REAR = 4;
 export const HQ_PAD_HALF_WIDTH = 3;
 export const HQ_PAD_FRONT_EXTRA = 1;
 /**
- * Dirt-road cells past the hall corridor toward the map center (clear +
- * dirt paint, terrain kept — the road follows the ground out to the
- * reinforcement staging point). Half-width each side of the anchor row.
+ * Exit-lane cells past the hall corridor toward the map center (cleared of
+ * features only — terrain and natural tiles kept, never painted dirt — so
+ * the lane out to the reinforcement staging point reads as open ground).
+ * Half-width each side of the anchor row.
  */
 export const HQ_ROAD_EXTRA = 20;
 export const HQ_ROAD_HALF_WIDTH = 2;
@@ -252,9 +253,10 @@ export function hqPadCells(site: HqSite, width: number, height: number): HqGroun
 }
 
 /**
- * Dirt-road cells past the hall mouth toward the map center, clamped to
+ * Exit-lane cells past the hall mouth toward the map center, clamped to
  * the grid. Reinforcements walk out of the mouth and stage further in, so
- * the road runs them a cleared lane out of the woods.
+ * the lane runs them a cleared path out of the woods — no trees, no
+ * repaint: the ground keeps its natural look.
  */
 export function hqRoadCells(site: HqSite, width: number, height: number): HqGroundCell[] {
   const dir = site.team === 0 ? 1 : -1;

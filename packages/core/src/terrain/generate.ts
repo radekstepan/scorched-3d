@@ -1,7 +1,7 @@
 import { buildPalette, TILE_RAMPS } from "./palette";
 import { clamp, fbm, hash2, lerp, mulberry32, ridged, smoothstep, warpFbm } from "./noise";
 import { placeUnits, startingUnitCount } from "../units/place.js";
-import { clearHqLanes, hqPadCells, hqRoadCells, levelHqPads, placeHqs } from "../units/hq.js";
+import { clearHqLanes, hqPadCells, levelHqPads, placeHqs } from "../units/hq.js";
 import {
   CELL_PIXELS,
   FEATURE_EMPTY,
@@ -78,12 +78,14 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
     }
   }
 
-  // Dirt exit roads: paint every tile touched by an HQ pad or exit road
-  // with a dirt variant (deterministic per tile, like the base
-  // classification), so the cleared lane out of each works reads as a road
-  // on the terrain and the minimap. Runs after classification, before the
-  // minimap + units, so both see the finished ground.
-  paintHqRoads(tileMap, kinds, hqs, width, height, seed);
+  // Seated works, unpainted exit: paint every tile touched by an HQ
+  // construction pad with a dirt variant (deterministic per tile, like the
+  // base classification), so the fort reads seated on the terrain and the
+  // minimap. The exit lane past the pad keeps its natural classification —
+  // it is only cleared of features, never repainted. Runs after
+  // classification, before the minimap + units, so both see the finished
+  // ground.
+  paintHqPads(tileMap, kinds, hqs, width, height, seed);
 
   const minimap = buildMinimap(heights, tileMap, tiles, width, height, seaLevel);
   const units = placeUnits({ heights, features, width, height, seaLevel }, seed, startingUnitCount(preset));
@@ -110,7 +112,7 @@ export function generateMap(preset: MapPreset, seed: number): TNTMap {
   };
 }
 
-function paintHqRoads(
+function paintHqPads(
   tileMap: Uint16Array,
   kinds: TileKind[],
   hqs: { team: 0 | 1; cellX: number; cellZ: number }[],
@@ -132,7 +134,6 @@ function paintHqRoads(
   };
   for (const site of hqs) {
     for (const cell of hqPadCells(site, width, height)) paint(cell.cellX, cell.cellZ);
-    for (const cell of hqRoadCells(site, width, height)) paint(cell.cellX, cell.cellZ);
   }
 }
 
@@ -256,7 +257,12 @@ function cellSlope(heights: Uint8Array, w: number, h: number, x: number, z: numb
   return Math.max(h00, h10, h01, h11) - Math.min(h00, h10, h01, h11);
 }
 
-function classifyTile(
+/**
+ * Natural ground kind for the tile whose top-left attribute cell is
+ * (`x`, `z`). Exported for tests — the HQ exit lanes must keep exactly
+ * this classification (cleared, never repainted).
+ */
+export function classifyTile(
   heights: Uint8Array,
   w: number,
   h: number,

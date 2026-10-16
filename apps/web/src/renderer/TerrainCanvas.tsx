@@ -476,9 +476,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // wreck the fort, which stops the clock and leaves a charred husk.
     hq = new HqFx(
       scene,
-      // The map ships its sited forts (`generateMap` leveled the pads and
-      // painted the exit roads for exactly these cells); fall back to a
-      // fresh siting only for synthetic maps that predate the field.
+      // The map ships its sited forts (`generateMap` leveled and dirt-seated
+      // the pads and cleared the exit lanes for exactly these cells); fall
+      // back to a fresh siting only for synthetic maps that predate the field.
       (map.hqs ?? placeHqs(map, map.seed)).map((site) => ({
         ...hqAnchor(map, site, optsRef.current.exaggeration),
         team: site.team,
@@ -506,7 +506,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
             cellZ: Math.min(Math.max(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0), map.height - 1),
             rotation: yaw,
           });
-          // Staging anchors past the mouth (the dirt road's far end), so the
+          // Staging anchors past the mouth (the cleared lane's far end), so the
           // door-to-staging leg walks the hall's full length on the way out.
           const staging = { x: exit.x + (team === 0 ? 320 : -320), z: exit.z };
           movement.addUnit(x, z, yaw, [{ x, z }, staging], kind);
