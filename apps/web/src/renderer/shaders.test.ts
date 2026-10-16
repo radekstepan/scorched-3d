@@ -4,11 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   applyFogDrift,
+  applyValleyFog,
   FOG_DRIFT_AMP,
   FOG_DRIFT_SCALE,
   FOG_DRIFT_WIND_X,
   FOG_DRIFT_WIND_Z,
   fogDriftFactor,
+  VALLEY_FOG_SPAN,
+  valleyFogFactor,
   skyFragment,
   skyVertex,
   terrainFragment,
@@ -352,6 +355,80 @@ describe("drifting distance fog", () => {
     // No new uniforms: the drift reuses the existing time uniform.
     expect(terrainFragment).toContain("uniform float time;");
     expect(waterFragment).toContain("uniform float time;");
+  });
+});
+
+describe("daytime valley fog", () => {
+  const waterY = 200;
+  const ex = 2;
+
+  it("pools at/below the waterline and clears above the band", () => {
+    expect(valleyFogFactor(waterY, waterY, ex)).toBe(1);
+    expect(valleyFogFactor(waterY - 50, waterY, ex)).toBe(1);
+    expect(valleyFogFactor(waterY - 500, waterY, ex)).toBe(1);
+    const top = waterY + VALLEY_FOG_SPAN * ex;
+    expect(valleyFogFactor(top, waterY, ex)).toBe(0);
+    expect(valleyFogFactor(top + 100, waterY, ex)).toBe(0);
+    // Mid-band holds partial haze, fading monotonically with height.
+    expect(valleyFogFactor((waterY + top) / 2, waterY, ex)).toBeCloseTo(0.5, 10);
+    let prev = 1;
+    for (let s = 0; s <= 20; s++) {
+      const f = valleyFogFactor(waterY + ((top - waterY) * s) / 20, waterY, ex);
+      expect(f).toBeGreaterThanOrEqual(0);
+      expect(f).toBeLessThanOrEqual(1);
+      expect(f).toBeLessThanOrEqual(prev + 1e-12);
+      prev = f;
+    }
+  });
+
+  it("covers the same terrain at any height scale", () => {
+    // The band top scales with exaggeration: doubling the height scale
+    // doubles the world-unit reach, so the same raw heights stay fogged.
+    for (const exaggeration of [1, 2, 4, 6]) {
+      const top = waterY + VALLEY_FOG_SPAN * exaggeration;
+      expect(valleyFogFactor(top - 1e-6, waterY, exaggeration)).toBeGreaterThan(0);
+      expect(valleyFogFactor(top, waterY, exaggeration)).toBe(0);
+      expect(valleyFogFactor(waterY + (VALLEY_FOG_SPAN * exaggeration) / 2, waterY, exaggeration)).toBeCloseTo(
+        0.5,
+        10,
+      );
+    }
+  });
+
+  it("layers onto distance fog without touching far fog or strength 0", () => {
+    const low = waterY - 10;
+    const high = waterY + VALLEY_FOG_SPAN * ex + 50;
+    // Strength 0 is the identity everywhere (the night look is untouched).
+    for (const [fog, y] of [[0, low], [0.5, low], [1, low], [0.3, high]] as const) {
+      expect(applyValleyFog(fog, y, waterY, ex, 0)).toBe(fog);
+    }
+    // Far fog stays fully fogged; high ground keeps its distance fog.
+    expect(applyValleyFog(1, low, waterY, ex, 0.35)).toBe(1);
+    expect(applyValleyFog(0.4, high, waterY, ex, 0.35)).toBe(0.4);
+    // Low ground gains haze even where distance fog is 0 (the task).
+    expect(applyValleyFog(0, low, waterY, ex, 0.35)).toBeCloseTo(0.35, 12);
+    // Partial terms combine onto the remaining clarity, clamped to [0, 1].
+    expect(applyValleyFog(0.5, low, waterY, ex, 0.35)).toBeCloseTo(0.5 + 0.5 * 0.35, 12);
+    for (let s = 0; s < 30; s++) {
+      const out = applyValleyFog((s % 11) / 10, waterY + s * 7 - 60, waterY, ex, 0.35);
+      expect(out).toBeGreaterThanOrEqual(0);
+      expect(out).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("terrain GLSL mirrors the JS factor literal for literal", () => {
+    expect(terrainFragment).toContain("uniform float valleyFog;");
+    expect(terrainFragment).toContain(`waterY + ${VALLEY_FOG_SPAN}.0 * exaggeration`);
+    expect(terrainFragment).toContain("1.0 - smoothstep(waterY, valleyTop, vWorld.y)");
+    expect(terrainFragment).toContain("fog + (1.0 - fog) * valley * valleyFog");
+    // Terrain-only by design: the water sheet sits at one constant height,
+    // so a height term there would be a flat constant, not pooled fog.
+    expect(waterFragment).not.toContain("valleyFog");
+    expect(waterFragment).not.toContain("valleyTop");
+  });
+
+  it("canvas seeds the terrain valley-fog uniform from the day/night preset", () => {
+    expect(canvasSource).toContain("valleyFog: { value: fogPreset.valleyFog }");
   });
 });
 

@@ -217,6 +217,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fogColor: { value: fogColor },
         fogNear: { value: fogNear },
         fogFar: { value: fogFar },
+        valleyFog: { value: fogPreset.valleyFog },
         fireflyPools: { value: Array.from({ length: FIREFLY_COUNT }, () => new THREE.Vector3()) },
         fireflyGlows: { value: new Array<number>(FIREFLY_COUNT).fill(0) },
       },

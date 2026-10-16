@@ -38,6 +38,7 @@ export const terrainFragment = /* glsl */ `
   uniform vec3 fogColor;
   uniform float fogNear;
   uniform float fogFar;
+  uniform float valleyFog;
   uniform vec3 fireflyPools[90];
   uniform float fireflyGlows[90];
 
@@ -130,6 +131,13 @@ export const terrainFragment = /* glsl */ `
     // keeps near-ground fog-free (0 stays 0) — mirrored by fogDriftFactor.
     float fogWobble = wNoise(vWorld.xz * 0.0009 + vec2(time * 0.008, time * -0.006)) - 0.5;
     fog = clamp(fog * (1.0 + fogWobble * 0.35), 0.0, 1.0);
+    // Valley fog: low-lying ground hazes toward the fog color by day, so
+    // hollows and shorelines read misty even at close range where the
+    // distance fog is 0. Full at/below the waterline, fading out over the
+    // band above it (mirrored by valleyFogFactor); strength 0 at night.
+    float valleyTop = waterY + 24.0 * exaggeration;
+    float valley = 1.0 - smoothstep(waterY, valleyTop, vWorld.y);
+    fog = clamp(fog + (1.0 - fog) * valley * valleyFog, 0.0, 1.0);
     color = mix(color, fogColor, fog);
     gl_FragColor = vec4(color, 1.0);
   }
@@ -433,6 +441,42 @@ export function fogDriftFactor(x: number, z: number, time: number): number {
 /** Distance-fog factor after the drifting haze, clamped to [0, 1]. */
 export function applyFogDrift(fog: number, x: number, z: number, time: number): number {
   return Math.min(1, Math.max(0, fog * fogDriftFactor(x, z, time)));
+}
+
+/**
+ * Valley-fog band in raw height units above the waterline, mirrored from
+ * the terrain fragment shader: low-lying ground hazes toward the fog color
+ * by day even at close range, where the distance fog is 0. The shader
+ * scales the band by the `exaggeration` uniform, so it covers the same
+ * terrain at any height scale. Water carries no height term: its surface
+ * sits at one constant height, so the factor would be a flat constant
+ * instead of pooled fog (lakes already get mist banks).
+ */
+export const VALLEY_FOG_SPAN = 24;
+
+/**
+ * Height-fog factor in [0, 1]: 1 at/below the waterline, smoothstepping to
+ * 0 at the top of the band. All heights in world units, matching the GLSL.
+ */
+export function valleyFogFactor(groundY: number, waterY: number, exaggeration: number): number {
+  const top = waterY + VALLEY_FOG_SPAN * exaggeration;
+  const t = Math.min(1, Math.max(0, (groundY - waterY) / (top - waterY)));
+  return 1 - t * t * (3 - 2 * t);
+}
+
+/**
+ * Distance fog after the valley haze: the height term layers onto the
+ * remaining clarity, so far fog stays 1 and strength 0 is the identity.
+ */
+export function applyValleyFog(
+  fog: number,
+  groundY: number,
+  waterY: number,
+  exaggeration: number,
+  strength: number,
+): number {
+  const f = valleyFogFactor(groundY, waterY, exaggeration);
+  return Math.min(1, Math.max(0, fog + (1 - fog) * f * strength));
 }
 
 export const skyVertex = /* glsl */ `

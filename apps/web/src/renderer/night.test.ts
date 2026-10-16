@@ -42,6 +42,7 @@ function buildTargets(): DayNightTargets {
         groundColor: colorUniform(0xffffff),
         fogNear: floatUniform(DAY_LIGHTING.fogNear),
         fogFar: floatUniform(DAY_LIGHTING.fogFar),
+        valleyFog: floatUniform(DAY_LIGHTING.valleyFog),
       },
     }),
     waterMat: new THREE.ShaderMaterial({
@@ -69,6 +70,9 @@ describe("day/night lighting presets", () => {
     expect(DAY_LIGHTING.fogFar).toBe(9500);
     expect(NIGHT_LIGHTING.fogNear).toBe(3600);
     expect(NIGHT_LIGHTING.fogFar).toBe(12400);
+    // Valley fog is day-only: low ground hazes by day, night stays untouched.
+    expect(DAY_LIGHTING.valleyFog).toBe(0.35);
+    expect(NIGHT_LIGHTING.valleyFog).toBe(0);
     expect(DAY_LIGHTING.hemiSky).toBe(0xb8d4f0);
     expect(DAY_LIGHTING.hemiGround).toBe(0x3a3424);
     expect(DAY_LIGHTING.hemiIntensity).toBe(0.45);
@@ -157,6 +161,17 @@ describe("applyDayNight", () => {
     expect(targets.terrainMat.uniforms.fogFar!.value).toBe(DAY_LIGHTING.fogFar);
     expect(targets.waterMat.uniforms.fogNear!.value).toBe(DAY_LIGHTING.fogNear);
     expect(targets.waterMat.uniforms.fogFar!.value).toBe(DAY_LIGHTING.fogFar);
+  });
+
+  it("writes the valley-fog strength to the terrain material in both directions", () => {
+    // Sheer by contract: even fully pooled low ground keeps most of its color.
+    expect(DAY_LIGHTING.valleyFog).toBeGreaterThan(0);
+    expect(DAY_LIGHTING.valleyFog).toBeLessThanOrEqual(0.5);
+    const targets = buildTargets();
+    applyDayNight(targets, true);
+    expect(targets.terrainMat.uniforms.valleyFog!.value).toBe(NIGHT_LIGHTING.valleyFog);
+    applyDayNight(targets, false);
+    expect(targets.terrainMat.uniforms.valleyFog!.value).toBe(DAY_LIGHTING.valleyFog);
   });
 
   it("writes the terrain/water shader triples and toggles back to day", () => {

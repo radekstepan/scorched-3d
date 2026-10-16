@@ -18,6 +18,8 @@ export interface DayNightLighting {
   /** Distance-fog range: day runs denser (closer far plane) than night. */
   fogNear: number;
   fogFar: number;
+  /** Valley-fog strength (terrain height haze): day-only, 0 at night. */
+  valleyFog: number;
   hemiSky: number;
   hemiGround: number;
   hemiIntensity: number;
@@ -37,6 +39,7 @@ export const DAY_LIGHTING: DayNightLighting = {
   fog: 0x8eb4c8,
   fogNear: 2800,
   fogFar: 9500,
+  valleyFog: 0.35,
   hemiSky: 0xb8d4f0,
   hemiGround: 0x3a3424,
   hemiIntensity: 0.45,
@@ -53,6 +56,7 @@ export const NIGHT_LIGHTING: DayNightLighting = {
   fog: 0x18293f,
   fogNear: 3600,
   fogFar: 12400,
+  valleyFog: 0,
   hemiSky: 0x5a7fb0,
   hemiGround: 0x141a26,
   hemiIntensity: 0.45,
@@ -123,6 +127,7 @@ export function applyDayNight(targets: DayNightTargets, night: boolean): void {
   }
   if (targets.terrainMat.uniforms.fogNear) targets.terrainMat.uniforms.fogNear.value = p.fogNear;
   if (targets.terrainMat.uniforms.fogFar) targets.terrainMat.uniforms.fogFar.value = p.fogFar;
+  if (targets.terrainMat.uniforms.valleyFog) targets.terrainMat.uniforms.valleyFog.value = p.valleyFog;
   if (targets.waterMat.uniforms.fogNear) targets.waterMat.uniforms.fogNear.value = p.fogNear;
   if (targets.waterMat.uniforms.fogFar) targets.waterMat.uniforms.fogFar.value = p.fogFar;
   targets.hemi.color.set(p.hemiSky);
