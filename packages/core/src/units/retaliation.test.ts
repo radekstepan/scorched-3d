@@ -16,6 +16,7 @@ import {
   THREAT_ENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
+  TEAM_ADVANCE_LEASH_RADIUS,
   acquireHunt,
   advanceMemory,
   clearThreat,
@@ -400,6 +401,22 @@ describe("advanceMemory", () => {
     expect(first.threat?.leash).toBe(HUNT_LEASH_RADIUS);
     const second = advanceMover("stump", { ...first, hull: first.hull }, route, 1, 1, null, null, foes);
     expect(hasThreat(second)).toBe(true);
+  });
+
+  it("ranges the full field on the team-advance leash (deep pushes march)", () => {
+    const route = flatRoute();
+    // A last-known contact a map width out: past every hunt leash, inside
+    // the team-advance leash of the anchor — the drive marches instead of
+    // giving up on the first step.
+    const memory = advanceMemory(3000, 0, TEAM_ADVANCE_LEASH_RADIUS)!;
+    expect(memory.leash).toBe(TEAM_ADVANCE_LEASH_RADIUS);
+    const advancing: Mover = { ...initMover(route, 0), hull: 0, threat: memory };
+    const start = Math.hypot(advancing.x - memory.x, advancing.z - memory.z);
+    const next = advanceMover("stump", advancing, route, 1);
+    expect(hasThreat(next)).toBe(true);
+    expect(next.threat?.attacker).toBe(-1);
+    expect(next.threat?.leash).toBe(TEAM_ADVANCE_LEASH_RADIUS);
+    expect(Math.hypot(next.x - memory.x, next.z - memory.z)).toBeLessThan(start);
   });
 });
 

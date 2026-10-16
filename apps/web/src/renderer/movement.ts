@@ -10,8 +10,7 @@ import {
   hasOrder,
   hasThreat,
   HULL_TILT_SLEW,
-  HUNT_LEASH_RADIUS,
-  SCOUT_LEASH_RADIUS,
+  huntNoticeRadiusFor,
   initMover,
   isScoutKind,
   notifyThreat,
@@ -23,6 +22,8 @@ import {
   snappedFormationTargets,
   squadFocus,
   stunMover,
+  TEAM_ADVANCE_LEASH_RADIUS,
+  THREAT_MEMORY_DURATION,
   type CrushContext,
   type HullSeat,
   type Mover,
@@ -97,6 +98,14 @@ export class UnitMovement {
    * side first engages, so unblooded sides patrol exactly as before.
    */
   private teamContact = new Map<number, { x: number; z: number }>();
+  /**
+   * Live enemy HQ positions per team (`{ x, z, team }`, wrecks excluded),
+   * provided by the canvas from `HqFx.targets()`: the sweep spots forts
+   * inside each hull's notice gate and shares the sighting team-wide, so a
+   * scout that ranges onto the enemy works points the whole side at it.
+   * Null until wired — headless groups spot nothing.
+   */
+  private hqProvider: (() => { x: number; z: number; team: number }[]) | null = null;
   /**
    * Per-unit accumulated damage 0..1, fed from combat once per tick (see
    * `setDamage`): the strategic layer reads remaining health from it, so
@@ -225,6 +234,14 @@ export class UnitMovement {
     if (victim === attacker) return;
     const victimTeam = this.teamAt(victim);
     if (victimTeam !== undefined && victimTeam === this.teamAt(attacker)) return;
+    // Team-wide alert: the side learns the attacker's position the moment a
+    // mate takes fire — even when the victim itself refuses the memory
+    // (ordered/holding hulls never pursue, but their mates still reinforce).
+    // Damage is ground truth (the shooter is always inside weapon range), so
+    // no engage gate applies; the sweep turns the contact into advances.
+    if (victimTeam !== undefined && Number.isFinite(ax) && Number.isFinite(az)) {
+      this.teamContact.set(victimTeam, { x: ax, z: az });
+    }
     const anchor = this.routes[victim]?.[0] ?? null;
     this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor, shell);
   }
@@ -283,6 +300,16 @@ export class UnitMovement {
     this.damage = damage;
   }
 
+  /**
+   * Provide live enemy HQ positions for fort spotting (the canvas wires
+   * `HqFx.targets()` here once both exist). A hull inside its notice gate
+   * of an enemy fort shares the sighting with its whole side and assaults
+   * the works; pass null to return to hull-only contacts.
+   */
+  setHqProvider(provider: (() => { x: number; z: number; team: number }[]) | null): void {
+    this.hqProvider = provider;
+  }
+
   /** Health fractions remaining (1 pristine .. 0 dead) for the roster. */
   private health(): number[] | null {
     if (!this.damage) return null;
@@ -320,17 +347,27 @@ export class UnitMovement {
     *
     * Team advance: the sweep first records each side's contact (its squad
     * focus's live position — being shot counts as discovery, since the
-    * victim's retaliation memory points back at a live enemy) and keeps it
+    * victim's retaliation memory points back at a live enemy, and any hit
+    * alerts the side directly in `threatenUnit` even when the victim
+    * itself refuses the memory under orders) and keeps it
     * after contact is lost. A free hull whose side knows the enemy direction
     * but sees nothing itself advances toward the contact (core
-    * `advanceMemory`: a -1 position memory on the hunt leash, so the push
-    * stays local) instead of guarding its loop — while a side with no
-    * contact ever keeps patrolling. Advances refuse exactly like hunts
+    * `advanceMemory`: a -1 position memory on the wide team-advance
+    * leash, so a mid-map meeting or a deep HQ sighting marches instead of
+    * dying on the hunt leash) instead of guarding its loop — while a side
+    * with no contact ever sends only its peewee scouts ranging toward the
+    * enemy anchors (active recon) and holds its heavies on their loops. Advances refuse exactly like hunts
     * (ordered/holding hulls, no live enemy left anywhere, a contact past
     * the leash — and an outnumbered hull waiting for backup, unless it is
     * the side's peewee scout pushing ahead to keep eyes on the enemy), and
     * a hull carrying an advance still upgrades to a live hunt the tick one
     * appears.
+    *
+    * Fort spotting: a hull inside its notice gate of a live enemy HQ shares
+    * the works team-wide (live grudges win — a side already fighting keeps
+    * its hull contact) and assaults the fort itself as a structure memory
+    * on the team-advance leash, so the side that finds the enemy HQ pushes
+    * it instead of standing around.
    */
   sweepHunt(): void {
     if (this.movers.length === 0) return;
@@ -347,8 +384,11 @@ export class UnitMovement {
     const hp = this.health();
     // Record what each side has found: the squad focus names the live enemy
     // most teammates pursue, so its position is the enemy direction. Sticky
-    // — a side keeps pushing there after contact is lost.
+    // — a side keeps pushing there after contact is lost. A hit already
+    // alerts the side directly (see `threatenUnit`), so this refreshes the
+    // contact from live pursuits on top of that.
     const seen = new Set<number>();
+    const focused = new Set<number>();
     for (let i = 0; i < this.movers.length; i++) {
       const team = teams[i];
       if (team === undefined || seen.has(team)) continue;
@@ -358,6 +398,31 @@ export class UnitMovement {
         const at = foes[focus];
         if (at && Number.isFinite(at.x) && Number.isFinite(at.z)) {
           this.teamContact.set(team, { x: at.x, z: at.z });
+          focused.add(team);
+        }
+      }
+    }
+    // Fort spotting: a hull inside its notice gate of a live enemy HQ shares
+    // the works with its whole side (team-wide HQ-known) — scouts range far
+    // enough to be the usual spotters. Live grudges win: a side already
+    // focused on a hull keeps that contact instead of turning for the fort.
+    const hqs = this.hqProvider?.() ?? [];
+    if (hqs.length > 0) {
+      for (let i = 0; i < this.movers.length; i++) {
+        if (!alive[i] || this.destroyed[i]) continue;
+        const team = teams[i];
+        if (team === undefined || focused.has(team)) continue;
+        const at = foes[i];
+        if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) continue;
+        const notice = huntNoticeRadiusFor(this.kinds[i]);
+        for (const hq of hqs) {
+          if (hq.team === team) continue;
+          if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
+          if (Math.hypot(hq.x - at.x, hq.z - at.z) <= notice) {
+            this.teamContact.set(team, { x: hq.x, z: hq.z });
+            focused.add(team);
+            break;
+          }
         }
       }
     }
@@ -387,7 +452,15 @@ export class UnitMovement {
         next =
           assault !== undefined
             ? mover
-            : this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined);
+            : (this.assaultSpottedHq(next, i, teams, foes, alive, anchor) ??
+              this.advanceTowardContact(next, i, teams, foes, alive, anchor, hp ?? undefined));
+        // Active recon: a side with no contact yet still sends its scouts —
+        // a free peewee ranges toward the enemy anchors instead of guarding
+        // its loop, so the battlefield opens with probing instead of two
+        // patrols waiting out of notice. Heavies hold until contact exists.
+        if ((!next.threat || next.threat.ttl <= 0) && assault === undefined) {
+          next = this.reconTowardEnemy(next, i, teams, foes, alive) ?? next;
+        }
       }
       this.movers[i] = next;
     }
@@ -398,10 +471,13 @@ export class UnitMovement {
    * `teamContact`): the guard-to-attack fallback when the hunt sweep finds
    * nothing. Refuses exactly like a hunt — ordered/holding hulls (player
    * orders win), sides with no contact ever, no live enemy left anywhere,
-   * contacts past the hunt leash of the patrol anchor, and outnumbered
-   * hulls that should wait for backup instead of pushing alone (peewee
-   * scouts excepted — they range ahead to keep the contact live). Pure per
-   * tick: returns the mover with a fresh position memory, or untouched.
+   * contacts past the team-advance leash of the patrol anchor, and
+   * outnumbered hulls that should wait for backup instead of pushing alone
+   * (peewee scouts excepted — they range ahead to keep the contact live).
+   * The push rides the wide team-advance leash (see
+   * `TEAM_ADVANCE_LEASH_RADIUS`) so a mid-map contact or a deep HQ sighting
+   * marches instead of dying on the hunt leash. Pure per tick: returns the
+   * mover with a fresh position memory, or untouched.
    */
   private advanceTowardContact(
     mover: Mover,
@@ -419,11 +495,9 @@ export class UnitMovement {
     if (team === undefined) return mover;
     const contact = this.teamContact.get(team);
     if (!contact) return mover;
-    // Scouts range on the wider scout leash so an advance issued at scout
-    // distance survives the drive's anchor-leash gate instead of dying on
-    // the first step; heavier hulls keep the regular hunt leash.
-    const scout = isScoutKind(this.kinds[self]);
-    const leash = scout ? SCOUT_LEASH_RADIUS : HUNT_LEASH_RADIUS;
+    // The whole side marches on the same wide leash — scouts no longer need
+    // a separate band now that advances range the full field.
+    const leash = TEAM_ADVANCE_LEASH_RADIUS;
     if (anchor && Math.hypot(contact.x - anchor.x, contact.z - anchor.z) > leash) return mover;
     let enemyAlive = false;
     for (let j = 0; j < foes.length; j++) {
@@ -435,6 +509,16 @@ export class UnitMovement {
       enemyAlive = true;
       break;
     }
+    // A live enemy fort counts as a standing enemy — the war is not over
+    // while its works stands, so the side still marches on the spotted HQ.
+    if (!enemyAlive) {
+      for (const hq of this.hqProvider?.() ?? []) {
+        if (hq.team !== team && Number.isFinite(hq.x) && Number.isFinite(hq.z)) {
+          enemyAlive = true;
+          break;
+        }
+      }
+    }
     if (!enemyAlive) return mover;
     // Scouts push ahead to keep eyes on the enemy even when the odds at
     // home look bad — ranging forward is their job, and their live memory
@@ -442,6 +526,106 @@ export class UnitMovement {
     if (!isScoutKind(this.kinds[self]) && shouldHold(self, foes, teams, alive, hp ?? undefined)) return mover;
     const memory = advanceMemory(contact.x, contact.z, leash);
     if (!memory) return mover;
+    return { ...mover, threat: memory };
+  }
+
+  /**
+   * Assault a spotted fort: a free hull inside its notice gate of a live
+   * enemy HQ pushes the works as a structure assault (attacker -1 with the
+   * `structure` flag, so the sweep never clobbers it with a team advance
+   * and consistent challengers preempt through the threat hook). Returns the
+   * mover with the assault memory, or null when no enemy fort is in notice.
+   * The assault rides the wide team-advance leash — a scout spotting the far
+   * works must be allowed to march on it, not refused at the tight anchor
+   * guard.
+   */
+  private assaultSpottedHq(
+    mover: Mover,
+    self: number,
+    teams: readonly (number | undefined)[],
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+    anchor: { x: number; z: number } | null,
+  ): Mover | null {
+    if (mover.threat && mover.threat.ttl > 0) return null;
+    if (mover.hold || hasOrder(mover)) return null;
+    if (!alive[self] || this.destroyed[self]) return null;
+    const team = teams[self];
+    if (team === undefined) return null;
+    const hqs = this.hqProvider?.() ?? [];
+    if (hqs.length === 0) return null;
+    const at = foes[self];
+    if (!at || !Number.isFinite(at.x) || !Number.isFinite(at.z)) return null;
+    const notice = huntNoticeRadiusFor(this.kinds[self]);
+    for (const hq of hqs) {
+      if (hq.team === team) continue;
+      if (!Number.isFinite(hq.x) || !Number.isFinite(hq.z)) continue;
+      if (Math.hypot(hq.x - at.x, hq.z - at.z) > notice) continue;
+      if (anchor && Math.hypot(hq.x - anchor.x, hq.z - anchor.z) > TEAM_ADVANCE_LEASH_RADIUS) continue;
+      return {
+        ...mover,
+        threat: {
+          attacker: -1,
+          x: hq.x,
+          z: hq.z,
+          ttl: THREAT_MEMORY_DURATION,
+          leash: TEAM_ADVANCE_LEASH_RADIUS,
+          structure: true,
+        },
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Scout recon push: a free peewee whose side has no contact yet ranges
+   * toward the enemy anchors' centroid (the enemy staging area) instead of
+   * guarding its loop — the cold-start opener that turns two out-of-notice
+   * patrols into a probing battlefield. Returns the mover with a fresh
+   * position memory, or null when recon does not apply (not a scout,
+   * busy, side already knows the enemy direction, or no enemy anchors).
+   * The push rides the team-advance leash so the drive keeps it across the
+   * field; the first hull or fort the scout notices converts it to a live
+   * hunt or an HQ assault same-tick, which focuses the side behind it.
+   */
+  private reconTowardEnemy(
+    mover: Mover,
+    self: number,
+    teams: readonly (number | undefined)[],
+    foes: readonly { x: number; z: number }[],
+    alive: readonly boolean[],
+  ): Mover | null {
+    if (mover.threat && mover.threat.ttl > 0) return null;
+    if (mover.hold || hasOrder(mover)) return null;
+    if (!alive[self] || this.destroyed[self]) return null;
+    if (!isScoutKind(this.kinds[self])) return null;
+    const team = teams[self];
+    if (team === undefined) return null;
+    if (this.teamContact.get(team)) return null;
+    // Muster point of the enemy side: the centroid of live enemies' patrol
+    // anchors (their staging area). Falls back to live enemy positions when
+    // anchors are missing; without any enemy, there is nowhere to probe.
+    let cx = 0;
+    let cz = 0;
+    let n = 0;
+    for (let j = 0; j < foes.length; j++) {
+      if (j === self || !alive[j] || this.destroyed[j]) continue;
+      if (teams[j] === undefined || teams[j] === team) continue;
+      const anchor = this.routes[j]?.[0];
+      const px = anchor && Number.isFinite(anchor.x) ? anchor.x : foes[j]?.x;
+      const pz = anchor && Number.isFinite(anchor.z) ? anchor.z : foes[j]?.z;
+      if (!Number.isFinite(px) || !Number.isFinite(pz)) continue;
+      cx += px!;
+      cz += pz!;
+      n++;
+    }
+    if (n === 0) return null;
+    cx /= n;
+    cz /= n;
+    const own = this.routes[self]?.[0];
+    if (own && Math.hypot(cx - own.x, cz - own.z) > TEAM_ADVANCE_LEASH_RADIUS) return null;
+    const memory = advanceMemory(cx, cz, TEAM_ADVANCE_LEASH_RADIUS);
+    if (!memory) return null;
     return { ...mover, threat: memory };
   }
 

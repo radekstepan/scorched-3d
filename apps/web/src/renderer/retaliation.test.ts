@@ -690,10 +690,11 @@ describe("peewee scout", () => {
     movement.dispose();
   });
 
-  it("ranges farther than tanks on a stale contact", () => {
+  it("pulls the whole side onto a stale contact inside the team leash", () => {
     // Mate bloodies an enemy at 1800 while the scout sits at the origin:
-    // past scout notice (so no live hunt), past the 1400 tank advance
-    // leash, inside the 2000 scout leash.
+    // past scout notice (so no live hunt), inside the team-advance leash.
+    // The whole side marches on the shared contact now (reinforce), not
+    // just the scout — the old 1400 tank leash is what stranded heavies.
     const build = (scoutKind: UnitKind): { movement: UnitMovement; units: THREE.Group } =>
       makeScoutMovement(
         [
@@ -713,11 +714,35 @@ describe("peewee scout", () => {
     for (let n = 0; n < 120; n++) scouting.update(1 / 60);
     expect(scouting.moverState(0)!.x).toBeGreaterThan(issued.x);
     scouting.dispose();
-    // A heavier hull in the same spot never leaves its loop.
-    const { movement: guarding } = build("flash");
-    for (let n = 0; n < 3; n++) guarding.update(1 / 60);
-    expect(guarding.hasThreat(0)).toBe(false);
-    guarding.dispose();
+    // A heavier hull in the same spot reinforces too.
+    const { movement: reinforcing } = build("flash");
+    for (let n = 0; n < 3; n++) reinforcing.update(1 / 60);
+    expect(reinforcing.moverState(0)?.threat?.attacker).toBe(-1);
+    reinforcing.dispose();
+  });
+
+  it("holds both scouts and tanks past the team-advance leash", () => {
+    // Same bloodied-mate shape, but the contact sits past the 3500
+    // team-advance leash of the origin anchor: nobody marches across the
+    // map on it, scouts included.
+    const build = (kind: UnitKind): { movement: UnitMovement; units: THREE.Group } =>
+      makeScoutMovement(
+        [
+          { x: 0, z: 0 },
+          { x: 3600, z: 0 },
+          { x: 3700, z: 0 },
+        ],
+        [0, 0, 1],
+        [kind, "flash", "flash"],
+      );
+    for (const kind of ["peewee", "flash"] as UnitKind[]) {
+      const { movement } = build(kind);
+      for (let n = 0; n < 3; n++) movement.update(1 / 60);
+      // The mate still commits to its neighbour; the far hull holds.
+      expect(movement.moverState(1)?.threat?.attacker).toBe(2);
+      expect(movement.hasThreat(0)).toBe(false);
+      movement.dispose();
+    }
   });
 
   it("lets player orders win over scouting", () => {
@@ -1061,6 +1086,149 @@ describe("UnitMovement HQ assault", () => {
     expect(movement.isFighting(0)).toBe(false);
     movement.threatenUnit(0, 2, 520, 320);
     expect(movement.isFighting(0)).toBe(true);
+    movement.dispose();
+  });
+});
+
+describe("UnitMovement active battlefield", () => {
+  /** Idle hulls with custom spawns, sides, and kinds (anchors at spawns). */
+  function makeFieldMovement(
+    spawns: { x: number; z: number }[],
+    teams: number[],
+    kinds: UnitKind[],
+  ): { movement: UnitMovement; units: THREE.Group } {
+    const group = new THREE.Group();
+    group.userData.units = spawns.map((_, i) => ({
+      kind: kinds[i] ?? "flash",
+      cellX: 10 + i,
+      cellZ: 10,
+      rotation: 0,
+      team: teams[i],
+    }));
+    for (const pos of spawns) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(pos.x, 100, pos.z);
+      group.add(body);
+    }
+    const routeSet = spawns.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    return { movement, units: group };
+  }
+
+  it("reinforces a bloodied mate: the far side advances on the attack", () => {
+    // A (team 0) at the origin trades with C (team 1) at 500; B (team 0)
+    // guards its loop 2000 west — far past every notice gate.
+    const { movement } = makeFieldMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -2000, z: 0 },
+        { x: 500, z: 0 },
+      ],
+      [0, 0, 1],
+      ["flash", "flash", "flash"],
+    );
+    movement.threatenUnit(0, 2, 500, 0);
+    expect(movement.hasThreat(0)).toBe(true);
+    movement.update(1 / 60);
+    // B never saw the enemy itself, but the side was alerted: it advances
+    // on a position memory (never a grudge) instead of guarding its loop.
+    const issued = movement.moverState(1)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(movement.hasThreat(1)).toBe(true);
+    for (let n = 0; n < 240; n++) movement.update(1 / 60);
+    const after = movement.moverState(1)!;
+    expect(movement.hasThreat(1)).toBe(true);
+    expect(after.x).toBeGreaterThan(issued.x);
+    movement.dispose();
+  });
+
+  it("alerts the side even when the victim is under orders", () => {
+    const { movement } = makeFieldMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -2000, z: 0 },
+        { x: 500, z: 0 },
+      ],
+      [0, 0, 1],
+      ["flash", "flash", "flash"],
+    );
+    // A is driving a player order: it refuses the memory itself…
+    movement.orderUnit(0, { x: -500, z: -500 });
+    movement.threatenUnit(0, 2, 500, 0);
+    expect(movement.hasThreat(0)).toBe(false);
+    movement.update(1 / 60);
+    // …but the side still reinforces the firing position.
+    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.moverState(1)?.threat?.attacker).toBe(-1);
+    movement.dispose();
+  });
+
+  it("shares a scout's HQ sighting team-wide and pushes the fort", () => {
+    // Scout + heavy (team 0) west, one enemy hull far east, and the enemy
+    // works at 1300 — inside scout notice (1500), past tank notice (1100).
+    const { movement } = makeFieldMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -500, z: 0 },
+        { x: 3000, z: 0 },
+      ],
+      [0, 0, 1],
+      ["peewee", "flash", "flash"],
+    );
+    movement.setHqProvider(() => [{ x: 1300, z: 0, team: 1 }]);
+    movement.update(1 / 60);
+    // The scout assaults the works it found (a structure memory, never a
+    // corpse-grudge)…
+    expect(movement.moverState(0)?.threat).toMatchObject({
+      attacker: -1,
+      x: 1300,
+      z: 0,
+      structure: true,
+    });
+    // …and the heavy, which sees nothing itself, marches on the shared
+    // contact instead of standing around.
+    const issued = movement.moverState(1)!;
+    expect(issued.threat?.attacker).toBe(-1);
+    expect(issued.threat?.structure).toBeUndefined();
+    for (let n = 0; n < 240; n++) movement.update(1 / 60);
+    const scout = movement.moverState(0)!;
+    const heavy = movement.moverState(1)!;
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.hasThreat(1)).toBe(true);
+    expect(scout.x).toBeGreaterThan(0);
+    expect(heavy.x).toBeGreaterThan(issued.x);
+    movement.setHqProvider(null);
+    movement.dispose();
+  });
+
+  it("sends scouts ranging with no contact while heavies hold their loops", () => {
+    // Scout + heavy (team 0) west, one enemy heavy far east: no hits, no
+    // sightings, no forts — the cold-start stalemate.
+    const { movement } = makeFieldMovement(
+      [
+        { x: 0, z: 0 },
+        { x: -100, z: 0 },
+        { x: 3000, z: 0 },
+      ],
+      [0, 0, 1],
+      ["peewee", "flash", "flash"],
+    );
+    movement.update(1 / 60);
+    // The scout recons toward the enemy anchors on a position memory…
+    expect(movement.moverState(0)?.threat?.attacker).toBe(-1);
+    // …while the heavy keeps patrolling (no contact, no advance).
+    expect(movement.hasThreat(1)).toBe(false);
+    expect(movement.hasThreat(2)).toBe(false);
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    // Recon drives east (patrol would hold x near 0, marching +z first).
+    expect(movement.moverState(0)!.x).toBeGreaterThan(50);
+    expect(movement.hasThreat(1)).toBe(false);
     movement.dispose();
   });
 });

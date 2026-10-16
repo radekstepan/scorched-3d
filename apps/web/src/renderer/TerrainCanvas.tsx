@@ -514,6 +514,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live CombatFx damage, re-seated every tick from the body origins.
     const health = new HealthBars(scene, units.children.length);
     health.setVisible(optsRef.current.showHealth);
+    // Fort spotting: the drive shares a scout's HQ sighting team-wide and
+    // marches the side onto the works (live forts only — wrecks drop out of
+    // `targets()`, so the push ends when the fort falls).
+    movement.setHqProvider(() => hq?.targets() ?? []);
     // HQ forts share the same toggle: one wider bar per live works above
     // the roofline, reading live HqFx damage (wrecks show nothing).
     health.setHqCount(hq?.count ?? 0);

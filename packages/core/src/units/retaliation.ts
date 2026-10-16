@@ -150,6 +150,15 @@ export const HUNT_ENGAGE_RADIUS = 1100;
  * tighter `THREAT_LEASH_RADIUS`.
  */
 export const HUNT_LEASH_RADIUS = 1400;
+/**
+ * Team-advance leash: a side pushing its last-known enemy direction (or a
+ * scout recon push with no contact yet) may range this far from the patrol
+ * anchor — roughly a full map width on the doubled field, so a contact at
+ * mid-map or a deep HQ sighting still marches instead of dying on the hunt
+ * leash at the second step. Retaliation and hunt memories keep their tighter
+ * leashes; only position advances (attacker -1, never a grudge) ride this.
+ */
+export const TEAM_ADVANCE_LEASH_RADIUS = 3500;
 /** Floor on the weapons-range stand-off (scouts still close to brawling range). */
 export const THREAT_MIN_STANDOFF = 150;
 /** Cap on the weapons-range stand-off (artillery holds at shell distance). */
