@@ -5,6 +5,7 @@ import { blastSkewForGrade } from "./destruction.js";
 import {
   isTreeCell,
   isWalkable,
+  PATH_DRY_LIFT,
   PATH_MAX_SLOPE,
   segmentPointDistSq,
   TRUNK_KEEPOUT,
@@ -293,6 +294,31 @@ export function terrainStepBlocked(
   if (!isWalkable(field, cellX, cellZ)) return true;
   const grade = Math.abs(sampleHeightBilinear(field, toX, toZ) - sampleHeightBilinear(field, fromX, fromZ)) / dist;
   return grade > MAX_DRIVE_GRADE;
+}
+
+/**
+ * True when a drive step's destination fails the DRY gate (at or below the
+ * waterline lift) as opposed to the SLOPE gate: the hull is beached on a
+ * shoreline, not walled by a cliff. Ordered hulls slide along the former
+ * (see the shore fan in `movement.ts`) and hold honestly at the latter, so
+ * the two refusals need telling apart. A walkable destination reads false —
+ * grade-only refusals (a cliff edge inside an otherwise walkable cell) hold
+ * like steep ground.
+ */
+export function destinationTooWet(
+  field: SeatField,
+  toX: number,
+  toZ: number,
+): boolean {
+  const cellX = Math.min(
+    Math.max(Math.round(toX / CELL_PIXELS + (field.width - 1) / 2), 0),
+    field.width - 1,
+  );
+  const cellZ = Math.min(
+    Math.max(Math.round(toZ / CELL_PIXELS + (field.height - 1) / 2), 0),
+    field.height - 1,
+  );
+  return (field.heights[cellZ * field.width + cellX] ?? 0) <= field.seaLevel + PATH_DRY_LIFT;
 }
 
 /**

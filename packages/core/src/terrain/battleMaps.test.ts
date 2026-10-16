@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "./generate.js";
-import { findCellPath, isWalkable } from "../units/pathfinding.js";
+import { findCellPath, findWorldPath, isWalkable, pathCellToWorld } from "../units/pathfinding.js";
+import { advanceMover, cellFromWorld, hasOrder, orderMover } from "../units/movement.js";
 import { startingUnitCount } from "../units/place.js";
 import { FEATURE_EMPTY } from "./types.js";
 
@@ -39,6 +40,38 @@ describe("battle maps", () => {
       expect(east, `no east-bank footing on seed ${seed}`).toBeDefined();
       const path = findCellPath(map, west!, east!);
       expect(path, `banks disconnected on seed ${seed}`).not.toBeNull();
+    }
+  });
+
+  it("drives armor across the ford without beaching on its corners", () => {
+    // Cell-pathable is not enough: smoothed legs used to thread the water
+    // corners at the ford edges, waypoint homing drifted hulls nose-on
+    // against them, and ordered hulls ground there forever (seed 7 parked a
+    // stump mid-river). Ordered armor must actually arrive.
+    for (const seed of [1, 7, 0xa11ce]) {
+      const map = generateMap("rivercross", seed);
+      const west = spiralWalkable(map, 40, 128);
+      const east = spiralWalkable(map, 280, 128);
+      expect(west, `no west-bank staging on seed ${seed}`).toBeDefined();
+      expect(east, `no east-bank staging on seed ${seed}`).toBeDefined();
+      const from = pathCellToWorld(map, west!);
+      const to = pathCellToWorld(map, east!);
+      let mover = orderMover(
+        { x: from.x, z: from.z, hull: Math.PI / 2, leg: 0 },
+        findWorldPath(map, from, to),
+      );
+      const dt = 1 / 30;
+      let arrived = false;
+      for (let s = 0; s < 240 / dt; s++) {
+        mover = advanceMover("stump", mover, [], dt, 1, map);
+        const { cellX, cellZ } = cellFromWorld(map, mover.x, mover.z);
+        expect(isWalkable(map, cellX, cellZ)).toBe(true);
+        if (!hasOrder(mover)) {
+          arrived = true;
+          break;
+        }
+      }
+      expect(arrived, `armor never crossed the ford on seed ${seed}`).toBe(true);
     }
   });
 
@@ -130,6 +163,22 @@ function firstWalkable(
   for (let z = z0; z < z1; z += 2) {
     for (let x = x0; x < x1; x += 2) {
       if (isWalkable(map, x, z)) return { cellX: x, cellZ: z };
+    }
+  }
+  return undefined;
+}
+
+function spiralWalkable(
+  map: Parameters<typeof isWalkable>[0] & { width: number; height: number },
+  cx: number,
+  cz: number,
+): { cellX: number; cellZ: number } | undefined {
+  for (let r = 0; r < 30; r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        if (isWalkable(map, cx + dx, cz + dz)) return { cellX: cx + dx, cellZ: cz + dz };
+      }
     }
   }
   return undefined;

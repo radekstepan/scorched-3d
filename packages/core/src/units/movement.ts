@@ -12,6 +12,7 @@ import {
 import { outnumbered, disengageRadiusFor } from "./strategy.js";
 import {
   CRUSH_DRAG,
+  destinationTooWet,
   stepBlocked,
   terrainSpeedScale,
   treesCrushedByStep,
@@ -154,9 +155,30 @@ export const SEPARATION_SIDESTEP = 0.6;
  * ground (a patrol leg can cut across a slope its waypoints straddle) skips
  * to its next waypoint after this long instead of grinding in place forever.
  * Ordered hulls never skip — a player-sent destination holds even at a steep
- * edge, which reads as "can't climb that" instead of wandering off.
+ * edge, which reads as "can't climb that" instead of wandering off — and an
+ * ordered hull sliding along a shoreline (see `SHORE_SLIDE_FAN`) gives up
+ * the slide and holds after this long, so a truly unreachable goal reads as
+ * beached instead of pacing the coast forever.
  */
 export const BLOCKED_SKIP_AFTER = 2.5;
+/**
+ * Shore-slide fan, radians: heading offsets around the turned hull heading,
+ * smallest deviation first with alternating sides, that an ordered hull
+ * beached on a shoreline tries when its direct step is refused. Waypoint
+ * homing with arrival slop can drift a hull's track off its smoothed leg
+ * and nose it onto a water corner with the waypoint across it; the fan
+ * finds the closest free heading so the hull edges around the corner
+ * instead of grinding in place forever. Alternation starts portside
+ * (negative) so the pick is deterministic. Only ordered hulls fan, and only
+ * off wet ground: patrol legs cut straight across bays (sliding would walk
+ * the whole coastline instead of skipping), and steep blocks hold honestly
+ * as "can't climb that". Ordered steps taken badly misaligned (hull more
+ * than 60° off its waypoint) accrue `stuck` instead of clearing it, so a
+ * slide that never closes on the goal burns the same patience as a hold.
+ */
+export const SHORE_SLIDE_FAN: readonly number[] = [
+  -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6,
+].map((k) => (k * Math.PI) / 12);
 /** Waypoints need dry land this far above the sea, matching placement. */
 const ROUTE_DRY_LIFT = 4;
 /** Waypoints tolerate the same climb gate the pathfinder drives (retail-tank grade). */
@@ -523,13 +545,15 @@ export interface PursuitTactics {
  * `terrain` is provided, steps into unwalkable/too-steep ground are refused:
  * the hull holds position and keeps turning (retail's blocked-mover
  * behavior) instead of clipping into the hillside; a patrolling hull that
- * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint. Wood
- * never pins: with a `crush` context a step touching standing trees fells
- * them at a `CRUSH_DRAG` crawl instead of holding. `foes` carries the live
- * roster positions so pursuit tracks a moving attacker (omitted, the static
- * last-known memory steers — which is also how driven-path prediction
- * previews a chase). Pure: returns a new mover. Terrain-less stepping is
- * byte-identical to before for threat-free hulls.
+ * stays pinned past `BLOCKED_SKIP_AFTER` skips to its next waypoint — while
+ * an ordered hull beached on a shoreline edges around the water via the
+ * `SHORE_SLIDE_FAN` instead of grinding nose-on, holding beached past
+ * patience. Wood never pins: with a `crush` context a step touching
+ * standing trees fells them at a `CRUSH_DRAG` crawl instead of holding.
+ * `foes` carries the live roster positions so pursuit tracks a moving
+ * attacker (omitted, the static last-known memory steers — which is also
+ * how driven-path prediction previews a chase). Pure: returns a new mover.
+ * Terrain-less stepping is byte-identical to before for threat-free hulls.
  */
 export function advanceMover(
   kind: UnitKind,
@@ -772,6 +796,35 @@ function pursueStep(
   return { ...driven.mover, threat: memory };
 }
 
+/**
+ * Fell the standing trees a taken drive step touches (re-tested on the
+ * crush-shortened stride, so only wood actually reached falls), and report
+ * the fresh falls for the renderer to re-pose.
+ */
+function fellTreesOnStep(
+  crush: CrushContext | null | undefined,
+  kind: UnitKind,
+  fromX: number,
+  fromZ: number,
+  toX: number,
+  toZ: number,
+): void {
+  if (crush == null) return;
+  const touched = treesCrushedByStep(
+    crush.points,
+    crush.field.trees,
+    fromX,
+    fromZ,
+    toX,
+    toZ,
+    kind,
+  );
+  if (touched.length === 0) return;
+  const felled: number[] = [];
+  for (const fid of touched) if (crushTree(crush.field, fid)) felled.push(fid);
+  if (felled.length > 0) crush.onCrush?.(felled);
+}
+
 /** Turn the hull toward `target` and drive forward along it. */
 function driveToward(
   kind: UnitKind,
@@ -822,33 +875,72 @@ function driveToward(
   });
   const direct = endpoint(desired);
   if (!terrain || !stepBlocked(terrain, mover.x, mover.z, direct.nx, direct.nz, kind)) {
-    // Fell the standing trees the taken step touches (re-tested on the
-    // crush-shortened stride, so only wood actually reached falls), and
-    // report the fresh falls for the renderer to re-pose. Felled lanes stay
-    // felled, so later passes skip both the fell and the crawl.
-    if (crush != null) {
-      const touched = treesCrushedByStep(
-        crush.points,
-        crush.field.trees,
-        mover.x,
-        mover.z,
-        direct.nx,
-        direct.nz,
-        kind,
-      );
-      if (touched.length > 0) {
-        const felled: number[] = [];
-        for (const fid of touched) if (crushTree(crush.field, fid)) felled.push(fid);
-        if (felled.length > 0) crush.onCrush?.(felled);
-      }
-    }
+    // Felled lanes stay felled, so later passes skip both the fell and the crawl.
+    fellTreesOnStep(crush, kind, mover.x, mover.z, direct.nx, direct.nz);
     // A successful step clears accumulated blocked time — but keep the key
     // absent (not zero) when it was never set, so terrain-less history and
-    // old snapshots compare equal.
+    // old snapshots compare equal. Exception: an ordered step taken badly
+    // misaligned (hull more than 60° off its waypoint — weaving along a
+    // wall, not closing on the goal) accrues instead of clearing, so
+    // shoreline pacing burns the same patience as a beached hold and gives
+    // up past it instead of hiking the coast forever. Aligned ordered
+    // steps clear as before, and patrol/pursuit always clear (their skip
+    // patience must not burn on U-turn transients).
+    const aligned = !order || Math.cos(wrapAngle(desired - direct.hull)) >= 0.5;
     if (mover.stuck === undefined) {
+      if (!aligned) {
+        return {
+          mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull), stuck: dt },
+          skipped: false,
+        };
+      }
       return { mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull) }, skipped: false };
     }
+    if (!aligned) {
+      return {
+        mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull), stuck: mover.stuck + dt },
+        skipped: false,
+      };
+    }
     return { mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull), stuck: 0 }, skipped: false };
+  }
+  // Ordered hulls beached on a shoreline edge around the water instead of
+  // grinding nose-on: fan headings around the turned hull heading
+  // (kinematic probe at the direct stride), take the closest free one, and
+  // drive a normal turn-limited step toward it — a far swing edges around
+  // over a few ticks, the hull always facing travel. Sliding accrues stuck
+  // time instead of clearing it: corner-rounding finishes in ticks, while a
+  // truly unreachable goal (a straight fallback drive across open water)
+  // gives up the slide past patience and holds beached. Patrol and pursuit
+  // never fan, and steep blocks never fan (see `SHORE_SLIDE_FAN`).
+  if (
+    order &&
+    terrain &&
+    (mover.stuck ?? 0) < BLOCKED_SKIP_AFTER &&
+    destinationTooWet(terrain, direct.nx, direct.nz)
+  ) {
+    const stride = Math.hypot(direct.nx - mover.x, direct.nz - mover.z);
+    if (stride > 0) {
+      for (const off of SHORE_SLIDE_FAN) {
+        const h = direct.hull + off;
+        const px = mover.x + Math.sin(h) * stride;
+        const pz = mover.z + Math.cos(h) * stride;
+        if (stepBlocked(terrain, mover.x, mover.z, px, pz, kind)) continue;
+        const esc = endpoint(h);
+        if (!stepBlocked(terrain, mover.x, mover.z, esc.nx, esc.nz, kind)) {
+          fellTreesOnStep(crush, kind, mover.x, mover.z, esc.nx, esc.nz);
+          return {
+            mover: { x: esc.nx, z: esc.nz, ...baseFor(esc.hull), stuck: (mover.stuck ?? 0) + dt },
+            skipped: false,
+          };
+        }
+        // Still turning into the corner: hold this tick but keep the swing.
+        return {
+          mover: { ...mover, ...baseFor(esc.hull), stuck: (mover.stuck ?? 0) + dt },
+          skipped: false,
+        };
+      }
+    }
   }
   // Pinned: turn in place, never enter the slope. Patrol legs (no live
   // order) skip ahead once patience runs out; orders hold their ground.

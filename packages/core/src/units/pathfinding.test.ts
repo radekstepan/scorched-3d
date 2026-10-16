@@ -11,6 +11,7 @@ import {
   type RoutePoint,
 } from "./movement.js";
 import {
+  BLOCKED_KEEPOUT,
   cellTraverseCost,
   findCellPath,
   findWorldPath,
@@ -22,6 +23,7 @@ import {
   isRockCell,
   isTreeCell,
   isWalkable,
+  legClipsBlocked,
   legClipsTrunk,
   legCrossesObstruction,
   nearestWalkable,
@@ -690,6 +692,53 @@ describe("trunk keepout in pathing", () => {
       expect(isWalkable(grid, cell.cellX, cell.cellZ)).toBe(true);
       expect(isTreeCell(grid, cell.cellX, cell.cellZ)).toBe(false);
     }
+  });
+});
+
+describe("blocked keepout in smoothing", () => {
+  /** Open 12×12 grid with one graduated pond cell at (5, 5). */
+  function lonePondGrid(): PathGrid {
+    const w = 12;
+    const h = 12;
+    const heights = new Uint8Array(w * h).fill(60);
+    heights[5 * w + 5] = 52;
+    return { width: w, height: h, heights, seaLevel: 50 };
+  }
+
+  it("flags legs threading a water corner that line of sight misses", () => {
+    const grid = lonePondGrid();
+    expect(isWalkable(grid, 5, 5)).toBe(false);
+    expect(isWalkable(grid, 4, 5)).toBe(true);
+    expect(isWalkable(grid, 5, 4)).toBe(true);
+    // Corner graze past (5,5): the half-cell samples never land on the pond
+    // cell, yet the leg passes ~11 world units from its center — inside the
+    // keepout, close enough to beach a homing hull nose-on.
+    const a = { cellX: 3, cellZ: 6 };
+    const b = { cellX: 6, cellZ: 3 };
+    expect(hasLineOfSight(grid, a, b)).toBe(true);
+    expect(legClipsBlocked(grid, a, b)).toBe(true);
+    expect(BLOCKED_KEEPOUT).toBeLessThan(16);
+    // Legs down a neighbouring lane clear the pond by a full cell width.
+    expect(legClipsBlocked(grid, { cellX: 3, cellZ: 4 }, { cellX: 8, cellZ: 4 })).toBe(false);
+    expect(legClipsBlocked(grid, { cellX: 0, cellZ: 0 }, { cellX: 0, cellZ: 11 })).toBe(false);
+    // A straight arrival at a shoreline cell clears: the leg ends a full
+    // cell from the water it sits beside.
+    expect(legClipsBlocked(grid, { cellX: 2, cellZ: 5 }, { cellX: 4, cellZ: 5 })).toBe(false);
+    // Fully open ground never clips.
+    expect(legClipsBlocked(flatGrid(), a, b)).toBe(false);
+  });
+
+  it("refuses water-grazing shortcuts when smoothing", () => {
+    const grid = lonePondGrid();
+    const cells = [
+      { cellX: 3, cellZ: 6 },
+      { cellX: 4, cellZ: 5 },
+      { cellX: 6, cellZ: 3 },
+    ];
+    // The direct shortcut threads the pond corner, so the middle waypoint stays.
+    expect(smoothCellPath(grid, cells)).toEqual(cells);
+    // Same shape on open ground collapses to its endpoints.
+    expect(smoothCellPath(flatGrid(), cells)).toEqual([cells[0], cells[2]]);
   });
 });
 

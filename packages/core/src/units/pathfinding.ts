@@ -16,7 +16,8 @@ import type { UnitField } from "./place.js";
  * the same map always returns the same path. Raw A* routes are then
  * string-pulled (line-of-sight shortcuts that refuse legs crossing
  * tree/rock interiors, plus legs passing within trunk keepout of any
- * standing tree) because the hulls steer at any
+ * standing tree, plus legs threading a water/steep corner closer than a
+ * hull's arrival slop) because the hulls steer at any
  * heading while the search only turns in eighths.
  *
  * Nanolathe parallels (adapted — retail runs fixed-point yard-map stamping
@@ -96,6 +97,21 @@ export const TRUNK_RADIUS = 4;
 export const TRUNK_KEEPOUT = 14;
 /** Snap radius when seating an order endpoint onto walkable ground, cells. */
 export const PATH_SNAP_RADIUS = 12;
+/**
+ * Closest a smoothed leg may pass to an unwalkable (water/steep) cell
+ * center, in world units. Hulls home on waypoints with arrival slop instead
+ * of tracking legs exactly, so a leg threading a blocked corner closer than
+ * this can beach the hull nose-on with its waypoint across the corner — an
+ * ordered hull then grinds forever (orders never skip). Kept just under one
+ * cell width (16) so legs down the middle of a shoreline lane or a one-wide
+ * ford still smooth, and just over the corner-graze distance (half a cell
+ * diagonal, ~11.3) so every corner cut is refused. Matches the movers'
+ * `ARRIVE_RADIUS` (14, see `movement.ts`; not imported — `pathfinding.ts`
+ * sits below `movement.ts` in the import graph and a cycle would break the
+ * barrel): arrival slop is the bound on how far a homing track can drift off
+ * its leg, so legs keep one arrival radius from blocked ground.
+ */
+export const BLOCKED_KEEPOUT = 14;
 /**
  * Minimum separation between snapped formation goals, in world units.
  * Deliberately wider than the movers' `STOP_RADIUS` (30, see `movement.ts`;
@@ -456,6 +472,60 @@ export function legClipsTrunk(
 }
 
 /**
+ * True when the straight leg a→b passes within `keepout` of any unwalkable
+ * (water/steep) cell center. Complements `hasLineOfSight` (which only sees
+ * sampled cells): a leg threading the corner between a blocked cell and its
+ * walkable neighbours never samples the blocked cell itself, yet a hull
+ * homing on the far waypoint with arrival slop can drift off the leg and
+ * beach nose-on against that corner — with the waypoint across it, an
+ * ordered hull grinds forever. Candidates are gathered from a 5×5
+ * neighbourhood around each half-cell sample, then tested exactly against
+ * the segment — the same shape as `legClipsTrunk`, with the same linear-in-
+ * length cost. Endpoints need no exemption: they are walkable cells, so only
+ * their blocked neighbours are tested, and a straight arrival at a shoreline
+ * cell still clears (≥16 from the water it sits beside) while a diagonal
+ * arrival across the water corner is refused. Deterministic: boolean
+ * result, no order dependence.
+ */
+export function legClipsBlocked(
+  grid: PathGrid,
+  a: PathCell,
+  b: PathCell,
+  keepout = BLOCKED_KEEPOUT,
+): boolean {
+  if (!(keepout > 0)) return false;
+  const ax = (a.cellX - (grid.width - 1) / 2) * CELL_PIXELS;
+  const az = (a.cellZ - (grid.height - 1) / 2) * CELL_PIXELS;
+  const bx = (b.cellX - (grid.width - 1) / 2) * CELL_PIXELS;
+  const bz = (b.cellZ - (grid.height - 1) / 2) * CELL_PIXELS;
+  const dx = b.cellX - a.cellX;
+  const dz = b.cellZ - a.cellZ;
+  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) * 2));
+  const r2 = keepout * keepout;
+  const seen = new Set<number>();
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    const cx0 = Math.round(a.cellX + dx * t);
+    const cz0 = Math.round(a.cellZ + dz * t);
+    for (let oz = -2; oz <= 2; oz++) {
+      for (let ox = -2; ox <= 2; ox++) {
+        const cx = cx0 + ox;
+        const cz = cz0 + oz;
+        if (!inBounds(grid, cx, cz)) continue;
+        const id = cz * grid.width + cx;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (isWalkable(grid, cx, cz)) continue;
+        const tx = (cx - (grid.width - 1) / 2) * CELL_PIXELS;
+        const tz = (cz - (grid.height - 1) / 2) * CELL_PIXELS;
+        if (segmentPointDistSq(ax, az, bx, bz, tx, tz) < r2) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Greedy string-pulling: from each kept waypoint, jump to the farthest
  * later waypoint with line of sight. Collapses open-ground zigzags to
  * straight legs while keeping the water/steep detours A* paid for — and,
@@ -464,7 +534,10 @@ export function legClipsTrunk(
  * cost tiers walked around. Trunk keepout applies on top (`legClipsTrunk`):
  * even a leg through open cells is refused when it would skirt within a
  * trunk's keepout circle, so smoothed legs never graze the wood they
- * route around.
+ * route around — and blocked keepout (`legClipsBlocked`) refuses legs
+ * threading a water/steep corner closer than a hull's arrival slop, so a
+ * waypoint-homing hull can never beach nose-on against a corner its leg
+ * threaded.
  */
 export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
   if (cells.length < 3) return [...cells];
@@ -476,7 +549,8 @@ export function smoothCellPath(grid: PathGrid, cells: PathCell[]): PathCell[] {
       if (
         hasLineOfSight(grid, cells[anchor]!, cells[k]!) &&
         !legCrossesObstruction(grid, cells[anchor]!, cells[k]!) &&
-        !legClipsTrunk(grid, cells[anchor]!, cells[k]!)
+        !legClipsTrunk(grid, cells[anchor]!, cells[k]!) &&
+        !legClipsBlocked(grid, cells[anchor]!, cells[k]!)
       ) {
         jump = k;
         break;

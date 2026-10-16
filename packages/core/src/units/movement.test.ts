@@ -795,6 +795,30 @@ function worldX(field: SeatField, cellX: number): number {
   return (cellX - (field.width - 1) / 2) * CELL_PIXELS;
 }
 
+function worldZ(field: SeatField, cellZ: number): number {
+  return (cellZ - (field.height - 1) / 2) * CELL_PIXELS;
+}
+
+/** Flat dry plain (land at sea+10) with a graduated 2×3 pond mid-map. */
+function pondField(): SeatField {
+  const w = 40;
+  const h = 24;
+  const heights = new Uint8Array(w * h).fill(60);
+  for (let z = 10; z <= 12; z++) {
+    for (let x = 16; x <= 17; x++) heights[z * w + x] = 52;
+  }
+  return { width: w, height: h, heights, seaLevel: 50 };
+}
+
+/** Flat dry plain split by a full-height graduated water column. */
+function seaWallField(): SeatField {
+  const w = 40;
+  const h = 24;
+  const heights = new Uint8Array(w * h).fill(60);
+  for (let z = 0; z < h; z++) heights[z * w + 16] = 52;
+  return { width: w, height: h, heights, seaLevel: 50 };
+}
+
 describe("steep-slope clamp", () => {
   it("holds position (turning in place) instead of climbing a wall", () => {
     const field = walledField();
@@ -873,6 +897,86 @@ describe("steep-slope clamp", () => {
       0,
     );
     expect(travel).toBeGreaterThan(0);
+  });
+});
+
+describe("shore slide", () => {
+  it("edges an ordered hull around a pond instead of beaching nose-on", () => {
+    // Straight order due east through the pond: waypoint homing would beach
+    // the hull on the water corner with the goal across it (the old grind
+    // held there forever). The shore fan rounds the corner and arrives.
+    const field = pondField();
+    const z = worldZ(field, 11);
+    const drive = (): { mover: Mover; excursion: number } => {
+      let mover: Mover = { x: worldX(field, 13), z, hull: Math.PI / 2, leg: 0 };
+      mover = orderMover(mover, [{ x: worldX(field, 21), z }]);
+      let excursion = 0;
+      for (let n = 0; n < 3600; n++) {
+        mover = advanceMover("stump", mover, [], 1 / 60, 1, field);
+        const { cellX, cellZ } = cellFromWorld(field, mover.x, mover.z);
+        expect(isWalkable(field, cellX, cellZ)).toBe(true);
+        excursion = Math.max(excursion, Math.abs(mover.z - z));
+        if (!hasOrder(mover)) break;
+      }
+      return { mover, excursion };
+    };
+    const { mover, excursion } = drive();
+    expect(hasOrder(mover)).toBe(false);
+    expect(mover.hold).toBe(true);
+    // It rounded the pond (more than a cell off the lane), not through it.
+    expect(excursion).toBeGreaterThan(CELL_PIXELS);
+    // Deterministic: the same slide replays exactly.
+    const again = drive();
+    expect(again.mover.x).toBe(mover.x);
+    expect(again.mover.z).toBe(mover.z);
+  });
+
+  it("gives up an unreachable slide and holds beached past patience", () => {
+    // Straight order across a full water column: the hull tries the shore,
+    // then holds instead of pacing the coast forever. The order stays live.
+    const field = seaWallField();
+    const z = worldZ(field, 11);
+    let mover: Mover = { x: worldX(field, 13), z, hull: Math.PI / 2, leg: 0 };
+    mover = orderMover(mover, [{ x: worldX(field, 25), z }]);
+    const dt = 1 / 60;
+    let early: Mover | null = null;
+    let mid: Mover | null = null;
+    for (let n = 0; n < 720; n++) {
+      mover = advanceMover("stump", mover, [], dt, 1, field);
+      const { cellX, cellZ } = cellFromWorld(field, mover.x, mover.z);
+      expect(isWalkable(field, cellX, cellZ)).toBe(true);
+      expect(cellX).toBeLessThan(16);
+      if (n === 180) early = { ...mover };
+      if (n === 360) mid = { ...mover };
+    }
+    // It slid along the shore first (never pinned in place from the start).
+    expect(Math.abs(early!.z - z)).toBeGreaterThan(4);
+    // ...then gave up: frozen from 6 s to 12 s, order still live.
+    expect(mover.x).toBe(mid!.x);
+    expect(mover.z).toBe(mid!.z);
+    expect(hasOrder(mover)).toBe(true);
+  });
+
+  it("lets patrol skip a leg pinned at the water like at a wall", () => {
+    // Patrol never fans: a leg across the water holds at the shore, then
+    // skips — sliding would walk the whole coastline instead of skipping.
+    const field = seaWallField();
+    const z = worldZ(field, 11);
+    const route: RoutePoint[] = [
+      { x: worldX(field, 13), z },
+      { x: worldX(field, 25), z },
+    ];
+    let mover: Mover = { x: worldX(field, 13), z, hull: Math.PI / 2, leg: 1 };
+    const dt = 1 / 60;
+    let skipped = false;
+    for (let n = 0; n < Math.ceil(BLOCKED_SKIP_AFTER / dt) + 300; n++) {
+      mover = advanceMover("stump", mover, route, dt, 1, field);
+      const { cellX, cellZ } = cellFromWorld(field, mover.x, mover.z);
+      expect(cellX).toBeLessThan(16);
+      expect(isWalkable(field, cellX, cellZ)).toBe(true);
+      if (mover.leg === 0) skipped = true;
+    }
+    expect(skipped).toBe(true);
   });
 });
 

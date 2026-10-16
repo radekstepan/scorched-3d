@@ -14,6 +14,7 @@ import {
   TREE_DRAG,
   TRUNK_PUSH_SPEED,
   blastSlopeAt,
+  destinationTooWet,
   downslopeAt,
   featureDrag,
   groundHeight,
@@ -241,6 +242,23 @@ describe("stepBlocked", () => {
     const c = worldOf(edge, 10, 10);
     const d = worldOf(edge, 11, 10);
     expect(stepBlocked(edge, c.x, c.z, d.x, d.z)).toBe(false);
+  });
+
+  it("tells wet destinations apart from steep ones", () => {
+    // Graduated shore: land at sea+10, pond at sea+2 — neighbours stay
+    // gentle, so the pond cells fail the dry gate, not the slope gate.
+    const w = 24;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(60);
+    heights[12 * w + 12] = 52;
+    const field: SeatField = { width: w, height: h, heights, seaLevel: 50 };
+    expect(destinationTooWet(field, worldOf(field, 12, 12).x, worldOf(field, 12, 12).z)).toBe(true);
+    expect(destinationTooWet(field, worldOf(field, 11, 12).x, worldOf(field, 11, 12).z)).toBe(false);
+    // A steep (dry) destination is not wet: the drive holds, never slides.
+    const steep = rampField(40);
+    const b = worldOf(steep, 11, 10);
+    expect(stepBlocked(steep, worldOf(steep, 10, 10).x, worldOf(steep, 10, 10).z, b.x, b.z)).toBe(true);
+    expect(destinationTooWet(steep, b.x, b.z)).toBe(false);
   });
 });
 
