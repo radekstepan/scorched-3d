@@ -5,6 +5,7 @@ import { buildHammer } from "./hammer";
 import { buildFlash } from "./flash";
 import { buildStumpy } from "./stumpy";
 import { applyCamo } from "./camo";
+import { teamLivery } from "./teamPaint";
 import {
   advanceGait,
   GAIT_SETTLE_RATE,
@@ -48,7 +49,7 @@ export function restBarrelElevation(kind: UnitKind): number {
   }
 }
 
-function buildBody(kind: UnitKind, parent: THREE.Group): void {
+function buildBody(kind: UnitKind, parent: THREE.Group, team?: TeamId): void {
   // Traverse-limited turret subgroup: tanks carry the turret box + barrel
   // here, the commander its whole upper torso. Combat FX yaws the body
   // (hull) and this group (relative) separately.
@@ -56,16 +57,19 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
   turret.name = "turret";
   parent.add(turret);
   parent.userData.turret = turret;
+  // Battlefield bodies wear their side's livery; team-less builds (tray
+  // thumbnails) keep the neutral kind finishes.
+  const livery = team === undefined ? undefined : teamLivery(team);
   if (kind === "flash") {
-    buildFlash(parent, turret);
+    buildFlash(parent, turret, livery);
   } else if (kind === "stump") {
-    buildStumpy(parent, turret);
+    buildStumpy(parent, turret, livery);
   } else if (kind === "hammer") {
-    buildHammer(parent, turret);
+    buildHammer(parent, turret, livery);
   } else if (kind === "peewee") {
-    buildPeewee(parent, turret);
+    buildPeewee(parent, turret, livery);
   } else {
-    buildCommander(parent, turret);
+    buildCommander(parent, turret, livery);
   }
 }
 
@@ -112,9 +116,9 @@ export function teamRingGeometry(selected: boolean): THREE.RingGeometry {
 
 /**
  * Build one team ground ring: a flat team-colored band under the hull that
- * carries side identity in 3D without tinting the hull itself (the no-tint
- * policy from the selection task: hulls keep their normal paint including
- * damage charring). This is the unit's only ground circle — selection
+ * reinforces side identity in 3D alongside the team-painted hull (hulls
+ * carry their side's livery, including through damage charring). This is
+ * the unit's only ground circle — selection
  * thickens + brightens this same mesh (see `setTeamRingSelected`) instead
  * of adding a second ring. The mesh carries `userData.noHighlight` so
  * damage charring never touches it, and the name `team-ring` so the
@@ -213,7 +217,7 @@ export function buildSpawnedUnit(
   groundY: (x: number, z: number) => number,
 ): THREE.Group {
   const body = new THREE.Group();
-  buildBody(kind, body);
+  buildBody(kind, body, team);
   applyCamo(body, kind);
   body.add(buildTeamRing(team));
   body.rotation.order = "YXZ";
@@ -444,11 +448,11 @@ export function buildUnits(map: TNTMap, exaggeration: number): THREE.Group {
   group.userData.units = map.units as PlacedUnit[];
   for (const unit of map.units) {
     const body = new THREE.Group();
-    buildBody(unit.kind, body);
+    buildBody(unit.kind, body, unit.team ?? 0);
     // Subtle procedural camo on the hull paint (shared per-kind texture;
     // wheels stay flat rubber, markers are skipped inside applyCamo).
     applyCamo(body, unit.kind);
-    // Team ground ring: side identity without hull tint (see buildTeamRing).
+    // Team ground ring under the team-painted hull (see buildTeamRing).
     body.add(buildTeamRing(unit.team ?? 0));
     // YXZ so hull pitch/roll pose in the hull frame after yawing.
     body.rotation.order = "YXZ";

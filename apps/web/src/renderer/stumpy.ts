@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { armor, Assembly } from "./vehicleGeometry";
 import { UNIT_DEFS } from "@scorched-3d/core";
 import { unitHullMaterial } from "./unitFog";
+import type { TeamLivery } from "./teamPaint";
 
 // Stumpy's fixed parts are welded by finish, separately for each moving assembly.
 // Geometry templates are baked once; each body owns disposable copies and materials
@@ -116,11 +117,25 @@ function design() {
 }
 let template: ReturnType<typeof design> | undefined;
 
-export function buildStumpy(parent: THREE.Group, turret: THREE.Group): void {
+export function buildStumpy(parent: THREE.Group, turret: THREE.Group, livery?: TeamLivery): void {
   const source = template ??= design();
+  // Team paint remaps the paint-family finishes (dominant paint, light edge
+  // armor, and the darker lower strake, which joins the main paint) at
+  // attach time; the baked geometry template is shared across teams.
+  const paint = livery?.paint ?? PAINT;
+  const edge = livery?.panel ?? EDGE;
+  const remap = (color: number): number => {
+    // Neutral builds keep every kind finish byte-identical (the lower
+    // strake only joins the main paint under a team livery).
+    if (!livery) return color;
+    if (color === PAINT) return paint;
+    if (color === EDGE) return edge;
+    if (color === UNIT_DEFS.stump.color) return paint;
+    return color;
+  };
   const attach = (target: THREE.Group, parts: [number, THREE.BufferGeometry][], name: string) => {
     for (const [color, geometry] of parts) {
-      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(color));
+      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color)));
       mesh.name = name;
       mesh.userData.noCamo = color !== PAINT && color !== EDGE && color !== UNIT_DEFS.stump.color;
       target.add(mesh);

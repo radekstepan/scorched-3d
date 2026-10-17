@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { UNIT_DEFS } from "@scorched-3d/core";
 import { armor, Assembly } from "./vehicleGeometry";
 import { unitHullMaterial } from "./unitFog";
+import type { TeamLivery } from "./teamPaint";
 
 const PAINT = UNIT_DEFS.peewee.color;
 const PANEL = 0xd0c29a;
@@ -101,9 +102,18 @@ function design() {
 }
 let template: ReturnType<typeof design> | undefined;
 
-export function buildPeewee(parent: THREE.Group, turret: THREE.Group): void {
+export function buildPeewee(parent: THREE.Group, turret: THREE.Group, livery?: TeamLivery): void {
   const source = template ??= design();
-  const material = (color: number) => unitHullMaterial(color);
+  // Team paint remaps the paint-family finishes at material time; the baked
+  // geometry template is shared across teams.
+  const paint = livery?.paint ?? PAINT;
+  const panel = livery?.panel ?? PANEL;
+  const remap = (color: number): number => {
+    if (color === PAINT) return paint;
+    if (color === PANEL) return panel;
+    return color;
+  };
+  const material = (color: number) => unitHullMaterial(remap(color));
   const attach = (target: THREE.Object3D, parts: [number, THREE.BufferGeometry][], name: string) => {
     for (const [color, geometry] of parts) {
       const mesh = new THREE.Mesh(geometry.clone(), material(color)); mesh.name = name;

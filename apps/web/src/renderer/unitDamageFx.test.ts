@@ -26,7 +26,8 @@ import {
   UnitDamageFx,
   wreckCharredColor,
 } from "./unitDamageFx";
-import { buildUnits } from "./units";
+import { buildUnitIconBody, buildUnits } from "./units";
+import { TEAM_HULL_PAINT } from "./teamPaint";
 
 function fakeMap(): TNTMap {
   const width = 32;
@@ -138,8 +139,11 @@ describe("applyUnitDamageTint", () => {
     applyUnitDamageTint(body, 1);
     expect(lambertHexes(body)).toEqual(pinned);
     for (const hex of pinned) expect(lum(hex)).toBeGreaterThan(0.03);
-    // And the def colors still describe the pristine hulls elsewhere.
-    expect(before).toContain(UNIT_DEFS.stump.color);
+    // And the team livery describes the pristine battlefield hull (this
+    // body is team-less in the fake map, so it defaults to side 0), while
+    // the kind def colors still describe the neutral icon body.
+    expect(before).toContain(TEAM_HULL_PAINT[0]);
+    expect(lambertHexes(buildUnitIconBody("stump"))).toContain(UNIT_DEFS.stump.color);
   });
 
   it("skips selection markers (Basic materials, noHighlight)", () => {

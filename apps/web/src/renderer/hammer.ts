@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { UNIT_DEFS } from "@scorched-3d/core";
 import { armor, Assembly } from "./vehicleGeometry";
 import { unitHullMaterial } from "./unitFog";
+import type { TeamLivery } from "./teamPaint";
 
 // Hammer is a mobile howitzer, with a split armored cradle rather than a tank
 // turret wrapped around the gun. Buffers and breech elevate with the barrel.
@@ -131,11 +132,26 @@ function design() {
 }
 let template: ReturnType<typeof design> | undefined;
 
-export function buildHammer(parent: THREE.Group, turret: THREE.Group): void {
+export function buildHammer(parent: THREE.Group, turret: THREE.Group, livery?: TeamLivery): void {
   const source = template ??= design();
+  // Team paint remaps the paint-family finishes (dominant paint, light
+  // plates, and the darker lower strake, which joins the main paint) at
+  // attach time; the baked geometry template is shared across teams. The
+  // orange breech accent stays functional on both sides.
+  const paint = livery?.paint ?? PAINT;
+  const panel = livery?.panel ?? PANEL;
+  const remap = (color: number): number => {
+    // Neutral builds keep every kind finish byte-identical (the lower
+    // strake only joins the main paint under a team livery).
+    if (!livery) return color;
+    if (color === PAINT) return paint;
+    if (color === PANEL) return panel;
+    if (color === UNIT_DEFS.hammer.color) return paint;
+    return color;
+  };
   const attach = (target: THREE.Group, parts: [number, THREE.BufferGeometry][], name: string) => {
     for (const [color, geometry] of parts) {
-      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(color)); mesh.name = name;
+      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color))); mesh.name = name;
       mesh.userData.noCamo = color !== PAINT && color !== ORANGE && color !== UNIT_DEFS.hammer.color;
       target.add(mesh);
     }

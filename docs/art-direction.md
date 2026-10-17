@@ -15,7 +15,7 @@ Start with the role, footprint and one defining feature. Establish the chassis o
 | Commander | Broad chest and shoulders, heavier articulated-looking legs, substantial feet, command mast and selective pale-blue/gold panels. | Command status comes from posture, mass hierarchy and a few controlled accents. It should feel related to Peewee without being an enlarged copy. |
 | HQ | Sloped wall bastions, framed loading gate, armored shutter cassette, raised roof spine, exhaust towers and an asymmetric service deck. Neutral industrial paint with team trim. | A factory needs a clear production axis and a readable entrance. Use roof masses for recognition from above; supporting equipment should explain production, cooling or access. |
 
-These colors identify model families, not teams. Blue and Orange ownership remains readable through team rings, HUD/minimap markers and the HQ's team trim. Do not make faction recognition depend on the body paint.
+These colors are the neutral kind finishes (tray thumbnails). On the battlefield every unit wears its side's livery instead: the dominant paint and light secondary armor remap onto the team colors (commander blue for Blue, a hue-matched orange for Orange — see `teamPaint.ts`), while bare metal, recesses, optics and small functional accents keep their kind finishes. Team rings, HUD/minimap markers and the HQ's team trim reinforce the same identity. Wrecks still char to near-black, so death never reads as team paint.
 
 ## Shared shape language
 

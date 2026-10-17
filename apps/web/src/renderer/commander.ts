@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { armor, Assembly } from "./vehicleGeometry";
 import { unitHullMaterial } from "./unitFog";
+import type { TeamLivery } from "./teamPaint";
 
 const PAINT = 0x3d719b;
 const PANEL = 0x85a0af;
@@ -120,11 +121,21 @@ function design() {
 }
 let template: ReturnType<typeof design> | undefined;
 
-export function buildCommander(parent: THREE.Group, turret: THREE.Group): void {
+export function buildCommander(parent: THREE.Group, turret: THREE.Group, livery?: TeamLivery): void {
   const source = template ??= design();
+  // Team paint remaps the paint-family finishes at attach time; the baked
+  // geometry template is shared (only per-instance material colors change),
+  // and camo eligibility still keys off the original kind finishes.
+  const paint = livery?.paint ?? PAINT;
+  const panel = livery?.panel ?? PANEL;
+  const remap = (color: number): number => {
+    if (color === PAINT) return paint;
+    if (color === PANEL) return panel;
+    return color;
+  };
   const attach = (target: THREE.Object3D, parts: [number, THREE.BufferGeometry][], name: string) => {
     for (const [color, geometry] of parts) {
-      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(color)); mesh.name = name;
+      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color))); mesh.name = name;
       mesh.userData.noCamo = color !== PAINT && color !== PANEL && color !== GOLD;
       target.add(mesh);
     }
@@ -134,7 +145,7 @@ export function buildCommander(parent: THREE.Group, turret: THREE.Group): void {
   const tip = new THREE.Object3D(); tip.name = "tip"; tip.position.set(0, 30, 6); turret.add(tip);
   for (const x of [-4, 4]) {
     const [color, geometry] = source.legs[0]!;
-    const leg = new THREE.Mesh(geometry.clone(), unitHullMaterial(color)); leg.name = "leg";
+    const leg = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color))); leg.name = "leg";
     leg.position.set(x, 14, 0); leg.userData.baseY = 14;
     attach(leg, source.legs.slice(1), "commander-leg-detail"); parent.add(leg);
   }

@@ -6,9 +6,8 @@ import type { UnitKind } from "@scorched-3d/core";
  * per unit kind (near-white blotches + grain) bound as `map` on the hull
  * Lambert materials. The map multiplies the hull paint, so:
  *
- * - hue is preserved exactly (grayscale carries luminance only — no team
- *   color is ever painted on the hull; side identity stays on the ground
- *   rings / HUD chips / minimap per the no-tint policy),
+ * - hue is preserved exactly (grayscale carries luminance only, so the
+ *   team livery painted on the hull survives the multiply untouched),
  * - damage charring (`applyUnitDamageTint`) and wreck char
  *   (`applyWreckChar`) keep working untouched — they rewrite `color` from
  *   the stashed base hex while the map rides along,
@@ -72,8 +71,8 @@ interface Blotch {
  * Raw baked bytes for one kind's camo texture (pure: no DOM, no three.js —
  * unit-testable in node). Row-major RGBA, `size`×`size`, opaque grayscale:
  * a near-white field with smooth disruptive blotches plus a whisper of
- * grain. Luminance-only, so hull hue (and the no-hull-tint policy) survives
- * the multiply exactly.
+ * grain. Luminance-only, so the team-painted hull hue survives the
+ * multiply exactly.
  */
 export function bakeCamoBytes(kind: UnitKind, size: number): Uint8Array {
   const bytes = new Uint8Array(size * size * 4);

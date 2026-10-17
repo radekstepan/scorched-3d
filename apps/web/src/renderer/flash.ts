@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { UNIT_DEFS } from "@scorched-3d/core";
 import { armor, Assembly } from "./vehicleGeometry";
 import { unitHullMaterial } from "./unitFog";
+import type { TeamLivery } from "./teamPaint";
 
 // A fast, compact raider: swept track fairings and a low arrowhead turret.
 // All fixed details are welded by finish within the three moving assemblies.
@@ -115,11 +116,25 @@ function design() {
 }
 let template: ReturnType<typeof design> | undefined;
 
-export function buildFlash(parent: THREE.Group, turret: THREE.Group): void {
+export function buildFlash(parent: THREE.Group, turret: THREE.Group, livery?: TeamLivery): void {
   const source = template ??= design();
+  // Team paint remaps the paint-family finishes (dominant paint, light
+  // guards, and the darker lower strake, which joins the main paint) at
+  // attach time; the baked geometry template is shared across teams.
+  const paint = livery?.paint ?? PAINT;
+  const panel = livery?.panel ?? PANEL;
+  const remap = (color: number): number => {
+    // Neutral builds keep every kind finish byte-identical (the lower
+    // strake only joins the main paint under a team livery).
+    if (!livery) return color;
+    if (color === PAINT) return paint;
+    if (color === PANEL) return panel;
+    if (color === UNIT_DEFS.flash.color) return paint;
+    return color;
+  };
   const attach = (target: THREE.Group, parts: [number, THREE.BufferGeometry][], name: string) => {
     for (const [color, geometry] of parts) {
-      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(color)); mesh.name = name;
+      const mesh = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color))); mesh.name = name;
       mesh.userData.noCamo = color !== PAINT && color !== PANEL && color !== UNIT_DEFS.flash.color;
       target.add(mesh);
     }
