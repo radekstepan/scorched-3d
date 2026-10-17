@@ -29,7 +29,9 @@ import {
   MIN_RANGE,
   muzzleForward,
   muzzleHeight,
+  MOVING_REFIRE_MULTIPLIER,
   nextShotDelay,
+  nextShotDelayFor,
   orbitStrafe,
   pickHostilePair,
   pickSkirmishPair,
@@ -159,6 +161,35 @@ describe("nextShotDelay", () => {
       const d = nextShotDelay(rng, 2, 3);
       expect(d).toBeGreaterThanOrEqual(2);
       expect(d).toBeLessThanOrEqual(3);
+    }
+  });
+});
+
+describe("nextShotDelayFor", () => {
+  it("reloads volleys fired on the move at half pace", () => {
+    expect(MOVING_REFIRE_MULTIPLIER).toBe(2);
+    for (const kind of UNIT_KINDS) {
+      const still = nextShotDelayFor(kind, mulberry32(11));
+      const moving = nextShotDelayFor(kind, mulberry32(11), true);
+      // Same draw, scaled post-draw: exact power-of-two ratio, no brittle
+      // absolute — the kind window stays the only absolute.
+      expect(moving).toBe(still * MOVING_REFIRE_MULTIPLIER);
+    }
+  });
+
+  it("keeps the stationary beat and the rng stream untouched", () => {
+    for (const kind of UNIT_KINDS) {
+      // Explicit `false` matches the legacy two-arg call exactly.
+      expect(nextShotDelayFor(kind, mulberry32(7), false)).toBe(
+        nextShotDelayFor(kind, mulberry32(7)),
+      );
+      // One rng draw either way: the penalty scales the drawn value, so the
+      // stream stays aligned — the next raw draw matches a fresh stream.
+      const scaled = mulberry32(7);
+      nextShotDelayFor(kind, scaled, true);
+      const fresh = mulberry32(7);
+      fresh();
+      expect(scaled()).toBe(fresh());
     }
   });
 });

@@ -132,6 +132,30 @@ function makePeeweeDuel(distance: number): THREE.Group {
   return group;
 }
 
+/** Two flashes facing each other `distance` apart (attacker at the origin). */
+function makeFlashDuel(distance: number): THREE.Group {
+  const group = new THREE.Group();
+  group.userData.units = [
+    { kind: "flash", cellX: 1, cellZ: 1, rotation: 0, team: 0 },
+    { kind: "flash", cellX: 2, cellZ: 2, rotation: Math.PI, team: 1 },
+  ];
+  const bodies = [
+    { pos: new THREE.Vector3(0, 100, 0), rot: 0 },
+    { pos: new THREE.Vector3(0, 100, distance), rot: Math.PI },
+  ];
+  bodies.forEach((b) => {
+    const body = new THREE.Group();
+    body.rotation.y = b.rot;
+    body.position.copy(b.pos);
+    const turret = new THREE.Group();
+    turret.name = "turret";
+    body.add(turret);
+    body.userData.turret = turret;
+    group.add(body);
+  });
+  return group;
+}
+
 /** Eight hulls on a wide grid for barrage-cap tests (far outside any blast). */
 function makeBarrageUnits(): THREE.Group {
   const kinds = ["stump", "hammer", "flash", "commander", "stump", "hammer", "flash", "commander"];
@@ -3217,5 +3241,70 @@ describe("CombatFx night light boost", () => {
     expect(compared).toBeGreaterThan(0);
     day.dispose();
     night.dispose();
+  });
+});
+
+describe("CombatFx fire on the move", () => {
+  /**
+   * Run one flash duel with a stubbed mover signal: twins share the seed
+   * and the geometry timeline, differing only in what `isMoving` reports —
+   * so any cadence gap is the refire penalty, never aim or rng.
+   */
+  function runTwin(
+    seed: number,
+    isMoving: ((index: number) => boolean) | undefined,
+    ticks: number,
+  ): { fired: number; ticksTo12: number; damage: readonly number[] } {
+    const fx = new CombatFx(
+      new THREE.Scene(),
+      makeFlashDuel(400),
+      mulberry32(seed),
+      // No-op terrain/feature hooks: the duel is fought over flat headless
+      // ground with no trees, so only the `isMoving` stub varies the twins.
+      isMoving === undefined
+        ? undefined
+        : { groundY: () => 100, blastFeatures: () => {}, isMoving },
+    );
+    fx.setExternalHull(true);
+    let ticksTo12 = -1;
+    for (let n = 0; n < ticks; n++) {
+      fx.update(1 / 60);
+      if (ticksTo12 < 0 && fx.totalFired >= 12) ticksTo12 = n + 1;
+    }
+    const out = { fired: fx.totalFired, ticksTo12, damage: fx.damageList() };
+    fx.dispose();
+    return out;
+  }
+
+  it("fires at half pace while the gunner displaces", () => {
+    const still = runTwin(21, () => false, 1200);
+    const moving = runTwin(21, () => true, 1200);
+    expect(still.ticksTo12).toBeGreaterThan(0);
+    expect(moving.ticksTo12).toBeGreaterThan(0);
+    // Strictly fewer volleys — and the gap reads as the ~2x refire penalty,
+    // pinned as ratios with margin, never absolute counts.
+    expect(moving.fired).toBeLessThan(still.fired);
+    expect(moving.fired / still.fired).toBeGreaterThan(0.35);
+    expect(moving.fired / still.fired).toBeLessThan(0.65);
+    expect(moving.ticksTo12 / still.ticksTo12).toBeGreaterThan(1.6);
+    expect(moving.ticksTo12 / still.ticksTo12).toBeLessThan(2.4);
+  });
+
+  it("penalizes only the volley the mover fired", () => {
+    const still = runTwin(21, () => false, 1200);
+    const half = runTwin(21, (i) => i === 0, 1200);
+    const all = runTwin(21, () => true, 1200);
+    // One gunner reporting moving lands strictly between the twins: the
+    // penalty follows the volley that just left, not the whole schedule.
+    expect(half.fired).toBeLessThan(still.fired);
+    expect(half.fired).toBeGreaterThan(all.fired);
+  });
+
+  it("keeps the stationary beat bit-identical with or without the hook", () => {
+    const legacy = runTwin(21, undefined, 1200);
+    const hooked = runTwin(21, () => false, 1200);
+    expect(hooked.fired).toBe(legacy.fired);
+    expect(hooked.ticksTo12).toBe(legacy.ticksTo12);
+    expect([...hooked.damage]).toEqual([...legacy.damage]);
   });
 });

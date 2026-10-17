@@ -846,3 +846,98 @@ describe("UnitMovement sweep efficiency", () => {
     empty.dispose();
   });
 });
+
+describe("isMoving", () => {
+  it("reads patrol-driving hulls as moving once they displace", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // Before the first tick nothing has displaced yet.
+    expect(movement.isMoving(0)).toBe(false);
+    expect(movement.isMoving(1)).toBe(false);
+    expect(movement.isMoving(99)).toBe(false);
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    expect(movement.isMoving(0)).toBe(true);
+    expect(movement.isMoving(1)).toBe(true);
+    expect(movement.isMoving(99)).toBe(false);
+    movement.dispose();
+  });
+
+  it("reads ordered hulls as moving while they drive", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // Hull 0 sits at the origin: order it 400 east (no field, direct leg).
+    expect(movement.orderUnit(0, { x: 400, z: 0 })).toBe(true);
+    movement.update(1 / 60);
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.isMoving(0)).toBe(true);
+    movement.dispose();
+  });
+
+  it("reads stunned hulls as stationary even mid-recoil-slide", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    // Hull 0 sits at (0, 0); a blast 30 ahead recoils it back mid-beat.
+    movement.stunUnit(0, 0.16, 0, 30);
+    for (let n = 0; n < 13; n++) movement.update(1 / 60);
+    const sliding = movement.moverState(0)!;
+    expect(sliding.stun).toBeGreaterThan(0);
+    // The hull genuinely displaced — and still reads stationary: recoil
+    // is involuntary, never driving.
+    expect(sliding.z).toBeLessThan(0);
+    expect(movement.isMoving(0)).toBe(false);
+    // The unstunned patrol mate reads moving as the control.
+    expect(movement.isMoving(1)).toBe(true);
+    movement.dispose();
+  });
+
+  it("reads wrecks as stationary", () => {
+    const units = makeGroup();
+    const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    expect(movement.isMoving(0)).toBe(true);
+    movement.markDestroyed(0);
+    movement.update(1 / 60);
+    expect(movement.isMoving(0)).toBe(false);
+    expect(movement.isMoving(1)).toBe(true);
+    movement.dispose();
+  });
+
+  it("reads slope-pinned hulls as stationary", () => {
+    // Cliff field: flat 100 west of x=20, plateau 200 east — the drive
+    // clamp pins the hull at the wall while it keeps turning.
+    const w = 40;
+    const h = 24;
+    const heights = new Uint8Array(w * h).fill(100);
+    for (let z = 0; z < h; z++) {
+      for (let x = 20; x < w; x++) heights[z * w + x] = 200;
+    }
+    const field = { width: w, height: h, heights, seaLevel: 0 };
+    const env = {
+      groundY: (x: number, z: number) => worldHeight(sampleHeightBilinear(field, x, z), 1),
+      seat: (x: number, z: number, hull: number, kind: UnitKind) => seatHull(field, kind, x, z, hull, 1),
+    };
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "stump", cellX: 10, cellZ: 10, rotation: 0 }];
+    const body = new THREE.Group();
+    body.rotation.y = 0;
+    body.position.set(-200, 0, 0);
+    group.add(body);
+    const movement = new UnitMovement(group, [[{ x: -200, z: 0 }, { x: 400, z: 0 }]], env, field);
+    // An order into the wall: patrol would skip the leg past patience, but
+    // orders hold their ground, so the hull pins at the cliff forever.
+    expect(movement.orderUnit(0, { x: 400, z: 0 })).toBe(true);
+    // Still approaching the wall: genuinely displacing.
+    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    expect(movement.isMoving(0)).toBe(true);
+    // Pinned at the wall: ticks pass, X/Z never move again.
+    for (let n = 0; n < 1200; n++) movement.update(1 / 60);
+    const cliffX = (20 - (w - 1) / 2) * 16;
+    const pinned = movement.moverState(0)!;
+    expect(pinned.x).toBeLessThan(cliffX);
+    for (let n = 0; n < 60; n++) movement.update(1 / 60);
+    expect(movement.moverState(0)!.x).toBe(pinned.x);
+    expect(movement.moverState(0)!.z).toBe(pinned.z);
+    expect(movement.isMoving(0)).toBe(false);
+    movement.dispose();
+  });
+});

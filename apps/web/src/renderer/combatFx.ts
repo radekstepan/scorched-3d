@@ -710,6 +710,14 @@ export interface CombatEnv {
    * draw structure fire).
    */
   isEngaged?: (index: number) => boolean;
+  /**
+   * True while a hull is genuinely driving (see `UnitMovement.isMoving`):
+   * a volley fired on the move reloads `MOVING_REFIRE_MULTIPLIER` slower
+   * than the same volley fired at rest, so driving guns keep firing,
+   * just not as fast. Absent reads as nobody moving (legacy behavior:
+   * every volley reloads at the stationary beat).
+   */
+  isMoving?: (index: number) => boolean;
 }
 
 export class CombatFx {
@@ -744,6 +752,13 @@ export class CombatFx {
    * walker guns quicken the cadence while tank volleys keep the legacy pace.
    */
   private lastKind: UnitKind | null = null;
+  /**
+   * Roster index of the most recent volley's gunner (null before the first
+   * shot): pairs with `lastKind` so the shared timer reload knows whether
+   * the volley that just left fired on the move (see `isMoving`). Persists
+   * like `lastKind` — never reset by `clearTransients`.
+   */
+  private lastAttacker: number | null = null;
   /** Per-unit aim pose: hull yaw + turret-relative yaw (core `aimStep`). */
   private aim: { hull: number; turret: number; overshoot: number }[] = [];
   /** Attacker → target traverse goals, slewed every frame until aimed. */
@@ -1302,8 +1317,14 @@ export class CombatFx {
     if (this.timer <= 0) {
       if (this.tryFire()) {
         // Per-kind refire: the volley that just left sets the next beat —
-        // rapid walker guns quicken the shared cadence, tanks keep it.
-        this.timer = this.lastKind ? nextShotDelayFor(this.lastKind, this.rng) : nextShotDelay(this.rng);
+        // rapid walker guns quicken the shared cadence, tanks keep it —
+        // and a volley fired on the move reloads slower, so driving guns
+        // keep firing, just not as fast.
+        const gunnerMoving =
+          this.lastAttacker !== null && (this.env?.isMoving?.(this.lastAttacker) ?? false);
+        this.timer = this.lastKind
+          ? nextShotDelayFor(this.lastKind, this.rng, gunnerMoving)
+          : nextShotDelay(this.rng);
       } else {
         // Still traversing (or capped): retry soon so aimed pairs fire
         // without waiting out a full ambient interval.
@@ -2502,6 +2523,7 @@ export class CombatFx {
     });
     this.fired += 1;
     this.lastKind = kind;
+    this.lastAttacker = attackerIdx;
     if (lobGrenade) this.lobs += 1;
 
     this.spawnMuzzle(start, roundColor, roundFlash, kind === "peewee" ? PEEWEE_BULLET_SCALE : 1);

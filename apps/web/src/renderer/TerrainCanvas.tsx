@@ -493,6 +493,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // meanwhile). `movement` is assigned below; the hook only runs on
       // later ticks, so the closure reads it live.
       isEngaged: (index: number) => movement.isFighting(index),
+      // Fire on the move, just not as fast: a volley whose gunner displaced
+      // reloads slower (holds, stuns, and pinned hulls read stationary, so
+      // only genuine driving pays). Same live closure as `isEngaged`.
+      isMoving: (index: number) => movement.isMoving(index),
     });
     // Patrol movement: each unit loops seeded dry/gentle waypoints at
     // per-kind speed with the hull facing travel; combat keeps the turrets

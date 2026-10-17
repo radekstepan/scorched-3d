@@ -493,6 +493,26 @@ export function hasOrder(mover: Mover): boolean {
   const order = mover.order;
   return order !== undefined && order.at >= 0 && order.at < order.points.length;
 }
+/**
+ * True while the mover is genuinely driving: it displaced this tick
+ * (`displaced`, measured by the caller from the pre/post drive step) under
+ * its own intent. Holds read stationary even when separation jostles the
+ * hull, and stun beats read stationary even mid-recoil-slide — both are
+ * involuntary displacement, never driving (an expired `stun: 0` counts as
+ * no stun, matching the absent-not-zero convention). Everything else keys
+ * off displacement alone, so orders, patrol legs, pursuits, departures,
+ * footwork steps, and separation coasts all read the same way: what matters
+ * is whether the hull moved, not which intent moved it. Spacing-held and
+ * slope-pinned hulls read stationary with no special case — the drive
+ * clamp leaves them undisplaced. The gun layer reads this (via the
+ * renderer-side `isMoving` hook) to slow the refire of volleys fired on
+ * the move; firing itself is never gated — see the module docstring.
+ */
+export function isMoverMoving(mover: Mover, displaced: boolean): boolean {
+  if (mover.hold) return false;
+  if ((mover.stun ?? 0) > 0) return false;
+  return displaced;
+}
 
 /**
  * Stun a mover from a splash dealing `damageAdd` fractional damage: refresh

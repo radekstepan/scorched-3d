@@ -20,6 +20,7 @@ import {
   HULL_TILT_SLEW,
   huntNoticeRadiusFor,
   initMover,
+  isMoverMoving,
   isScoutKind,
   muzzleHeight,
   nearestIntel,
@@ -189,6 +190,14 @@ export class UnitMovement {
    * way.
    */
   private lastOrbitAt: number[] = [];
+  /**
+   * Per-hull displacement flags from the last drive tick (see `update`):
+   * true when the drive step moved the hull's X/Z. Sparse before the first
+   * tick — unread hulls read stationary. The gun layer reads these through
+   * `isMoving` to slow the refire of volleys fired on the move; pose-only
+   * motion (re-snaps, breathing sway, recoil kicks) never sets them.
+   */
+  private movedLastTick: boolean[] = [];
 
   constructor(
     units: THREE.Group,
@@ -329,6 +338,21 @@ export class UnitMovement {
     }
     const anchor = this.routes[victim]?.[0] ?? null;
     this.movers[victim] = notifyThreat(mover, mover, attacker, ax, az, anchor, shell);
+  }
+
+  /**
+   * True while the unit is genuinely driving: the last drive tick displaced
+   * its hull under its own intent (core `isMoverMoving` — holds and stun
+   * beats read stationary even when separation or recoil shoves the hull,
+   * and spacing-held or slope-pinned hulls read stationary because the
+   * drive clamp leaves them undisplaced). Unknown indices read stationary.
+   * The gun layer reads this to slow the refire of volleys fired on the
+   * move; firing itself is never gated.
+   */
+  isMoving(index: number): boolean {
+    const mover = this.movers[index];
+    if (!mover) return false;
+    return isMoverMoving(mover, this.movedLastTick[index] ?? false);
   }
 
   /** True while the unit carries a live retaliation threat memory. */
@@ -1053,9 +1077,13 @@ export class UnitMovement {
     next.forEach((mover, i) => {
       const body = this.units.children[i] as THREE.Group | undefined;
       const prev = this.movers[i];
-      if (!body || !prev) return;
+      if (!body || !prev) {
+        this.movedLastTick[i] = false;
+        return;
+      }
       const dx = mover.x - prev.x;
       const dz = mover.z - prev.z;
+      this.movedLastTick[i] = dx !== 0 || dz !== 0;
       if (dx !== 0 || dz !== 0) this.env.onShift?.(i, dx, dz);
       // Wheels stride with travelled distance; legs settle at rest.
       advanceLocomotion(body, this.kinds[i] ?? "flash", Math.hypot(dx, dz), dt);

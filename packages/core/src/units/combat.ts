@@ -92,6 +92,16 @@ export const SHOT_DELAY: Record<UnitKind, { min: number; max: number }> = {
 export function shotDelayFor(kind: UnitKind): { min: number; max: number } {
   return SHOT_DELAY[kind] ?? { min: SHOT_DELAY_MIN, max: SHOT_DELAY_MAX };
 }
+/**
+ * Refire slowdown while the gunner displaces: a volley fired on the move
+ * reloads this much slower than the same volley fired at rest, so driving
+ * guns read as firing on the move without matching a dug-in beat. Retail
+ * has no such coupling (nanolathe R-STANCE-01 §6: stock mobiles are
+ * maneuver + fire-at-will, and weapon reloads run per slot regardless of
+ * the drive) — the penalty is game feel, not a retail port, sized as an
+ * exact power of two so the moving/stationary ratio pins exactly.
+ */
+export const MOVING_REFIRE_MULTIPLIER = 2;
 /** Perf caps: concurrent tracers and the flights they may spawn. */
 export const MAX_SHOTS = 6;
 export const MAX_EXPLOSIONS = 8;
@@ -264,11 +274,16 @@ export function nextShotDelay(
  * quicken the shared cadence while tank volleys keep the legacy pace. The
  * single-timer scheduler stays (one ambient gun at a time); the attacker's
  * refire sets the next beat, which is what makes the rapid light guns read
- * as faster-firing in the mix without per-unit cooldown state.
+ * as faster-firing in the mix without per-unit cooldown state. A volley
+ * fired on the move (`moving`) reloads `MOVING_REFIRE_MULTIPLIER` slower:
+ * the penalty scales the drawn value post-draw, so the rng stream stays
+ * aligned either way and the stationary beat is bit-identical with or
+ * without the flag.
  */
-export function nextShotDelayFor(kind: UnitKind, rng: () => number): number {
+export function nextShotDelayFor(kind: UnitKind, rng: () => number, moving = false): number {
   const { min, max } = shotDelayFor(kind);
-  return nextShotDelay(rng, min, max);
+  const delay = nextShotDelay(rng, min, max);
+  return moving ? delay * MOVING_REFIRE_MULTIPLIER : delay;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   hasOrder,
   holdMover,
   initMover,
+  isMoverMoving,
   MOVE_SPEED,
   orderMover,
   ORDER_SPACING_FLOOR,
@@ -1959,5 +1960,47 @@ describe("pursuit sidestep", () => {
     expect(next.x).toBeGreaterThan(0);
     expect(next.threat?.attacker).toBe(1);
     expect(next.threat).not.toHaveProperty("sidestep");
+  });
+});
+
+describe("isMoverMoving", () => {
+  const parked: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+
+  it("reads displacement as moving, stillness as stationary", () => {
+    expect(isMoverMoving(parked, true)).toBe(true);
+    expect(isMoverMoving(parked, false)).toBe(false);
+  });
+
+  it("reads holds as stationary even when jostled", () => {
+    const held = holdMover(parked);
+    // Separation can shove a held hull — displacement without driving.
+    expect(isMoverMoving(held, true)).toBe(false);
+    expect(isMoverMoving(held, false)).toBe(false);
+  });
+
+  it("reads stun beats as stationary even mid-recoil-slide", () => {
+    const stunned = stunMover(parked, 0.16);
+    expect(stunned.stun).toBeGreaterThan(0);
+    // The recoil slide displaces the hull, but recoil is involuntary —
+    // never driving — so the beat reads stationary throughout.
+    expect(isMoverMoving(stunned, true)).toBe(false);
+    expect(isMoverMoving(stunned, false)).toBe(false);
+  });
+
+  it("treats an expired stun like no stun", () => {
+    expect(isMoverMoving({ ...parked, stun: 0 }, true)).toBe(true);
+    expect(isMoverMoving({ ...parked, stun: 0 }, false)).toBe(false);
+  });
+
+  it("reads every drive mode off the same displacement leg", () => {
+    // Orders, patrol legs, threat pursuits, departures, and separation
+    // coasts all displace through the drive — what matters is whether the
+    // hull moved, not which intent moved it.
+    const ordered = orderMover(parked, [{ x: 100, z: 0 }]);
+    expect(isMoverMoving(ordered, true)).toBe(true);
+    expect(isMoverMoving(ordered, false)).toBe(false);
+    const coasting: Mover = { ...parked, sep: { x: 2, z: 0 } };
+    expect(isMoverMoving(coasting, true)).toBe(true);
+    expect(isMoverMoving(coasting, false)).toBe(false);
   });
 });
