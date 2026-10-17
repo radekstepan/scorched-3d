@@ -207,10 +207,11 @@ describe("departure lead-in", () => {
     { x: 320, z: 96 },
   ];
 
-  it("drives the lead-in first, then joins the loop on arrival", () => {
+  it("walks the via straight, then the join leg, clearing only at the loop", () => {
     let mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { ...LEAD } };
-    // Before arrival the hull holds the straight exit line toward the
-    // lead-in — it never bends toward the off-lane loop point early.
+    // Phase 1: the hull holds the straight exit line toward the via — it
+    // never bends toward the off-lane loop point early (that veer would
+    // grind through the hall curb wall).
     for (let n = 0; n < 30; n++) {
       mover = advanceMover("flash", mover, LOOP, 1 / 60);
       expect(Math.abs(mover.z)).toBeLessThan(5);
@@ -218,12 +219,22 @@ describe("departure lead-in", () => {
       expect(mover.leadIn).toEqual(LEAD);
     }
     expect(mover.x).toBeGreaterThan(20);
-    // Past arrival the lead-in clears and the hull joins its patrol leg.
-    for (let n = 0; n < 300 && mover.leadIn; n++) {
+    // Past the via the departure continues onto the join leg — it does NOT
+    // clear at the mouth (a mouth join would hand pursuit a hull sitting on
+    // the road, which parks there when the odds look bad).
+    for (let n = 0; n < 300 && mover.x <= LEAD.x + 30; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+    }
+    expect(mover.x).toBeGreaterThan(LEAD.x + 30);
+    // The departure latches onto the join leg past the via (rewriting its
+    // target to the loop point, so the phase can't flap back at the rim).
+    expect(mover.leadIn).toEqual(LOOP[0]);
+    // The hull veers onto the loop from the via, then clears AT staging.
+    for (let n = 0; n < 600 && mover.leadIn; n++) {
       mover = advanceMover("flash", mover, LOOP, 1 / 60);
     }
     expect(mover.leadIn).toBeUndefined();
-    expect(Math.hypot(mover.x - LEAD.x, mover.z - LEAD.z)).toBeLessThan(40);
+    expect(Math.hypot(mover.x - LOOP[0]!.x, mover.z - LOOP[0]!.z)).toBeLessThan(40);
     // And the loop itself cycles from there (the departure never repeats).
     let sawLeg1 = false;
     for (let n = 0; n < 2000; n++) {
@@ -234,17 +245,74 @@ describe("departure lead-in", () => {
     expect(sawLeg1).toBe(true);
   });
 
-  it("lets pursuit steer over the lead-in and keeps the departure", () => {
-    // Splashed mid-exit: the hull answers the threat, then resumes the
-    // departure where it left off instead of cutting to the loop early.
+  it("drives the departure before pursuit steers, ticking the threat underneath", () => {
+    // Splashed mid-exit: the hull keeps walking out of the hall (the exit
+    // never waits for a chase), while the live threat ticks underneath so
+    // the guns keep answering it — and pursuit steers the moment the hull
+    // joins the loop.
     const threat = { attacker: 3, x: 0, z: 300, ttl: THREAT_MEMORY_DURATION };
     let mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { ...LEAD }, threat };
-    const before = { ...mover };
     mover = advanceMover("flash", mover, LOOP, 1 / 60);
-    // Steering bends toward the threat (+Z), away from the exit line.
-    expect(mover.z).toBeGreaterThan(before.z);
+    // Steering holds the exit line (+X) instead of bending toward the
+    // threat (+Z); the departure and the (ticked) threat both survive.
+    expect(mover.x).toBeGreaterThan(0);
+    expect(Math.abs(mover.z)).toBeLessThan(0.5);
     expect(mover.leadIn).toEqual(LEAD);
     expect(mover.threat?.attacker).toBe(3);
+    expect(mover.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+    // Past arrival the departure clears and pursuit steers the same tick:
+    // the hull bends off the exit line toward the threat.
+    for (let n = 0; n < 300 && mover.leadIn; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+    }
+    expect(mover.leadIn).toBeUndefined();
+    const joinedZ = mover.z;
+    for (let n = 0; n < 60; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+    }
+    expect(mover.z).toBeGreaterThan(joinedZ + 5);
+    expect(mover.threat?.attacker).toBe(3);
+  });
+
+  it("walks an outnumbered departure out instead of holding for odds at the door", () => {
+    // The real-game failure: a fresh release acquires a team-advance memory
+    // same-tick, and alone at the base the odds at the far contact read
+    // unwinnable — so the drive held it at the spawn (in the hall, on the
+    // road) until the next release spawned beside it. The departure steers
+    // ahead of pursuit now, so the exit completes and any odds-hold waits
+    // until the hull has joined its loop.
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 0, z: 300 },
+      { x: 30, z: 310 },
+    ];
+    const tactics = { self: 0, teams: [0, 1, 1], alive: [true, true, true] };
+    const threat = { attacker: -1, x: 0, z: 300, ttl: THREAT_MEMORY_DURATION, leash: 3500 };
+    // Control first: without a departure the same memory parks the hull —
+    // the hold this test proves the exit escapes.
+    let control: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, threat: { ...threat } };
+    for (let n = 0; n < 60; n++) {
+      control = advanceMover("flash", control, LOOP, 1 / 60, 1, null, null, foes, tactics);
+    }
+    expect(Math.hypot(control.x, control.z)).toBeLessThan(1);
+    expect(control.threat?.attacker).toBe(-1);
+    // With the departure the hull walks all the way to staging instead —
+    // veering off the exit line onto the loop, where any odds-hold waits
+    // off the road instead of parking at the mouth.
+    let mover: Mover = {
+      x: 0,
+      z: 0,
+      hull: Math.PI / 2,
+      leg: 0,
+      leadIn: { ...LEAD },
+      threat: { ...threat },
+    };
+    for (let n = 0; n < 600; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60, 1, null, null, foes, tactics);
+    }
+    expect(mover.leadIn).toBeUndefined();
+    expect(Math.hypot(mover.x - LOOP[0]!.x, mover.z - LOOP[0]!.z)).toBeLessThan(60);
+    expect(mover.z).toBeGreaterThan(40);
   });
 
   it("abandons a slope-pinned lead-in to patrol instead of grinding", () => {

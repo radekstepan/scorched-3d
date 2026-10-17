@@ -723,6 +723,63 @@ describe("UnitMovement wrecks", () => {
     expect(roadTicks / windowTicks).toBeLessThan(0.05);
     movement.dispose();
   });
+
+  it("walks a release under fire all the way to staging instead of parking at the door", () => {
+    // The real-game failure behind two "fixed" road tasks: a fresh release
+    // acquires a team-advance memory same-tick (its side already knows the
+    // enemy), and alone at the base the odds at the far contact read
+    // unwinnable — so the outnumbered hold parked it at the spawn, then
+    // (once the exit drove first) at the mouth join, blocking the entrance
+    // until the next release spawned beside it. The departure completes AT
+    // the loop now, so the exit always reaches staging before any hold.
+    const units = new THREE.Group();
+    units.userData.units = [];
+    const anchor = { x: -1000, z: 0 };
+    const facing = hqFacingFor(0);
+    const spawn = hqSpawnWorld(anchor, facing);
+    const exit = hqExitWorld(anchor, facing);
+    // Two enemies clustered past the release's own notice (it never sees
+    // them itself — the side's shared intel is what reaches it), frozen on
+    // empty routes so the odds never shift under the test.
+    const placed = units.userData.units as { kind: UnitKind; team: 0 | 1 }[];
+    const bodies: [number, number, UnitKind, 0 | 1][] = [
+      [spawn.x + 700, spawn.z, "flash", 0], // spotter: shares the sighting
+      [spawn.x + 1250, spawn.z, "flash", 1], // enemy pair at the contact
+      [spawn.x + 1280, spawn.z + 30, "stump", 1],
+    ];
+    for (const [x, z, kind, team] of bodies) {
+      const body = new THREE.Group();
+      body.position.set(x, 100, z);
+      units.add(body);
+      placed.push({ kind, team });
+    }
+    const movement = new UnitMovement(units, [[], [], []], { groundY: () => 100 });
+    const staging = hqStagingRoute(exit, facing, 1);
+    const idx = movement.addUnit(spawn.x, spawn.z, Math.PI / 2, staging.loop, "stump", staging.leadIn);
+    const releaseBody = new THREE.Group();
+    releaseBody.position.set(spawn.x, 100, spawn.z);
+    units.add(releaseBody);
+    placed.push({ kind: "stump", team: 0 });
+    // The frozen cast never moves: the spotter keeps its 700-unit gap (the
+    // release reads alone) and the enemy pair keeps the contact hot.
+    const near = staging.loop[0]!;
+    let sawAdvanceDuringExit = false;
+    let minDistToStaging = Infinity;
+    for (let n = 0; n < 1800; n++) {
+      movement.update(1 / 60);
+      const m = movement.moverState(idx)!;
+      if (m.leadIn && m.threat?.attacker === -1) sawAdvanceDuringExit = true;
+      const p = movement.positions()[idx]!;
+      minDistToStaging = Math.min(minDistToStaging, Math.hypot(p.x - near.x, p.z - near.z));
+    }
+    // The test armed the real-game override (an advance memory live during
+    // the exit) — without it the assertions below would pass vacuously.
+    expect(sawAdvanceDuringExit).toBe(true);
+    // And the exit still reached staging instead of parking at the door.
+    expect(movement.moverState(idx)!.leadIn).toBeUndefined();
+    expect(minDistToStaging).toBeLessThan(60);
+    movement.dispose();
+  });
 });
 
 describe("UnitMovement sweep efficiency", () => {

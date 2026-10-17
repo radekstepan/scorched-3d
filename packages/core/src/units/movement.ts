@@ -265,15 +265,19 @@ export interface Mover {
    */
   threat?: ThreatMemory;
   /**
-   * Departure lead-in: a one-shot drive target ahead of the patrol loop.
-   * The hull drives here first (patrol leg frozen), and arrival clears it
-   * and joins the loop the same tick — the departure never repeats. Retail
-   * factories hand products their rally the same way (nanolathe
+   * Departure lead-in: a one-shot via point ahead of the patrol loop. The
+   * hull drives here first (patrol leg frozen), then continues onto the
+   * join leg to the loop — arrival AT the loop clears the departure and
+   * joins the same tick, so the departure never repeats. Retail factories
+   * hand products their rally the same way (nanolathe
    * `04-units-orders-scripts-and-movement.md` §3.8: `GetBuilt` re-enqueues
    * the builder's queued move/patrol rallies onto the product in order, so
-   * the product walks the rally, then patrols). Pursuit steers over it and
-   * freezes it like the leg; stuns pause it; orders and holds clear it (a
-   * player-sent hull never resumes a departure); slope-pinned past
+   * the product walks the rally, then patrols). The departure steers ahead
+   * of pursuit: a live threat ticks underneath (expiry validated, the guns
+   * keep answering it) but never steers until the exit completes — a fresh
+   * release alone at the base walks all the way to staging instead of
+   * holding for odds at the door. Stuns pause it; orders and holds clear
+   * it (a player-sent hull never resumes a departure); slope-pinned past
    * `BLOCKED_SKIP_AFTER` it abandons to patrol. Absent — never stale —
    * once joined, matching the `stuck`/`stun` convention.
    */
@@ -573,14 +577,17 @@ export interface PursuitTactics {
  * and on the final waypoint arrive → patrol resumes (order cleared, no
  * hold). A self-defense memory ticks underneath an order but never steers
  * (the hull keeps driving where it was sent). Without an order a holding
- * mover stays put; otherwise a hull
- * with a live retaliation threat pursues it (see `retaliation.ts`: steer to
- * the attacker's last-known position through the same drive, freezing the
- * patrol leg, holding at weapons-range stand-off, giving up past the
- * disengage bound / leash / memory expiry) — then a departure lead-in
- * drives first with the leg frozen (arrival clears it and joins the loop
- * the same tick; slope-pinned past patience it abandons to patrol) — and
- * only then does the patrol leg advance as before. Either way the hull
+ * mover stays put; otherwise a departure lead-in drives first with the leg
+ * frozen (via past the mouth, then the join leg onto the loop; arrival at
+ * the loop clears it and joins the same tick; slope-pinned past patience
+ * it abandons to patrol) — ahead of pursuit, so a fresh release walks all
+ * the way to staging before any chase steers it — and only then
+ * does a hull with a live retaliation threat pursue it (see
+ * `retaliation.ts`: steer to the attacker's last-known position through
+ * the same drive, freezing the patrol leg, holding at weapons-range
+ * stand-off, giving up past the disengage bound / leash / memory expiry).
+ * A live threat ticks underneath the departure (expiry validated, the guns
+ * keep answering it) but never steers until the exit completes. Either way the hull
  * turns toward its target at the kind's turn rate, then drives
  * forward along the hull — never
  * sideways — at per-kind speed scaled by alignment grip (slow in turns,
@@ -644,46 +651,75 @@ export function advanceMover(
   if (mover.hold) return tickThreat(mover, dt);
   if (route.length < 2) return tickThreat(mover, dt);
   const leg = ((mover.leg % route.length) + route.length) % route.length;
-  // Retaliation first: a live threat memory steers the hull instead of the
+  // Departure lead-in FIRST: a one-shot via point ahead of the patrol loop
+  // (an HQ release's straight walk out of the hall mouth). The departure
+  // completes AT the loop, in two phases: the straight walk to the via
+  // point past the mouth (a straight leg from inside the hall to an
+  // off-road point would grind through the curb wall, so the veer must
+  // wait until past the mouth), then the join leg from the via onto the
+  // loop — with the leg frozen throughout, and arrival joining the loop
+  // the same tick, so the departure never repeats. Completing at the loop
+  // (not at the mouth) is what keeps the exit clear: pursuit steers the
+  // moment the departure lifts, and a mouth join would park an outnumbered
+  // release at the door all over again. The phase latches by rewriting the
+  // departure target to the loop point once the via is reached, so leaving
+  // the via rim for the join leg can never flap the target back to the via
+  // (which would dither the hull on the rim forever). Patrol patience
+  // applies: slope-pinned past `BLOCKED_SKIP_AFTER` the departure abandons
+  // to patrol instead of grinding. The departure steers ahead of pursuit —
+  // a fresh release alone at the base must walk out before any chase
+  // steers it, or the outnumbered hold parks it at the door (and the
+  // sweep's per-tick advance refresh never lets the hold expire). A live
+  // threat ticks underneath (expiry validated; the guns keep answering it)
+  // but never steers until the exit completes.
+  let calm = mover;
+  const lead = calm.leadIn;
+  if (lead) {
+    // A non-finite departure strips instead of lingering: fail clean, never
+    // fail stuck.
+    if (!Number.isFinite(lead.x) || !Number.isFinite(lead.z)) {
+      const { leadIn: _dropped, ...joined } = calm;
+      calm = joined;
+    } else {
+      const join = route[leg]!;
+      const ldx = lead.x - calm.x;
+      const ldz = lead.z - calm.z;
+      // Past the via the exit continues onto the join leg to the loop.
+      const target = ldx * ldx + ldz * ldz <= ARRIVE_RADIUS * ARRIVE_RADIUS ? join : lead;
+      const tdx = target.x - calm.x;
+      const tdz = target.z - calm.z;
+      if (tdx * tdx + tdz * tdz > ARRIVE_RADIUS * ARRIVE_RADIUS) {
+        const exit = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
+        if (exit.skipped) {
+          const { leadIn: _abandoned, ...joined } = exit.mover;
+          return { ...joined, leg, stuck: 0 };
+        }
+        // `driveToward` rebuilds the mover without the departure — re-attach
+        // the (possibly latched) phase target. A live threat ticks
+        // underneath like under an order (same pattern as the order branch
+        // above): expiry validated, steering deferred.
+        const { threat } = tickThreat(mover, dt);
+        const driven: Mover = { ...exit.mover, leg, leadIn: target === join ? { ...join } : lead };
+        return threat ? { ...driven, threat } : driven;
+      }
+      // At the loop (the only way both checks pass): join the same tick.
+      const { leadIn: _arrived, ...joined } = calm;
+      calm = joined;
+    }
+  }
+  // Retaliation second: a live threat memory steers the hull instead of the
   // patrol leg (holds never carry one — they clear and refuse it; an order
   // that just completed hands its self-defense memory over here).
   // A stale key (ttl run out without a re-hit) or a give-up (disengage /
   // leash, see `pursueStep`) drops the memory and falls through to patrol.
-  let calm = mover;
-  const threat = mover.threat;
+  // By here any departure has joined, so pursuit never fights the exit.
+  const threat = calm.threat;
   if (threat && threat.ttl > 0) {
-    const chased = pursueStep(kind, mover, threat, route, dt, spacing, terrain, crush, foes, tactics);
-    // A departure in progress freezes while pursuit steers (like the patrol
-    // leg) and resumes when the memory clears — `pursueStep` rebuilds the
-    // mover without it, so re-attach.
-    if (chased) return mover.leadIn ? { ...chased, leg, leadIn: mover.leadIn } : { ...chased, leg };
-    calm = clearThreat(mover);
+    const chased = pursueStep(kind, calm, threat, route, dt, spacing, terrain, crush, foes, tactics);
+    if (chased) return { ...chased, leg };
+    calm = clearThreat(calm);
   } else if (threat) {
-    calm = clearThreat(mover);
-  }
-  // Departure lead-in: a one-shot drive target ahead of the patrol loop
-  // (an HQ release's straight walk out of the hall mouth). Drives with the
-  // leg frozen; arrival clears it and joins the loop the same tick below,
-  // so the departure never repeats. Patrol patience applies: slope-pinned
-  // past `BLOCKED_SKIP_AFTER` the departure abandons to patrol instead of
-  // grinding. Pursuit already overrode above, so this never fights it.
-  const lead = calm.leadIn;
-  // A non-finite departure reads as arrived (NaN compares false below) and
-  // strips instead of lingering: fail clean, never fail stuck.
-  if (lead) {
-    const ldx = lead.x - calm.x;
-    const ldz = lead.z - calm.z;
-    if (ldx * ldx + ldz * ldz > ARRIVE_RADIUS * ARRIVE_RADIUS) {
-      const exit = driveToward(kind, calm, lead, dt, spacing, terrain, undefined, crush);
-      if (exit.skipped) {
-        const { leadIn: _abandoned, ...joined } = exit.mover;
-        return { ...joined, leg, stuck: 0 };
-      }
-      // `driveToward` rebuilds the mover without the departure — re-attach.
-      return { ...exit.mover, leg, leadIn: lead };
-    }
-    const { leadIn: _arrived, ...joined } = calm;
-    calm = joined;
+    calm = clearThreat(calm);
   }
   let target = route[leg]!;
   const dx = target.x - calm.x;

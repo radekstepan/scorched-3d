@@ -956,12 +956,13 @@ export class UnitMovement {
   /**
    * Register a reinforcement released by an HQ: append its mover (seeded at
    * the door-side hall start on a one-shot departure past the mouth when
-   * `leadIn` is given — the straight hall walk, joining the staging loop
-   * at the near point on arrival — so it walks the hall on foot, stages
-   * off the lane, never returns to the door, and the hunt sweep can
-   * acquire enemies same-tick), kind, and route, and return its roster
-   * index. The caller owns the body, placement entry, and HUD roster push;
-   * combat's per-unit arrays grow on their own next tick.
+   * `leadIn` is given — the straight hall walk, continuing onto the join
+   * leg to the staging loop, so the exit completes AT the loop and pursuit
+   * can never park the release at the door), kind, and route, and return
+   * its roster index. The caller owns the body, placement entry, and HUD
+   * roster push; combat's per-unit arrays grow on their own next tick. The
+   * hunt sweep still acquires enemies same-tick (the memory ticks under
+   * the exit and the guns answer it) — only steering waits for staging.
    */
   addUnit(
     x: number,
