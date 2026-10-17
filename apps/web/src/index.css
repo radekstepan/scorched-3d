@@ -1,36 +1,68 @@
-@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Barlow Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 }
-
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  background: #071018;
-}
-
-body {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-}
-
-.font-display {
-  font-family: var(--font-display);
-}
-
-.hud-panel {
-  border: 1px solid rgba(251, 191, 36, 0.18);
-  background: linear-gradient(180deg, rgba(8, 14, 20, 0.82), rgba(6, 10, 16, 0.72));
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(12px);
-  border-radius: 4px;
-}
-
-input[type="range"] {
-  height: 4px;
-  background: transparent;
+:root { color-scheme: dark; --chrome: #141812; --chrome-line: #bfcea528; --chrome-accent: #d4e991; }
+html, body, #root { height: 100%; margin: 0; background: var(--chrome); }
+body { font-family: var(--font-mono); color: #e8eadf; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 3px; }
+.font-display { font-family: var(--font-display); }
+.command-shell { height: 100vh; height: 100dvh; display: grid; grid-template: 68px minmax(0, 1fr) 30px / 244px minmax(0, 1fr) 244px; overflow: hidden; }
+.command-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 36px; padding: 0 22px; background: #11140f; border-bottom: 1px solid var(--chrome-line); }
+.command-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.brand-mark { color: var(--chrome-accent); font-size: 32px; }
+.command-brand strong { font-family: var(--font-display); font-size: 23px; font-weight: 600; letter-spacing: 2px; color: var(--chrome-accent); }
+.command-brand small { display: block; font-size: 7px; letter-spacing: 1.6px; color: #9aa68c; }
+.command-nav { display: flex; align-self: stretch; gap: 24px; align-items: stretch; }
+.command-nav > * { display: flex; align-items: center; padding: 0 4px; font: 10px var(--font-mono); letter-spacing: 1px; color: #9aa68c; border-bottom: 2px solid transparent; }
+.command-nav .active { color: var(--chrome-accent); border-bottom-color: var(--chrome-accent); }
+.command-status { margin-left: auto; display: flex; gap: 9px; align-items: center; color: #b4bfa6; font-size: 8px; letter-spacing: 1px; }
+.command-status span { margin-left: 12px; color: #9aa68c; }
+.command-status i, .command-footer i { display: inline-block; width: 5px; height: 5px; background: var(--chrome-accent); border-radius: 50%; }
+.battlefield { grid-column: 2; grid-row: 2; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #171d17; }
+.viewport-heading { position: absolute; top: 16px; left: 18px; right: 18px; display: flex; justify-content: space-between; gap: 16px; pointer-events: none; color: #e8eadf; font-size: 8px; letter-spacing: 1px; text-shadow: 0 1px 4px #000; }
+.viewport-reticle { position: absolute; inset: 10px; border: 1px solid #d4e99118; pointer-events: none; }
+.command-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #65744d transparent; background: var(--chrome); padding: 12px; }
+.worlds-rail { grid-column: 1; grid-row: 2; border-right: 1px solid var(--chrome-line); display: flex; flex-direction: column; gap: 12px; }
+.worlds-rail > * { flex-shrink: 0; }
+.inspector-rail { grid-column: 3; grid-row: 2; border-left: 1px solid var(--chrome-line); }
+.hud-panel { border: 1px solid var(--chrome-line); border-radius: 0; background: linear-gradient(150deg, #222a1c55, #141812); box-shadow: inset 0 1px 0 #edf5db04; }
+.operation-brief { border: 0; border-bottom: 1px solid var(--chrome-line); padding: 5px 0 16px; }
+.operation-brief h1 { font-size: 32px; color: #e8eadf; }
+.terrain-diagnostics { margin-top: 12px; }
+.terrain-diagnostics summary { cursor: pointer; font-size: 9px; color: #b6c69d; letter-spacing: 1px; }
+.selection-tray { position: absolute; bottom: 42px; left: 12px; right: 12px; display: flex; gap: 8px; overflow-x: auto; max-height: 88px; padding: 4px; }
+.selection-tray > * { flex-shrink: 0; }
+.command-footer { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 14px; border-top: 1px solid var(--chrome-line); background: #11140f; color: #a6b597; font-size: 7px; letter-spacing: .6px; }
+.command-footer > span { white-space: nowrap; }
+.command-footer i { margin-right: 6px; }
+.command-footer p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
+.mobile-panel-controls { display: none; }
+input[type="range"] { height: 4px; background: transparent; }
+/* Panels become explicit drawers: the battlefield keeps its full width and
+   controls stay reachable without two overlapping permanent sidebars. */
+@media (max-width: 1000px) {
+  .command-shell { grid-template: 60px 36px minmax(0, 1fr) 28px / minmax(0, 1fr); position: relative; }
+  .command-header { gap: 20px; padding: 0 14px; }
+  .command-brand strong { font-size: 19px; }
+  .command-brand small, .command-status { display: none; }
+  .command-nav { margin-left: auto; }
+  .command-nav > * { font-size: 8px; }
+  .mobile-panel-controls { grid-row: 2; display: flex; background: var(--chrome); border-bottom: 1px solid var(--chrome-line); }
+  .mobile-panel-controls button { flex: 1; font-size: 9px; color: #c1cca7; border-right: 1px solid var(--chrome-line); }
+  .mobile-panel-controls button[aria-expanded="true"] { background: #d4e9911a; color: var(--chrome-accent); }
+  .battlefield { grid-column: 1; grid-row: 3; }
+  .command-rail { display: none; position: absolute; grid-area: auto; top: 96px; bottom: 28px; width: min(280px, 85vw); z-index: 20; box-shadow: 0 10px 35px #0008; }
+  .worlds-rail { left: 0; }
+  .inspector-rail { right: 0; }
+  .command-shell[data-mobile-panel="worlds"] .worlds-rail { display: flex; }
+  .command-shell[data-mobile-panel="inspector"] .inspector-rail { display: block; }
+  .command-footer { grid-row: 4; }
+  .command-footer > span:last-child { display: none; }
+  .viewport-heading { font-size: 7px; }
+  .viewport-heading > span:last-child { display: none; }
 }

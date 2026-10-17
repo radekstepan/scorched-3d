@@ -45,7 +45,7 @@ describe("minimap click-to-move wiring", () => {
     // worst at the south edge) and a border insets the image content from
     // the box clicks/dots are measured against (corner miss). The minimap
     // img must be block-level with a layout-neutral (ring) frame.
-    const imgTag = appSource.match(/<img[\s\S]*?alt="Minimap"[\s\S]*?\/>/)?.[0] ?? "";
+    const imgTag = appSource.match(/<img\b[^>]*alt="Minimap"[^>]*\/>/)?.[0] ?? "";
     expect(imgTag).toContain("block");
     expect(imgTag).not.toContain("border");
     expect(imgTag).toContain("ring-1");

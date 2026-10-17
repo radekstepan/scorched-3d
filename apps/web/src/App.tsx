@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   APP_NAME,
+  APP_VERSION,
   CELL_PIXELS,
   DEFAULT_EXAGGERATION,
   MAX_EXAGGERATION,
@@ -36,6 +37,7 @@ import type { TerritoryMinimap } from "./renderer/territory";
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
 export default function App() {
+  const [mobilePanel, setMobilePanel] = useState<"worlds" | "inspector" | null>(null);
   const [preset, setPreset] = useState<MapPreset>("greenreach");
   const [seed, setSeed] = useState(0xa11ce);
   const [hover, setHover] = useState<HoverInfo | null>(null);
@@ -193,7 +195,7 @@ export default function App() {
     () =>
       hover && (
         <span
-          className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-300 shadow-[0_0_8px_#fbbf24]"
+          className="absolute h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-lime-300 shadow-[0_0_8px_#fbbf24]"
           style={{
             left: `${(hover.worldX / worldW + 0.5) * 100}%`,
             top: `${(hover.worldZ / worldD + 0.5) * 100}%`,
@@ -207,57 +209,77 @@ export default function App() {
   const tileH = map.height / 2;
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#071018] text-slate-100">
-      <TerrainCanvas
-        map={map}
-        options={options}
-        onHover={setHover}
-        onSelection={setSelected}
-        onPositions={setLiveUnits}
-        onHq={setHqs}
-        onTerritory={setTerritory}
-        jumpTo={jump}
-      />
+    <div className="command-shell" data-mobile-panel={mobilePanel ?? "closed"}>
+      <header className="command-header">
+        <div className="command-brand"><span className="brand-mark" aria-hidden="true">✣</span>
+          <div><strong>{APP_NAME.toUpperCase()}</strong><small>REAL-TIME TACTICAL COMMAND</small></div>
+        </div>
+        <nav className="command-nav" aria-label="Game views">
+          <span className="active" aria-current="page">01 / BATTLEFIELD</span>
+        </nav>
+        <div className="command-status"><i aria-hidden="true" /> LIVE SIMULATION <span>v{APP_VERSION}</span></div>
+      </header>
+      <div className="mobile-panel-controls" aria-label="Battlefield panels">
+        <button aria-expanded={mobilePanel === "worlds"} aria-controls="worlds-panel" onClick={() => setMobilePanel(mobilePanel === "worlds" ? null : "worlds")}>Worlds / radar</button>
+        <button aria-expanded={mobilePanel === "inspector"} aria-controls="inspector-panel" onClick={() => setMobilePanel(mobilePanel === "inspector" ? null : "inspector")}>Inspector</button>
+      </div>
+      <main className="battlefield" aria-label="Battlefield">
+        <TerrainCanvas
+          map={map}
+          options={options}
+          onHover={setHover}
+          onSelection={setSelected}
+          onPositions={setLiveUnits}
+          onHq={setHqs}
+          onTerritory={setTerritory}
+          jumpTo={jump}
+        />
+        <div className="viewport-heading"><span>TACTICAL VIEW / {map.name.toUpperCase()}</span><span>BLUE / ORANGE</span></div>
+        <div className="viewport-reticle" aria-hidden="true" />
 
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_45%,rgba(3,8,12,0.55)_100%)]" />
-
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4 md:p-6">
-        <div className="pointer-events-auto hud-panel px-4 py-3">
-          <div className="flex items-baseline gap-3">
-            <span className="font-display text-[11px] font-semibold tracking-[0.42em] text-amber-300/90">
-              {APP_NAME.toUpperCase()}
-            </span>
-            <span className="text-[10px] tracking-[0.28em] text-slate-400">TERRAIN POC</span>
+        {selectedGroups.length > 0 && (
+          <div className="selection-tray" role="region" aria-label="Selected units">
+            {selectedGroups.map((g) => (
+              <div
+                key={`${g.kind}-${g.team}`}
+                className="hud-panel relative w-[68px] p-1.5"
+                title={`${UNIT_DEFS[g.kind].name} · Team ${TEAM_DEFS[g.team]?.name ?? g.team} ×${g.count}`}
+                style={{ borderTop: `3px solid ${selectionGroupColor(g.team)}` }}
+              >
+                <img
+                  src={getUnitIconDataUrl(g.kind)}
+                  alt={UNIT_DEFS[g.kind].name}
+                  className="h-11 w-11 rounded-sm"
+                  draggable={false}
+                />
+                <span className="absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">
+                  ×{g.count}
+                </span>
+              </div>
+            ))}
           </div>
+        )}
+      </main>
+      <aside id="worlds-panel" className="command-rail worlds-rail" aria-label="Worlds and radar">
+        <section className="operation-brief hud-panel p-3"><Label>Operation / skirmish</Label>
           <h1 className="font-display mt-1 text-2xl font-semibold leading-none tracking-wide text-white">
             {map.name}
           </h1>
-          <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-slate-400">{meta.blurb}</p>
-        </div>
-
-        <div className="pointer-events-auto hud-panel hidden px-4 py-3 md:block">
-          <Row k="TNT" v={`0x${map.version.toString(16)}`} />
-          <Row k="tileset" v={map.world} />
-          <Row k="grid" v={`${map.width} × ${map.height} cells`} />
-          <Row k="world" v={`${map.width * CELL_PIXELS} × ${map.height * CELL_PIXELS} px`} />
-          <Row k="tiles" v={`${tileW} × ${tileH} · ${TILE_PIXELS}px · ${map.tiles.length} unique`} />
-          <Row k="sea" v={String(map.seaLevel)} />
-        </div>
-      </header>
-
-      <aside className="pointer-events-auto absolute bottom-4 left-4 z-10 flex w-[250px] flex-col gap-3 md:bottom-6 md:left-6">
+          <p className="mt-1 max-w-sm text-[11px] leading-relaxed text-stone-400">{meta.blurb}</p>
+        </section>
         <div className="hud-panel p-3">
           <Label>Worlds</Label>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
             {PRESETS.map((p) => (
               <button
                 key={p}
+                aria-pressed={preset === p}
                 onClick={() => setPreset(p)}
                 className={cn(
                   "rounded-sm border px-2 py-1.5 text-left text-[11px] tracking-wide transition",
                   preset === p
-                    ? "border-amber-400/70 bg-amber-400/15 text-amber-100"
-                    : "border-white/10 bg-white/5 text-slate-300 hover:border-white/25",
+                    ? "border-lime-400/70 bg-lime-400/15 text-lime-100"
+                    : "border-white/10 bg-white/5 text-stone-300 hover:border-white/25",
                 )}
               >
                 {PRESET_META[p].name}
@@ -265,10 +287,10 @@ export default function App() {
             ))}
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="font-mono text-[10px] text-slate-400">SEED {seed.toString(16).toUpperCase()}</span>
+            <span className="font-mono text-[10px] text-stone-400">SEED {seed.toString(16).toUpperCase()}</span>
             <button
               onClick={() => setSeed((s) => (Math.imul(s, 1664525) + 1013904223) >>> 0)}
-              className="rounded-sm border border-amber-400/40 px-2 py-1 text-[10px] tracking-[0.18em] text-amber-200 hover:bg-amber-400/10"
+              className="rounded-sm border border-lime-400/40 px-2 py-1 text-[10px] tracking-[0.18em] text-lime-200 hover:bg-lime-400/10"
             >
               REGEN
             </button>
@@ -310,13 +332,13 @@ export default function App() {
             {minimapHoverChip}
             {minimapHq}
           </div>
-          <p className="mt-1 text-center font-mono text-[9px] tracking-[0.2em] text-slate-500">
-            MINIMAP · 252×252 · LIVE
+          <p className="mt-1 text-center font-mono text-[9px] tracking-[0.2em] text-stone-400">
+            TACTICAL RADAR · LIVE
           </p>
         </div>
       </aside>
 
-      <aside className="pointer-events-auto absolute right-4 top-44 z-10 max-h-[calc(100vh-14rem)] w-[230px] overflow-y-auto md:right-6 md:top-48">
+      <aside id="inspector-panel" className="command-rail inspector-rail" aria-label="Battlefield inspector">
         <div className="hud-panel space-y-3 p-3">
           <Label>View</Label>
           <Slider
@@ -365,7 +387,7 @@ export default function App() {
               <Row k="feature" v={hover.feature ?? "empty"} />
             </div>
           ) : (
-            <p className="mt-2 text-[11px] text-slate-500">Hover the mesh to sample a plot cell.</p>
+            <p className="mt-2 text-[11px] text-stone-400">Hover the mesh to sample a plot cell.</p>
           )}
         </div>
 
@@ -380,77 +402,60 @@ export default function App() {
                     className="inline-block h-2.5 w-2.5 rounded-[2px] border border-black/60"
                     style={{ background: `#${def.color.toString(16).padStart(6, "0")}` }}
                   />
-                  <span className="text-slate-200">{def.name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-slate-400">×{liveCounts[k]}</span>
+                  <span className="text-stone-200">{def.name}</span>
+                  <span className="ml-auto font-mono text-[10px] text-stone-400">×{liveCounts[k]}</span>
                 </div>
               );
             })}
           </div>
         </div>
+        <details className="hud-panel p-3 terrain-diagnostics"><summary>Terrain diagnostics</summary><div className="mt-3 space-y-1">
+          <Row k="TNT" v={`0x${map.version.toString(16)}`} />
+          <Row k="tileset" v={map.world} />
+          <Row k="grid" v={`${map.width} × ${map.height} cells`} />
+          <Row k="world" v={`${map.width * CELL_PIXELS} × ${map.height * CELL_PIXELS} px`} />
+          <Row k="tiles" v={`${tileW} × ${tileH} · ${TILE_PIXELS}px · ${map.tiles.length} unique`} />
+          <Row k="sea" v={String(map.seaLevel)} />
+        </div></details>
       </aside>
 
-      <footer className="pointer-events-none absolute inset-x-0 bottom-3 z-10 hidden justify-center md:flex">
-        <p className="rounded-full border border-white/10 bg-black/40 px-4 py-1.5 font-mono text-[10px] tracking-[0.18em] text-slate-400">
-          CLICK select · SHIFT+CLICK extend · SHIFT+DRAG box · RIGHT-CLICK order move · ESC clear · DRAG orbit ·
-          SCROLL zoom · RMB pan · WASD pan
-        </p>
+      <footer className="command-footer"><span><i aria-hidden="true" /> COMMAND LINK ACTIVE</span>
+        <p>CLICK select · SHIFT+DRAG box · RIGHT-CLICK move · ESC clear · DRAG orbit · SCROLL zoom · WASD pan</p>
+        <span>{map.width} × {map.height} GRID</span>
       </footer>
-
-      {selectedGroups.length > 0 && (
-        <div className="pointer-events-auto absolute bottom-12 left-1/2 z-10 flex -translate-x-1/2 gap-2">
-          {selectedGroups.map((g) => (
-            <div
-              key={`${g.kind}-${g.team}`}
-              className="hud-panel relative w-[68px] p-1.5"
-              title={`${UNIT_DEFS[g.kind].name} · Team ${TEAM_DEFS[g.team]?.name ?? g.team} ×${g.count}`}
-              style={{ borderTop: `3px solid ${selectionGroupColor(g.team)}` }}
-            >
-              <img
-                src={getUnitIconDataUrl(g.kind)}
-                alt={UNIT_DEFS[g.kind].name}
-                className="h-11 w-11 rounded-sm"
-                draggable={false}
-              />
-              <span className="absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">
-                ×{g.count}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
 function Label({ children }: { children: string }) {
   return (
-    <div className="font-display text-[10px] font-semibold tracking-[0.38em] text-amber-300/80">{children}</div>
+    <div className="font-display text-[10px] font-semibold tracking-[0.38em] text-lime-300/80">{children}</div>
   );
 }
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4 font-mono text-[11px]">
-      <span className="tracking-wider text-slate-500">{k}</span>
-      <span className="text-slate-200">{v}</span>
+      <span className="tracking-wider text-stone-400">{k}</span>
+      <span className="text-stone-200">{v}</span>
     </div>
   );
 }
 
 function Toggle({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} className="flex w-full items-center justify-between text-[11px]">
-      <span className="text-slate-300">{label}</span>
+    <button onClick={onClick} aria-pressed={on} className="flex w-full items-center justify-between text-[11px]">
+      <span className="text-stone-300">{label}</span>
       <span
         className={cn(
           "h-4 w-8 rounded-full border transition",
-          on ? "border-amber-300/70 bg-amber-400/30" : "border-white/15 bg-white/5",
+          on ? "border-lime-300/70 bg-lime-400/30" : "border-white/15 bg-white/5",
         )}
       >
         <span
           className={cn(
             "block h-3 w-3 translate-y-[1px] rounded-full transition",
-            on ? "translate-x-4 bg-amber-300" : "translate-x-0.5 bg-slate-500",
+            on ? "translate-x-4 bg-lime-300" : "translate-x-0.5 bg-slate-500",
           )}
         />
       </span>
@@ -474,10 +479,10 @@ function Slider({
   onChange: (v: number) => void;
 }) {
   return (
-    <label className="block text-[11px] text-slate-300">
+    <label className="block text-[11px] text-stone-300">
       <span className="flex justify-between">
         {label}
-        <span className="font-mono text-amber-200">{value.toFixed(1)}×</span>
+        <span className="font-mono text-lime-200">{value.toFixed(1)}×</span>
       </span>
       <input
         type="range"
@@ -486,7 +491,7 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1 w-full accent-amber-400"
+        className="mt-1 w-full accent-lime-400"
       />
     </label>
   );

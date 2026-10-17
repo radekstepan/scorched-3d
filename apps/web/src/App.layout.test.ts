@@ -3,55 +3,49 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// The header diagnostics panel (TNT / tileset / grid) sits top-right at
-// p-4/md:p-6 with six text rows, so its bottom edge lands around ~150px.
-// The right rail (View / Probe / Units) is absolutely positioned in the
-// same corner and must start below that edge, otherwise it covers the
-// diagnostics up. These tests pin the rail's top offset against the
-// header's footprint (Tailwind spacing: top-N = N * 0.25rem).
-
+// WebGL stays outside the DOM test harness. These source-level contracts
+// guard structural layout and control wiring, as in the other App tests.
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, "App.tsx"), "utf8");
+const css = readFileSync(join(here, "index.css"), "utf8");
 
-// Right rail = the aside that hosts the View / Probe / Units panels.
-function rightRailClass(): string {
-  const asides = [...source.matchAll(/<aside className="([^"]*)">/g)].map((m) => m[1]!);
-  const rail = asides.find((c) => c.includes("right-4"));
-  expect(rail, "right-rail aside (right-4) must exist in App.tsx").toBeDefined();
-  return rail!;
-}
-
-function topOffsetPx(cls: string, prefix: string): number {
-  const m = cls.match(new RegExp(`${prefix}:top-(\\d+)`)) ?? cls.match(/top-(\d+)/);
-  expect(m, `right rail must declare a ${prefix}:top-* offset`).not.toBeNull();
-  return Number(m![1]) * 4;
-}
-
-describe("right-rail clearance over header diagnostics", () => {
-  it("starts below the header diagnostics panel on mobile and desktop", () => {
-    const cls = rightRailClass();
-    // Header diagnostics bottom edge ≈ 150px; require ≥176px (top-44)
-    // mobile and ≥192px (md:top-48) desktop.
-    expect(topOffsetPx(cls, "")).toBeGreaterThanOrEqual(176);
-    expect(topOffsetPx(cls, "md")).toBeGreaterThanOrEqual(192);
+describe("RTS command shell", () => {
+  it("reserves independent grid tracks for rails and battlefield", () => {
+    expect(css).toContain("grid-template: 68px minmax(0, 1fr) 30px / 244px minmax(0, 1fr) 244px");
+    expect(css).toMatch(/\.battlefield\s*\{[^}]*grid-column: 2;[^}]*grid-row: 2/);
+    expect(css).toMatch(/\.worlds-rail\s*\{[^}]*grid-column: 1;[^}]*grid-row: 2/);
+    expect(css).toMatch(/\.inspector-rail\s*\{[^}]*grid-column: 3;[^}]*grid-row: 2/);
+    expect(source.indexOf("<TerrainCanvas")).toBeGreaterThan(source.indexOf('<main className="battlefield"'));
+    expect(source.indexOf("<TerrainCanvas")).toBeLessThan(source.indexOf("</main>"));
   });
 
-  it("scrolls instead of overflowing short viewports", () => {
-    const cls = rightRailClass();
-    expect(cls).toMatch(/max-h-\[/);
-    expect(cls).toMatch(/overflow-y-auto/);
+  it("scrolls both rails and selection cards inside their available space", () => {
+    expect(css).toMatch(/\.command-rail\s*\{[^}]*min-height: 0;[^}]*overflow-y: auto/);
+    expect(css).toMatch(/\.selection-tray\s*\{[^}]*left: 12px;[^}]*right: 12px;[^}]*overflow-x: auto/);
+    expect(source.indexOf('aria-label="Selected units"')).toBeLessThan(source.indexOf("</main>"));
   });
 
-  it("still hosts the View, Probe and Units panels", () => {
-    for (const label of ["<Label>View</Label>", "<Label>Probe</Label>", "<Label>Units</Label>"]) {
-      expect(source).toContain(label);
+  it("replaces narrow-screen rails with mutually exclusive accessible drawers", () => {
+    expect(source).toContain('useState<"worlds" | "inspector" | null>(null)');
+    for (const panel of ["worlds", "inspector"]) {
+      expect(source).toContain(`aria-controls="${panel}-panel"`);
+      expect(source).toContain(`id="${panel}-panel"`);
+      expect(source).toContain(`aria-expanded={mobilePanel === "${panel}"}`);
+      expect(source).toContain(`setMobilePanel(mobilePanel === "${panel}" ? null : "${panel}")`);
     }
+    expect(css).toContain("@media (max-width: 1000px)");
+    expect(css).toMatch(/\.command-rail\s*\{ display: none; position: absolute; grid-area: auto; top: 96px; bottom: 28px/);
+    expect(css).toContain('.command-shell[data-mobile-panel="worlds"] .worlds-rail { display: flex; }');
+    expect(css).toContain('.command-shell[data-mobile-panel="inspector"] .inspector-rail { display: block; }');
   });
 
-  it("keeps the TNT / tileset / grid diagnostics in the header", () => {
-    for (const key of [`k="TNT"`, `k="tileset"`, `k="grid"`]) {
-      expect(source).toContain(key);
-    }
+  it("keeps view controls, diagnostics and readable keyboard focus", () => {
+    for (const label of ["View", "Probe", "Units"]) expect(source).toContain(`<Label>${label}</Label>`);
+    for (const key of ["TNT", "tileset", "grid"]) expect(source).toContain(`k="${key}"`);
+    expect(source).toContain("<summary>Terrain diagnostics</summary>");
+    expect(source).toContain("aria-pressed={on}");
+    expect(source).toContain("aria-pressed={preset === p}");
+    expect(css).toContain("button:focus-visible, input:focus-visible, summary:focus-visible");
   });
 });
 
@@ -100,7 +94,7 @@ describe("Units panel live per-kind counts", () => {
     expect(source).toContain("selectionGroupColor(g.team)");
     expect(source).toContain("borderTop");
     expect(source).toContain("×{g.count}");
-    expect(source).toContain("bottom-12");
+    expect(source).toContain('className="selection-tray"');
   });
 
   it("keeps selection markers static (no pulse/spin/bob in the canvas tick)", () => {

@@ -12,6 +12,12 @@ Autonomous units combine forward drive, collision separation and the short exit 
 
 Firing lines keep their seats when nearby units leave no room for routine circling. Genuine clearer firing positions and flanks still allow a shuffle, provided its whole travel lane clears nearby hulls and earlier reserved shuffles. Isolated duels retain their combat movement.
 
+## Command interface
+
+The battlefield sits inside an RTS command shell inspired by the sibling Stumpy model viewer: olive instrument panels, lime accents, fine dividers and condensed headings. The header holds the game-view navigation and version; the left rail holds the operation, world presets and live radar; the right rail holds view controls, the probe, live unit counts and expandable terrain diagnostics. Both rails scroll independently, leaving the central canvas and its selection tray unobstructed on desktop.
+
+At widths up to 1000px, Worlds / radar and Inspector buttons open one drawer at a time over the full-width battlefield. Press the active button again to close it. The selection tray scrolls horizontally when many groups are selected. View toggles and world buttons expose their selected state to assistive technology, and every interactive control has a visible keyboard focus outline.
+
 ## Maps
 
 Six seeded worlds ship in the Worlds panel, each re-rolled by REGEN: Greenreach (lush island with bay and north ridge), Gods Channel (scattered volcanic isles), Ashen Pass (dry highland corridor), Glass Caldera (crater lake ringed by steep walls), River Crossing (meandering river through forest and plains, held by two ford crossings), and Dust Plains (wide flat steppe with gentle swells and scattered copses, built for armor battles). Every world spans a 320×256 attribute grid (about 5.1k × 4.1k world units — double the classic extent on each axis), so there is room to maneuver: guns reach well under half the map and only threaten the enemy HQ on deep push-ins.
