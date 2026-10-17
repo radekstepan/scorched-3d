@@ -16,16 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Add a flag to each HQ corresponding to the team's colors
+Units lock up where one might be attacking an another is maybe just moving but not shooting. It's weird. Or 10 units facing enemy and just 1 shooting.
 
-The units sometimes engage in a little "dance" with each other. Distracting, reduce it and think about how groups of units and enemies can not "cycle" trying to avoid each other.
+The units sometimes engage in a little "dance" with each other. Distracting, reduce it and think about how groups of units and enemies can not "cycle" trying to avoid each other. This is still not fixed. Units will jitter around each other, I want smooth movement.
 
-Make HQ produce units faster, I want the peewee out in 20s, adjust the other units accordingly.
+The HQ flag should be flickering and give it an outline so it doesn't blend e.g. against the blue water.
 
-Units keep firing through or in forest and keep hitting trees. If that happens the unit should move out such that it can actually hit the enemy.
+Add a "chrome" to the UI and for visual elements like the panels from `redesign-stumpy-tank-model` sibling directory. Make it look more like a full RTS
 
-Start the game in "RTS" angle taken from `redesign-stumpy-tank-model` sibling directory
+Now that we have a "chrome", add a second "tab" to the game which when clicked (will pause the game) and show units just like `redesign-stumpy-tank-model` sibling directory does. The goal is to have a "folio" of different units that we can browse and see up close.
 
-Add random rocks into the world from `redesign-stumpy-tank-model` sibling directory
+Make units shoot through trees less.
 
-Color the units of each time in the team's colors so they actually stand out. I like the commander blue. Use that for "blue" team. Pick a similar vibrancy of a color for the other team.
+The commander sometimes does a few steps back, same as peewee, while walking forward.
