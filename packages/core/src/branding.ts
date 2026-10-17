@@ -2,7 +2,8 @@
 export const APP_NAME = "Scorched 3D";
 
 /**
- * App-wide version shown in the app shell.
+ * Last released app version. The web shell derives its current build version
+ * from the Changesets release plan, including pending changes.
  *
  * Single source of truth is the workspace package.json versions, kept in
  * lockstep by the changesets `fixed` group in `.changeset/config.json`;

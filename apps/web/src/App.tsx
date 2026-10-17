@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  APP_VERSION,
   CELL_PIXELS,
   DEFAULT_EXAGGERATION,
   MAX_EXAGGERATION,
@@ -18,6 +17,7 @@ import {
 } from "@scorched-3d/core";
 import UnitFolio from "./folio/UnitFolio";
 import Brand from "./Brand";
+import GameVersion from "./GameVersion";
 import TerrainCanvas from "./renderer/TerrainCanvas";
 import type { HqStatus } from "./renderer/hqFx";
 import {
@@ -219,7 +219,7 @@ export default function App() {
           <button className={view === "battlefield" ? "active" : ""} aria-current={view === "battlefield" ? "page" : undefined} onClick={() => setView("battlefield")}>01 / BATTLEFIELD</button>
           <button className={view === "folio" ? "active" : ""} aria-current={view === "folio" ? "page" : undefined} onClick={() => { setMobilePanel(null); setView("folio"); }}>02 / UNIT FOLIO</button>
         </nav>
-        <div className="command-status"><i aria-hidden="true" /> {view === "folio" || battlePaused ? "SIMULATION PAUSED" : "LIVE SIMULATION"} <span>v{APP_VERSION}</span></div>
+        <div className="command-status"><span className="simulation-status"><i aria-hidden="true" /> {view === "folio" || battlePaused ? "SIMULATION PAUSED" : "LIVE SIMULATION"}</span><GameVersion /></div>
       </header>
       <div className="mobile-panel-controls" aria-label="Battlefield panels">
         <button aria-expanded={mobilePanel === "worlds"} aria-controls="worlds-panel" onClick={() => setMobilePanel(mobilePanel === "worlds" ? null : "worlds")}>Worlds / radar</button>

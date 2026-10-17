@@ -333,7 +333,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@changesets/get-release-plan@npm:^4.0.16":
+"@changesets/get-release-plan@npm:4.0.16, @changesets/get-release-plan@npm:^4.0.16":
   version: 4.0.16
   resolution: "@changesets/get-release-plan@npm:4.0.16"
   dependencies:
@@ -2611,6 +2611,7 @@ __metadata:
   resolution: "scorched-3d@workspace:."
   dependencies:
     "@changesets/cli": "npm:^2.0.0"
+    "@changesets/get-release-plan": "npm:4.0.16"
     turbo: "npm:2.5.0"
     typescript: "npm:5.9.3"
   languageName: unknown

@@ -4,9 +4,10 @@ This folder manages the app's overall version with
 [changesets](https://github.com/changesets/changesets).
 
 Both workspaces (`@scorched-3d/core`, `@scorched-3d/web`) are in one
-`fixed` group, so they always share a single version — the version shown in
-the app shell (see `APP_VERSION` in
-`packages/core/src/branding.ts`). Every package here is `private`, so
+`fixed` group, so they always share a single version — the released version recorded by `APP_VERSION` in
+`packages/core/src/branding.ts`. The app shell shows the current build version:
+Vite reads the official Changesets release plan and uses the next planned
+version while changes are pending, otherwise the shared released version. Every package here is `private`, so
 `privatePackages.version` is on (versions move) while `tag` stays off (no git
 tags per release).
 

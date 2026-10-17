@@ -19,8 +19,13 @@ For unit and structure modeling, follow [Art direction](art-direction.md). It de
 
 The app has one overall version, shared by both workspaces
 (`@scorched-3d/core`, `@scorched-3d/web`) through a changesets
-`fixed` group in `.changeset/config.json`. The UI reads it from
-`APP_VERSION` in `packages/core/src/branding.ts`.
+`fixed` group in `.changeset/config.json`. The UI badge uses the current Changesets release plan via
+`apps/web/appVersion.ts`: pending releases use their planned version,
+and builds with no pending changes use the shared package version.
+`APP_VERSION` in `packages/core/src/branding.ts` records the last released
+workspace version. Vite recalculates the badge at startup/build and restarts
+after changes to `.changeset/` or workspace manifests. Turbo includes
+`.changeset/**` in its cache inputs. No source files are rewritten by a build.
 
 1. `yarn changeset` — record a user-facing change as a patch, minor, or
    major bump (writes a markdown file in `.changeset/`).

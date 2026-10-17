@@ -50,6 +50,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/terrain/palette.ts` | 256-color palette and per-tile color ramps. |
 | `packages/core/src/terrain/texture.ts` | Albedo/height/minimap `ImageData` composition. |
 | `packages/core/src/index.ts` | Public barrel export for `@scorched-3d/core`. |
+| `apps/web/appVersion.ts` | Resolves the current Changesets release plan for the header badge and refreshes dev builds when metadata changes. |
 | `scripts/sync-app-version.mjs` | Rewrites `APP_VERSION` from workspace versions (see Versioning). |
 
 ## Model design and integration

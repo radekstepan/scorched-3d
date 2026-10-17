@@ -23,7 +23,8 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .command-nav > * { display: flex; align-items: center; padding: 0 4px; font: 10px var(--font-mono); letter-spacing: 1px; color: #9aa68c; border-bottom: 2px solid transparent; }
 .command-nav .active { color: var(--chrome-accent); border-bottom-color: var(--chrome-accent); }
 .command-status { margin-left: auto; margin-right: 22px; display: flex; gap: 9px; align-items: center; color: #b4bfa6; font-size: 8px; letter-spacing: 1px; }
-.command-status span { margin-left: 12px; color: #9aa68c; }
+.simulation-status { display: flex; gap: 9px; align-items: center; }
+.game-version { margin-left: 12px; color: #c1cca7; white-space: nowrap; }
 .command-status i, .command-footer i { display: inline-block; width: 5px; height: 5px; background: var(--chrome-accent); border-radius: 50%; }
 .battlefield { grid-column: 2; grid-row: 2; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #171d17; }
 .viewport-heading { position: absolute; top: 16px; left: 18px; right: 18px; display: flex; justify-content: space-between; gap: 16px; pointer-events: none; color: #e8eadf; font-size: 8px; letter-spacing: 1px; text-shadow: 0 1px 4px #000; }
@@ -51,7 +52,9 @@ input[type="range"] { height: 4px; background: transparent; }
   .command-header { display: flex; gap: 20px; padding: 0 14px; }
   .command-brand { margin-left: 0; }
   .command-brand strong { font-size: 19px; }
-  .command-brand small, .command-status { display: none; }
+  .command-brand small, .simulation-status { display: none; }
+  .command-status { margin: 0; }
+  .game-version { margin-left: 0; }
   .command-nav { margin-left: auto; padding-left: 0; }
   .command-nav > * { font-size: 8px; }
   .mobile-panel-controls { grid-row: 2; display: flex; background: var(--chrome); border-bottom: 1px solid var(--chrome-line); }
