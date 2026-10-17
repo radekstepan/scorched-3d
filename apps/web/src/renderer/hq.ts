@@ -119,6 +119,20 @@ export const HQ_BEACON_GLOW_TEX_SIZE = 64;
 /** Beacon dome seat, local frame (bare hemisphere on the canopy top, over the door). */
 export const HQ_BEACON_X = 58;
 export const HQ_BEACON_Y = 41;
+/** Team-flag mast seat, local frame (rear roof crown, clear of the beacon + door). */
+export const HQ_FLAG_X = -40;
+export const HQ_FLAG_BASE_Y = 36;
+/** Flagpole height above its seat; the finial caps the tip. */
+export const HQ_FLAG_POLE_H = 34;
+/** Flagpole radius (slight taper toward the tip). */
+export const HQ_FLAG_POLE_R = 0.9;
+/** Team-flag cloth width (streams rearward, away from the door) and height. */
+export const HQ_FLAG_W = 20;
+export const HQ_FLAG_H = 11;
+/** Cloth top edge below the pole tip (finial clearance). */
+export const HQ_FLAG_DROP = 1.5;
+/** Flagpole + finial steel (the cloth carries the team color). */
+export const HQ_FLAG_STEEL = 0x485654;
 /**
  * Default footing depth under the slab/hall (world units, straight down
  * from the slab underside at local y=0). `HqFx` re-sizes both footings per
@@ -385,6 +399,49 @@ export function buildHq(team: TeamId): THREE.Group {
   group.add(beaconLight);
   group.userData.hqBeaconLevel = 1;
 
+  // Team flag on the rear roof crown: a steel pole (`hq-flag-pole`) with a
+  // finial ball, flying a team-colored cloth (`hq-flag`, a DoubleSide
+  // Lambert plane so it reads from any orbit angle) that streams rearward
+  // (-X local, away from the door + beacon). The color comes straight from
+  // TEAM_DEFS — the same source as the ground ring and architecture trim —
+  // with no emissive, so the wreck char pass kills it like every other
+  // Lambert surface. The whole mast rides one group (`hq-flag-mast`) so the
+  // wreck pose can lean it in one write; team 1's canvas mirror keeps the
+  // cloth streaming toward its own map edge.
+  const teamColor = TEAM_DEFS[team]?.color ?? 0xffffff;
+  const mast = new THREE.Group();
+  mast.name = "hq-flag-mast";
+  mast.position.set(HQ_FLAG_X, HQ_FLAG_BASE_Y, 0);
+  group.add(mast);
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(HQ_FLAG_POLE_R * 0.75, HQ_FLAG_POLE_R, HQ_FLAG_POLE_H, 10),
+    new THREE.MeshLambertMaterial({ color: HQ_FLAG_STEEL }),
+  );
+  pole.name = "hq-flag-pole";
+  pole.position.set(0, HQ_FLAG_POLE_H / 2, 0);
+  tag(pole);
+  mast.add(pole);
+  const cloth = new THREE.Mesh(
+    new THREE.PlaneGeometry(HQ_FLAG_W, HQ_FLAG_H),
+    new THREE.MeshLambertMaterial({ color: teamColor, side: THREE.DoubleSide }),
+  );
+  cloth.name = "hq-flag";
+  cloth.position.set(
+    -(HQ_FLAG_W / 2 + HQ_FLAG_POLE_R),
+    HQ_FLAG_POLE_H - HQ_FLAG_DROP - HQ_FLAG_H / 2,
+    0,
+  );
+  tag(cloth);
+  mast.add(cloth);
+  const finial = new THREE.Mesh(
+    new THREE.SphereGeometry(HQ_FLAG_POLE_R * 1.6, 12, 10),
+    new THREE.MeshLambertMaterial({ color: HQ_FLAG_STEEL }),
+  );
+  finial.name = "hq-flag-finial";
+  finial.position.set(0, HQ_FLAG_POLE_H, 0);
+  tag(finial);
+  mast.add(finial);
+
   const hallCx = 48 + HQ_HALL_LEN / 2;
   // Deep foundations: a concrete footing under the slab plus one under the
   // hall floor, both hanging straight down from the slab underside (local
@@ -470,6 +527,16 @@ export function hqBeaconBeamAxial(v: number): number {
 /** Warning-beacon diffused halo of an HQ group, or null (plain test groups). */
 export function getHqBeaconGlow(group: THREE.Group): THREE.Sprite | null {
   return (group.getObjectByName("hq-beacon-glow") as THREE.Sprite | undefined) ?? null;
+}
+
+/** Team-flag cloth of an HQ group, or null (plain test groups). */
+export function getHqFlag(group: THREE.Group): THREE.Mesh | null {
+  return (group.getObjectByName("hq-flag") as THREE.Mesh | undefined) ?? null;
+}
+
+/** Team-flag mast of an HQ group, or null (plain test groups). */
+export function getHqFlagMast(group: THREE.Group): THREE.Group | null {
+  return (group.getObjectByName("hq-flag-mast") as THREE.Group | undefined) ?? null;
 }
 
 /**
@@ -690,6 +757,13 @@ export function poseHqWreck(group: THREE.Group): void {
       child.position.y -= 3;
       child.rotation.z = 0.14;
     }
+  }
+  // The flag mast topples with the works (the char pass above already
+  // killed the cloth's team color — plain Lambert, no emissive to quench).
+  const mast = getHqFlagMast(group);
+  if (mast) {
+    mast.position.y -= 2;
+    mast.rotation.z = 0.22;
   }
   // The warning beacon dies with the works: the char pass above already
   // darkened the lens color, but its red emissive would keep glowing, so

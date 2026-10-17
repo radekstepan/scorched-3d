@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
-import { HQ_SPAWN_ROSTER } from "@scorched-3d/core";
+import { HQ_SPAWN_ROSTER, TEAM_DEFS } from "@scorched-3d/core";
 import { buildSpawnedUnit } from "./units";
 import {
   buildHq,
@@ -13,6 +13,8 @@ import {
   getHqBeaconLight,
   getHqBeaconRotor,
   getHqDoor,
+  getHqFlag,
+  getHqFlagMast,
   hqBeaconAngleAt,
   hqBeaconAngleOf,
   hqBeaconBeamAxial,
@@ -50,6 +52,14 @@ import {
   HQ_DOOR_TRAVEL,
   HQ_DOOR_W,
   HQ_EXIT_OFFSET,
+  HQ_FLAG_BASE_Y,
+  HQ_FLAG_DROP,
+  HQ_FLAG_H,
+  HQ_FLAG_POLE_H,
+  HQ_FLAG_POLE_R,
+  HQ_FLAG_STEEL,
+  HQ_FLAG_W,
+  HQ_FLAG_X,
   HQ_FOUNDATION_DEPTH,
   HQ_FOUNDATION_MARGIN,
   HQ_HALL_LEN,
@@ -164,6 +174,86 @@ describe("buildHq", () => {
     const again = door.position.y;
     poseHqWreck(group);
     expect(door.position.y).toBe(again);
+  });
+});
+
+describe("hq team flag", () => {
+  it("flies a team-colored cloth from a steel mast on the rear roof", () => {
+    for (const team of [0, 1] as const) {
+      const group = buildHq(team);
+      const mast = getHqFlagMast(group);
+      expect(mast, "flag mast must exist").not.toBeNull();
+      expect(mast!.position.x).toBe(HQ_FLAG_X);
+      expect(mast!.position.y).toBe(HQ_FLAG_BASE_Y);
+      expect(mast!.position.z).toBe(0);
+      // Rear crown, clear of the door-side beacon at +X.
+      expect(HQ_FLAG_X).toBeLessThan(0);
+
+      const pole = group.getObjectByName("hq-flag-pole") as THREE.Mesh | undefined;
+      expect(pole, "flagpole must exist").toBeDefined();
+      expect(pole!.parent).toBe(mast);
+      const poleGeo = pole!.geometry as THREE.CylinderGeometry;
+      expect(poleGeo.parameters.height).toBeCloseTo(HQ_FLAG_POLE_H, 9);
+      expect((pole!.material as THREE.MeshLambertMaterial).color.getHex()).toBe(HQ_FLAG_STEEL);
+
+      const cloth = getHqFlag(group);
+      expect(cloth, "flag cloth must exist").not.toBeNull();
+      expect(cloth!.parent).toBe(mast);
+      const clothMat = cloth!.material as THREE.MeshLambertMaterial;
+      expect(clothMat).toBeInstanceOf(THREE.MeshLambertMaterial);
+      // Team identity from the same source as the ground ring + trim.
+      expect(clothMat.color.getHex()).toBe(TEAM_DEFS[team].color);
+      // Readable from any orbit angle, and never damage-highlighted.
+      expect(clothMat.side).toBe(THREE.DoubleSide);
+      const clothGeo = cloth!.geometry as THREE.PlaneGeometry;
+      expect(clothGeo.parameters.width).toBeCloseTo(HQ_FLAG_W, 9);
+      expect(clothGeo.parameters.height).toBeCloseTo(HQ_FLAG_H, 9);
+      // Streams rearward off the pole (-X local), top edge below the tip.
+      expect(cloth!.position.x).toBeCloseTo(-(HQ_FLAG_W / 2 + HQ_FLAG_POLE_R), 9);
+      expect(cloth!.position.y).toBeCloseTo(
+        HQ_FLAG_POLE_H - HQ_FLAG_DROP - HQ_FLAG_H / 2,
+        9,
+      );
+      group.updateMatrixWorld(true);
+      const clothWorld = new THREE.Vector3();
+      cloth!.getWorldPosition(clothWorld);
+      const mastWorld = new THREE.Vector3();
+      mast!.getWorldPosition(mastWorld);
+      expect(clothWorld.x).toBeLessThan(mastWorld.x);
+
+      const finial = group.getObjectByName("hq-flag-finial") as THREE.Mesh | undefined;
+      expect(finial, "finial ball must cap the tip").toBeDefined();
+      expect(finial!.parent).toBe(mast);
+      expect(finial!.position.y).toBeCloseTo(HQ_FLAG_POLE_H, 9);
+
+      // The mast clears the roofline so the colors read at range.
+      const tipWorldY = HQ_FLAG_BASE_Y + HQ_FLAG_POLE_H;
+      expect(tipWorldY).toBeGreaterThan(HQ_WALL_H);
+    }
+  });
+
+  it("returns null flag accessors on plain test groups", () => {
+    const group = new THREE.Group();
+    expect(getHqFlag(group)).toBeNull();
+    expect(getHqFlagMast(group)).toBeNull();
+  });
+
+  it("topples the mast and chars the cloth with the wreck, exactly once", () => {
+    const group = buildHq(0);
+    const mast = getHqFlagMast(group)!;
+    const cloth = getHqFlag(group)!;
+    const clothMat = cloth.material as THREE.MeshLambertMaterial;
+    expect(clothMat.color.getHex()).toBe(TEAM_DEFS[0].color);
+    poseHqWreck(group);
+    expect(mast.rotation.z).toBeCloseTo(0.22, 6);
+    expect(mast.position.y).toBeCloseTo(HQ_FLAG_BASE_Y - 2, 9);
+    // Plain Lambert with no emissive: the char pass kills the team color.
+    expect(clothMat.color.getHex()).toBe(0x14100b);
+    const lean = mast.rotation.z;
+    const drop = mast.position.y;
+    poseHqWreck(group);
+    expect(mast.rotation.z).toBe(lean);
+    expect(mast.position.y).toBe(drop);
   });
 });
 
