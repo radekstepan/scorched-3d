@@ -196,6 +196,26 @@ describe("advanceMover", () => {
     expect(advanceMover("stump", mover, flatRoute(), 0)).toEqual(mover);
     expect(advanceMover("stump", mover, flatRoute(), -1)).toEqual(mover);
   });
+
+  it("rests on coincident-loop routes instead of dithering", () => {
+    // Degenerate loops pad with spawn copies (see planRoutes): every leg is
+    // already arrived, so the hull must rest — driving onto its own
+    // position re-aims every tick and wanders (measured: 157u over 600
+    // ticks). Real loops never trigger this (waypoints sit ≥12 cells
+    // apart), so only coincident loops change.
+    const route: RoutePoint[] = [
+      { x: 100, z: 100 },
+      { x: 100, z: 100 },
+      { x: 100, z: 100 },
+      { x: 100, z: 100 },
+    ];
+    let mover: Mover = { x: 100, z: 100, hull: 0, leg: 1 };
+    for (let n = 0; n < 600; n++) {
+      mover = advanceMover("stump", mover, route, 1 / 60);
+    }
+    expect(mover.x).toBe(100);
+    expect(mover.z).toBe(100);
+  });
 });
 
 describe("departure lead-in", () => {
@@ -1216,6 +1236,79 @@ describe("separation coast", () => {
     const held = holdMover(coasting);
     expect(held.sep).toBeUndefined();
     expect(held.hold).toBe(true);
+  });
+});
+
+describe("crowd circulation", () => {
+  it("passes a four-way converge through instead of pinwheeling forever", () => {
+    // Four hulls converging on one point from four sides: with mirror
+    // sidesteps every pair counter-steps the same rotational way, so the
+    // sidesteps sum to a coherent circulation and the pack orbits the
+    // waypoint forever (measured: nobody arrives in 3600 ticks, net mean
+    // rotation -5 rad over 1800 ticks). One-side-yields breaks the
+    // symmetry, so the pack must serially pass and every leg advance.
+    const field = openField();
+    const kinds = ["stump", "stump", "stump", "stump"] as const;
+    const routes: RoutePoint[][] = [
+      [{ x: -200, z: 0 }, { x: 0, z: 0 }, { x: 200, z: 0 }],
+      [{ x: 200, z: 0 }, { x: 0, z: 0 }, { x: -200, z: 0 }],
+      [{ x: 0, z: -200 }, { x: 0, z: 0 }, { x: 0, z: 200 }],
+      [{ x: 0, z: 200 }, { x: 0, z: 0 }, { x: 0, z: -200 }],
+    ];
+    let movers: Mover[] = [
+      { x: -200, z: 0, hull: Math.PI / 2, leg: 1 },
+      { x: 200, z: 0, hull: -Math.PI / 2, leg: 1 },
+      { x: 0, z: -200, hull: 0, leg: 1 },
+      { x: 0, z: 200, hull: Math.PI, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    const arrivedAt = [-1, -1, -1, -1];
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      for (let i = 0; i < 4; i++) {
+        if (arrivedAt[i]! < 0 && movers[i]!.leg !== 1) arrivedAt[i] = n;
+      }
+    }
+    expect(arrivedAt.every((t) => t >= 0)).toBe(true);
+  });
+
+  it("drains a converge around a held hull instead of pinwheeling", () => {
+    // A holder cannot lead (no drive to creep with) but must not suppress
+    // the drain either: it keeps a full loop route, so hold status is its
+    // only ineligibility, and leadership elects the lowest *eligible*
+    // index around it. Yielding to any lower index instead — holder
+    // included — pins the whole pack into the mutual pinwheel (measured:
+    // nobody arrives in 5400 ticks, ~12 rad swept each).
+    const field = openField();
+    const kinds = ["stump", "stump", "stump", "stump", "stump"] as const;
+    const routes: RoutePoint[][] = [
+      [
+        { x: 0, z: 0 },
+        { x: 0, z: 400 },
+        { x: 400, z: 400 },
+        { x: 400, z: 0 },
+      ],
+      [{ x: -200, z: 0 }, { x: 0, z: 0 }, { x: 200, z: 0 }],
+      [{ x: 200, z: 0 }, { x: 0, z: 0 }, { x: -200, z: 0 }],
+      [{ x: 0, z: -200 }, { x: 0, z: 0 }, { x: 0, z: 200 }],
+      [{ x: 0, z: 200 }, { x: 0, z: 0 }, { x: 0, z: -200 }],
+    ];
+    let movers: Mover[] = [
+      holdMover({ x: 0, z: 0, hull: 0, leg: 0 }),
+      { x: -200, z: 0, hull: Math.PI / 2, leg: 1 },
+      { x: 200, z: 0, hull: -Math.PI / 2, leg: 1 },
+      { x: 0, z: -200, hull: 0, leg: 1 },
+      { x: 0, z: 200, hull: Math.PI, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    const arrivedAt = [-1, -1, -1, -1];
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      for (let i = 0; i < 4; i++) {
+        if (arrivedAt[i]! < 0 && movers[i + 1]!.leg !== 1) arrivedAt[i] = n;
+      }
+    }
+    expect(arrivedAt.every((t) => t >= 0)).toBe(true);
   });
 });
 

@@ -138,10 +138,13 @@ export const SLOW_SCALE = 0.5;
  * than parking them (see the spec notes in the module docstring); the floor
  * is the same idea — an explicit order must stay alive through a crowd so a
  * hull can close the last metres to a goal near a parked unit and arrive.
- * Patrol keeps the hard 0 (ambient wandering must rest outside the hold,
- * and separation alone opens those gaps). Stacking through the floor is
- * still bounded: separation shoves harder (30 u/s) than the floor drives
- * (≤24 u/s), so head-on pairs open rather than pass through each other.
+ * Unordered hulls keep the hard 0 while yielding to a crowd leader, but a
+ * stopped leader itself creeps at this same floor and takes no separation
+ * push (see `advanceMovers`), so crowds drain in roster order instead of
+ * orbiting their waypoint forever. Stacking through the floor is still
+ * bounded: separation shoves harder (30 u/s) than the floor drives (≤24
+ * u/s), so head-on pairs open rather than pass through each other, and the
+ * parting crowd always outruns a creeping leader.
  */
 export const ORDER_SPACING_FLOOR = 0.3;
 /**
@@ -591,6 +594,67 @@ function stackRecoil(
  * not drive *through* each other) but the push guarantees the pair exits
  * the hold radius. Keep the two in sync: `SEPARATION_RADIUS === STOP_RADIUS`.
  */
+/**
+ * Neighbours (any roster index) inside `self`'s slow radius: the crowd
+ * gauge. Pairs (one contact) negotiate mutually — the tuned regime,
+ * chatter-free — while crowds (two or more) defer to a priority leader
+ * (see `advanceMovers`), whose serial drain breaks the pinwheel that
+ * mutual sidesteps spin in crowds. Pure.
+ */
+function slowContacts(
+  self: number,
+  positions: readonly { x: number; z: number }[],
+  slowRadius = SLOW_RADIUS,
+): number {
+  const me = positions[self];
+  if (!me || !(slowRadius > 0)) return 0;
+  const slow2 = slowRadius * slowRadius;
+  let n = 0;
+  for (let i = 0; i < positions.length; i++) {
+    if (i === self) continue;
+    const other = positions[i];
+    if (!other) continue;
+    const dx = other.x - me.x;
+    const dz = other.z - me.z;
+    if (dx * dx + dz * dz < slow2) n++;
+  }
+  return n;
+}
+
+/**
+ * True while an elected higher-priority leader (a lower roster index with
+ * `leaders` already set — see `advanceMovers`) sits inside `self`'s slow
+ * radius: `self` yields to it and can never lead while it does. Only
+ * elected leaders suppress — hulls that cannot lead themselves (holders,
+ * ordered, stunned, routeless) and lone passers-by with fewer than two
+ * contacts never do, so a held hull parked in a converge cannot pin the
+ * whole crowd into the mutual pinwheel (measured: a lowest-index holder
+ * orbited four convergers ~12 rad over 5400 ticks with nobody arriving).
+ * Leadership keys on the slow zone — not the stop zone — because
+ * converges orbit at slow-zone gaps (measured: four-way packs circle at
+ * 48–55, dipping inside only intermittently), so a stop key would never
+ * engage and the pinwheel would spin on. Pure.
+ */
+function yieldsToLeader(
+  self: number,
+  positions: readonly { x: number; z: number }[],
+  leaders: readonly boolean[],
+  slowRadius = SLOW_RADIUS,
+): boolean {
+  const me = positions[self];
+  if (!me || !(slowRadius > 0)) return false;
+  const slow2 = slowRadius * slowRadius;
+  for (let i = 0; i < self; i++) {
+    if (leaders[i] !== true) continue;
+    const other = positions[i];
+    if (!other) continue;
+    const dx = other.x - me.x;
+    const dz = other.z - me.z;
+    if (dx * dx + dz * dz < slow2) return true;
+  }
+  return false;
+}
+
 export function spacingScale(
   self: number,
   positions: readonly { x: number; z: number }[],
@@ -793,6 +857,20 @@ export function advanceMover(
   if (dx * dx + dz * dz <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
     const nextLeg = (leg + 1) % route.length;
     target = route[nextLeg]!;
+    // Coincident next waypoint (degenerate loops pad with spawn copies):
+    // already there — advance the leg and rest instead of driving onto
+    // our own position, which re-aims every tick and dithers the hull off
+    // its post. Real loops never land here (waypoints sit ≥12 cells
+    // apart), so only coincident loops change. Arrival clears stale
+    // blocked time like any successful step, keeping the key absent when
+    // it was never set.
+    const nx = target.x - calm.x;
+    const nz = target.z - calm.z;
+    if (nx * nx + nz * nz <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
+      return calm.stuck === undefined
+        ? { ...calm, leg: nextLeg }
+        : { ...calm, leg: nextLeg, stuck: 0 };
+    }
     const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
     if (driven.skipped) {
       return { ...driven.mover, leg: (nextLeg + 1) % route.length, stuck: 0 };
@@ -1210,8 +1288,39 @@ export function advanceMovers(
     // a non-positive step must never shove hulls backwards).
     return movers.slice();
   }
+  // Crowd leaders drain converges in roster order: an unordered hull with
+  // a loop to drive, two or more slow-zone contacts (pairs negotiate
+  // mutually — the tuned chatter-free regime — only crowds defer), that
+  // yields to no elected lower leader in its slow zone, and is neither
+  // holding nor recoiling. The leader takes no separation push at all —
+  // so drive-in contact can never arm a coast and deflect it — and creeps
+  // at the floor instead of stopping inside the stop zone (see
+  // ORDER_SPACING_FLOOR), walking straight through the parting crowd while
+  // everyone else yields and parts around it (full push, faster than the
+  // creep, so nobody stacks). Coasting leaders keep the drive pause (their
+  // stale glide still drains exactly once, then the creep resumes — a
+  // push-free leader can never re-arm, so the pause always lifts). Without
+  // the drain a converge orbits its waypoint at slow-zone gaps with nothing
+  // moving but the sidestep circulation: a permanent pinwheel. Leadership
+  // is acyclic (a total index order), so it can never cycle.
+  const mutual = movers.map((_, i) => spacingScale(i, movers));
+  // Elected in roster order so each hull defers only to an already-elected
+  // lower leader (well-founded: `yieldsToLeader` reads lower indices
+  // alone): ineligible hulls and lone passers-by never suppress the drain.
+  const leaders: boolean[] = [];
+  for (let i = 0; i < movers.length; i++) {
+    const m = movers[i]!;
+    leaders.push(
+      !hasOrder(m) &&
+        m.hold !== true &&
+        (routes[i]?.length ?? 0) >= 2 &&
+        slowContacts(i, movers) >= 2 &&
+        !yieldsToLeader(i, movers, leaders) &&
+        !((m.stun ?? 0) > 0),
+    );
+  }
   const scales = movers.map((m, i) => {
-    const scale = spacingScale(i, movers);
+    const scale = mutual[i] ?? 1;
     // Ordered hulls never fully stop for spacing: see ORDER_SPACING_FLOOR.
     if (hasOrder(m)) return Math.max(scale, ORDER_SPACING_FLOOR);
     // A coasting hull lets the glide carry it instead of driving back into
@@ -1223,6 +1332,10 @@ export function advanceMovers(
     // alive through crowds (their floor drive is slower than the glide, and
     // the goal-opposed strip keeps the two from fighting head-on).
     if (validSep(m)) return 0;
+    // Priority creep: a stopped crowd leader keeps a floor drive instead of
+    // stopping (see above); leaders outside the stop zone and everyone else
+    // drive the mutual scale as before.
+    if (leaders[i] === true && scale === 0) return ORDER_SPACING_FLOOR;
     return scale;
   });
   // Pursuit tracks moving attackers: the pre-tick roster positions double as
@@ -1252,7 +1365,7 @@ export function advanceMovers(
     }
     return d;
   });
-  return resolveSeparation(coasted, kinds, dt, terrain);
+  return resolveSeparation(coasted, kinds, dt, terrain, leaders);
 }
 
 /**
@@ -1374,8 +1487,10 @@ export function predictDrivenPath(
  * points back away from their goal (the sidestep circulation is always
  * kept): a trailer following a leader sidesteps off the line instead of
  * losing ground, so files and crossings move faster while arrival still
- * closes. Computed from one snapshot so the resolve is symmetric and
- * deterministic (no order-of-application bias), then gated by `stepBlocked`
+ * closes. Unordered crowd leaders take no push at all (their priority
+ * creep walks them through the parting crowd instead). Computed from one
+ * snapshot so the resolve is symmetric and deterministic (no
+ * order-of-application bias), then gated by `stepBlocked`
  * when terrain is known - a push into water/steep ground degrades to axis
  * slides, then to holding, instead of clipping. Pure: returns new movers.
  */
@@ -1469,7 +1584,8 @@ function resolveSeparation(
   movers: Mover[],
   kinds: readonly UnitKind[],
   dt: number,
-  terrain?: SeatField | null,
+  terrain: SeatField | null | undefined,
+  leaders: readonly boolean[],
 ): Mover[] {
   const step = SEPARATION_SPEED * dt;
   const unstacked = movers.map((mover, i) => {
@@ -1477,6 +1593,17 @@ function resolveSeparation(
     const { radial, side, coincident } = separationComponents(i, movers, SEPARATION_RADIUS);
     let pushX = radial.x + side.x;
     let pushZ = radial.z + side.z;
+    // Crowd leaders take no separation at all: their priority creep is the
+    // drain, and any push — radial shove, sidestep, or strip remainder —
+    // would deflect them into the orbit the creep exists to break (a stale
+    // coast budget still drains through the no-push path below, so a leader
+    // that was just yielding glides out exactly once, then creeps clean).
+    // The crowd parts around them instead (everyone else takes the full
+    // push), faster than the creep advances, so nobody stacks.
+    if (leaders[i] === true) {
+      pushX = 0;
+      pushZ = 0;
+    }
     if (pushX !== 0 || pushZ !== 0) {
       // Ordered hulls keep the lane-opening shove but never the radial part
       // that pushes them back away from their goal: a trailer following a
