@@ -187,6 +187,8 @@ export const SEPARATION_SIDESTEP = 0.6;
  * verdict stands — this is a time-decaying exit glide, not an outer band).
  */
 export const SEPARATION_COAST_DISTANCE = 8;
+/** Maximum change of autonomous crowd velocity, world units / second². */
+export const CROWD_ACCELERATION = 100;
 /**
  * Valid separation-coast budget on a mover, if any (see `Mover.sep`): finite
  * and non-zero, so a corrupted budget strips instead of steering the hull.
@@ -329,6 +331,15 @@ export interface Mover {
    * Non-finite values strip instead of lingering, fail clean never stuck.
    */
   sep?: { x: number; z: number };
+  /**
+   * Last accepted world velocity from the roster step. `crowd` carries a
+   * bounded acceleration response until it catches the current drive,
+   * even after neighbours leave. The drive, shove and coast must share
+   * this one response: independently smoothing either force leaves the
+   * other free to reverse the actual displacement every frame. Explicit
+   * orders, holds and recoil bypass it; new orders/holds clear it.
+   */
+  motion?: { x: number; z: number; crowd?: true };
 }
 
 /**
@@ -375,6 +386,8 @@ export interface CrushContext {
   field: DamageField;
   points: readonly BlastPoint[];
   onCrush?: (felled: number[]) => void;
+  /** Roster integration defers falls until it accepts the actual step. */
+  deferFelling?: boolean;
 }
 
 /** World-space X/Z of an attribute-grid cell center. */
@@ -483,7 +496,7 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
   // A player order supersedes any departure and any separation coast: the
   // hull never resumes either — explicit new intent wins over a glide.
-  const { leadIn: _superseded, sep: _glide, ...rest } = clearThreat(mover);
+  const { leadIn: _superseded, sep: _glide, motion: _motion, ...rest } = clearThreat(mover);
   const calm = rest;
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
   const order: MoveOrder =
@@ -497,7 +510,7 @@ export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: numb
 export function holdMover(mover: Mover): Mover {
   // A hold supersedes any departure and any separation coast like an order
   // does: nothing resumes them, so a held hull stops crisply.
-  const { leadIn: _superseded, sep: _glide, ...rest } = clearThreat(mover);
+  const { leadIn: _superseded, sep: _glide, motion: _motion, ...rest } = clearThreat(mover);
   return { ...rest, order: undefined, hold: true };
 }
 
@@ -1123,7 +1136,7 @@ function fellTreesOnStep(
   toX: number,
   toZ: number,
 ): void {
-  if (crush == null) return;
+  if (crush == null || crush.deferFelling) return;
   const touched = treesCrushedByStep(
     crush.points,
     crush.field.trees,
@@ -1307,6 +1320,11 @@ export function advanceMovers(
   // moving but the sidestep circulation: a permanent pinwheel. Leadership
   // is acyclic (a total index order), so it can never cycle.
   const mutual = movers.map((_, i) => spacingScale(i, movers));
+  const contacts = movers.map((_, i) => slowContacts(i, movers));
+  // Retain priority through a crowd's final pair while its velocity response
+  // is active. Dropping leadership at one remaining contact let the last
+  // two convergers fall back into a mutual orbit and never reach the leg.
+  // Fresh isolated pairs retain their existing mutual passing behavior.
   // Elected in roster order so each hull defers only to an already-elected
   // lower leader (well-founded: `yieldsToLeader` reads lower indices
   // alone): ineligible hulls and lone passers-by never suppress the drain.
@@ -1317,7 +1335,7 @@ export function advanceMovers(
       !hasOrder(m) &&
         m.hold !== true &&
         (routes[i]?.length ?? 0) >= 2 &&
-        slowContacts(i, movers) >= 2 &&
+        (contacts[i]! >= 2 || (m.motion?.crowd === true && contacts[i]! > 0)) &&
         !yieldsToLeader(i, movers, leaders) &&
         !((m.stun ?? 0) > 0),
     );
@@ -1345,9 +1363,10 @@ export function advanceMovers(
   // the foe lookup (same snapshot discipline as spacing/separation). The
   // strategic context rides along per index so outnumbered hulls hold for
   // backup instead of charging alone into a stronger force.
+  const deferredCrush = crush ? { ...crush, deferFelling: true } : crush;
   const driven = movers.map((m, i) =>
     advanceMover(
-      kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, crush, movers,
+      kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, deferredCrush, movers,
       tactics ? { ...tactics, self: i } : null,
     ),
   );
@@ -1368,7 +1387,60 @@ export function advanceMovers(
     }
     return d;
   });
-  return resolveSeparation(coasted, kinds, dt, terrain, leaders);
+  const resolved = resolveSeparation(coasted, kinds, dt, terrain, leaders);
+  return resolved.map((requested, i) => {
+    const previous = movers[i]!;
+    const kind = kinds[i] ?? "flash";
+    const accepted = integrateCrowdMotion(previous, requested, contacts[i]! >= 2, kind, dt, terrain);
+    // A pure separation shove never crushes wood. For an actual driven
+    // step, test the accepted travel rather than the unintegrated request:
+    // a slower acceleration must not fell trees it has not reached.
+    const drive = driven[i]!;
+    if (drive.x !== previous.x || drive.z !== previous.z) {
+      fellTreesOnStep(crush, kind, previous.x, previous.z, accepted.x, accepted.z);
+    }
+    return accepted;
+  });
+}
+
+/** One physical velocity response for drive + separation + exit coast. */
+function integrateCrowdMotion(
+  previous: Mover,
+  requested: Mover,
+  crowded: boolean,
+  kind: UnitKind,
+  dt: number,
+  terrain?: SeatField | null,
+): Mover {
+  const wanted = { x: (requested.x - previous.x) / dt, z: (requested.z - previous.z) / dt };
+  const saved = previous.motion;
+  const prior = saved && Number.isFinite(saved.x) && Number.isFinite(saved.z) ? saved : undefined;
+  // Orders already have goal-aware separation and must never inherit a
+  // backwards drift. Holds and impact recoil keep their immediate control.
+  const smooth = !hasOrder(previous) && !hasOrder(requested) && !previous.hold &&
+    !((previous.stun ?? 0) > 0) && (crowded || prior?.crowd === true);
+  if (!smooth) return { ...requested, motion: wanted };
+  const vx = prior?.x ?? 0;
+  const vz = prior?.z ?? 0;
+  const dx = wanted.x - vx;
+  const dz = wanted.z - vz;
+  const change = Math.hypot(dx, dz);
+  const limit = CROWD_ACCELERATION * dt;
+  if (change <= limit) return { ...requested, motion: { ...wanted, ...(crowded ? { crowd: true as const } : {}) } };
+  const velocity = { x: vx + dx * limit / change, z: vz + dz * limit / change, crowd: true as const };
+  let x = previous.x + velocity.x * dt;
+  let z = previous.z + velocity.z * dt;
+  // Inertia never grants terrain admission. Slide along a free axis, or
+  // absorb it at the wall; record only actual travel so no rejected motion
+  // can bank and reappear after the obstruction is gone.
+  if (terrain && stepBlocked(terrain, previous.x, previous.z, x, z, kind)) {
+    if (!stepBlocked(terrain, previous.x, previous.z, x, previous.z, kind)) z = previous.z;
+    else if (!stepBlocked(terrain, previous.x, previous.z, previous.x, z, kind)) x = previous.x;
+    else { x = previous.x; z = previous.z; }
+    velocity.x = (x - previous.x) / dt;
+    velocity.z = (z - previous.z) / dt;
+  }
+  return { ...requested, x, z, motion: velocity };
 }
 
 /**

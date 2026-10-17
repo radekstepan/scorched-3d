@@ -37,6 +37,8 @@ import {
   SIDESTEP_COOLDOWN,
   squadFocus,
   stepBlocked,
+  STOP_RADIUS,
+  SLOW_RADIUS,
   slewTilt,
   snappedFormationTargets,
   STRUCTURE_SIGHT_LIFT,
@@ -283,7 +285,7 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    const { stun: _dropped, recoil: _absorbed, threat: _calmed, leadIn: _joined, ...rest } = mover;
+    const { stun: _dropped, recoil: _absorbed, threat: _calmed, leadIn: _joined, motion: _stopped, ...rest } = mover;
     this.movers[index] = { ...rest, order: undefined, hold: true };
   }
 
@@ -867,7 +869,7 @@ export class UnitMovement {
         selfIndex: self,
         targetIndex: target,
       });
-      if (spot) {
+      if (spot && !this.footworkBlocked(self, spot, foes)) {
         this.lastSidestepAt[self] = this.elapsed;
         return { ...mover, threat: { ...memory, sidestep: spot } };
       }
@@ -877,6 +879,11 @@ export class UnitMovement {
     // two never lockstep), and the drive-terrain probe vetoes candidates
     // the hull could never reach — the judge mirrors the step around a
     // wall, and holds only when both sides are unreachable.
+    // Routine circling adds no tactical gain in a packed firing line.
+    // Keep those seats stable; only a genuine clearer lane/flank above
+    // merits a move. Otherwise the orbit repeatedly enters a mate's stop
+    // zone, gets shoved out, and queues the same orbit all over again.
+    if (foes.some((at, j) => j !== self && Math.hypot(at.x - me.x, at.z - me.z) < SLOW_RADIUS)) return mover;
     const lastOrbit = this.lastOrbitAt[self] ?? -((self * 2.39) % ORBIT_STRAFE_COOLDOWN);
     if (this.elapsed - lastOrbit < ORBIT_STRAFE_COOLDOWN) return mover;
     const field = this.field;
@@ -884,11 +891,50 @@ export class UnitMovement {
     const orbit = orbitStrafe(shooter, victim, stands, {
       selfIndex: self,
       targetIndex: target,
-      ...(field ? { blocked: (x: number, z: number) => stepBlocked(field, me.x, me.z, x, z, kind) } : {}),
+      blocked: (x: number, z: number) => this.footworkBlocked(self, { x, z }, foes) ||
+        (field !== null && stepBlocked(field, me.x, me.z, x, z, kind)),
     });
     if (!orbit) return mover;
     this.lastOrbitAt[self] = this.elapsed;
     return { ...mover, threat: { ...memory, sidestep: orbit } };
+  }
+
+  /** Reserve the whole short shuffle, not just its endpoint. */
+  private footworkBlocked(self: number, destination: RoutePoint, positions: readonly RoutePoint[]): boolean {
+    const start = positions[self];
+    if (!start) return true;
+    const pointGap = (point: RoutePoint, a: RoutePoint, b: RoutePoint): number => {
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const length2 = dx * dx + dz * dz;
+      const t = length2 > 0 ? Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.z - a.z) * dz) / length2)) : 0;
+      return (point.x - a.x - dx * t) ** 2 + (point.z - a.z - dz * t) ** 2;
+    };
+    const radius2 = STOP_RADIUS * STOP_RADIUS;
+    for (let j = 0; j < positions.length; j++) {
+      if (j === self) continue;
+      const at = positions[j]!;
+      const initial = (at.x - start.x) ** 2 + (at.z - start.z) ** 2;
+      // A currently compressed unit may step directly OUT of the pack,
+      // but never deeper through it. Wreck positions remain obstacles.
+      if (pointGap(at, start, destination) < Math.min(radius2, initial) - 1e-6) return true;
+      if (initial < radius2 && (at.x - destination.x) ** 2 + (at.z - destination.z) ** 2 <= initial) return true;
+      // Earlier roster seats reserve first. Later seats can neither swap
+      // places nor cross a carried shuffle, making admission acyclic.
+      const reserved = j < self ? this.movers[j]?.threat?.sidestep : undefined;
+      if (!reserved) continue;
+      const ax = destination.x - start.x, az = destination.z - start.z;
+      const bx = reserved.x - at.x, bz = reserved.z - at.z;
+      const cross = ax * bz - az * bx;
+      if (Math.abs(cross) > 1e-9) {
+        const cx = at.x - start.x, cz = at.z - start.z;
+        const t = (cx * bz - cz * bx) / cross;
+        const u = (cx * az - cz * ax) / cross;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return true;
+      }
+      if (Math.min(pointGap(at, start, destination), pointGap(reserved, start, destination),
+        pointGap(start, at, reserved), pointGap(destination, at, reserved)) < radius2) return true;
+    }
+    return false;
   }
 
   /**

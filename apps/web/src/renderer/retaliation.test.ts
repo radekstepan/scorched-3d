@@ -1502,7 +1502,7 @@ describe("UnitMovement firing footwork", () => {
     return { movement, units: group };
   }
 
-  it("orbits from the first seconds, then flank steps open the stacked angle", () => {
+  it("opens a stacked angle while respecting occupied shuffle lanes", () => {
     // Flash + stump (team 0) hold on a hammer (team 1) from ~26° apart —
     // stacked inside the flank angle, so the second gun opens away.
     const { movement } = makeDuelMovement(
@@ -1527,8 +1527,9 @@ describe("UnitMovement firing footwork", () => {
     expect(Math.abs(early0.x)).toBeLessThan(1);
     expect(Math.abs(early0.z)).toBeLessThan(1);
     // Past the seat clock the stacked mate flanks to the far side of the
-    // line while both keep orbiting: the pair opens well past the stack
-    // gate instead of shuffling once and freezing.
+    // line while admitting only shuffles with a clear travel lane: the
+    // pair opens past the stack gate without forcing a wider orbit through
+    // a mate's reserved seat.
     for (let n = 0; n < 480; n++) movement.update(1 / 60);
     const a = movement.moverState(0)!;
     const b = movement.moverState(1)!;
@@ -1536,13 +1537,58 @@ describe("UnitMovement firing footwork", () => {
     const angleAt = (p: { x: number; z: number }): number => Math.atan2(p.x - c.x, p.z - c.z);
     let sep = Math.abs(angleAt(a) - angleAt(b));
     if (sep > Math.PI) sep = 2 * Math.PI - sep;
-    expect(sep).toBeGreaterThan(Math.PI / 4);
-    expect(Math.hypot(a.x - 0, a.z - 0)).toBeGreaterThan(40);
-    expect(Math.hypot(b.x - 0, b.z - 100)).toBeGreaterThan(40);
+    expect(sep).toBeGreaterThan(Math.PI / 6);
+    expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeGreaterThanOrEqual(48);
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.hasThreat(1)).toBe(true);
     // The hammer faces 2v1 odds, so it waits for backup instead of
     // strafing — outnumbered holders still hold.
     expect(Math.abs(c.x - 200)).toBeLessThan(1);
     expect(Math.abs(c.z - 0)).toBeLessThan(1);
+    movement.dispose();
+  });
+
+  it("holds a packed firing line instead of repeatedly orbiting into a mate", () => {
+    const starts = [{ x: 0, z: 0 }, { x: 0, z: 60 }, { x: 200, z: 0 }];
+    const { movement } = makeDuelMovement(starts, [0, 0, 1], ["flash", "flash", "hammer"]);
+    movement.threatenUnit(0, 2, 200, 0);
+    movement.threatenUnit(1, 2, 200, 0);
+    movement.threatenUnit(2, 0, 0, 0);
+    // Before the genuine flank clock: a clear firing seat gains nothing
+    // from a routine orbit. Keep both allies planted for hundreds of ticks
+    // while their guns retain their target and the outnumbered foe waits.
+    for (let tick = 0; tick < 240; tick++) {
+      movement.update(1 / 60);
+      for (let i = 0; i < starts.length; i++) {
+        const state = movement.moverState(i)!;
+        expect(state.x).toBe(starts[i]!.x);
+        expect(state.z).toBe(starts[i]!.z);
+        expect(state.threat?.sidestep).toBeUndefined();
+        expect(movement.hasThreat(i)).toBe(true);
+      }
+    }
+    movement.dispose();
+  });
+
+  it("mirrors a routine strafe away from a wreck's occupied lane", () => {
+    const { movement } = makeDuelMovement(
+      [{ x: 0, z: 0 }, { x: 200, z: 0 }, { x: 0, z: -80 }],
+      [0, 1, 0], ["flash", "hammer", "flash"],
+    );
+    movement.markDestroyed(2);
+    movement.threatenUnit(0, 1, 200, 0);
+    movement.threatenUnit(1, 0, 0, 0);
+    // Index 0's usual minus-side shuffle would finish only 32 units from
+    // the wreck. The free mirror opens instead; wrecks cannot yield.
+    for (let tick = 0; tick < 240 && !movement.moverState(0)?.threat?.sidestep; tick++) movement.update(1 / 60);
+    expect(movement.moverState(0)?.threat?.sidestep?.z).toBeGreaterThan(0);
+    for (let tick = 0; tick < 300; tick++) {
+      movement.update(1 / 60);
+      const state = movement.moverState(0)!;
+      expect(Math.hypot(state.x, state.z + 80)).toBeGreaterThanOrEqual(48);
+      expect(movement.moverState(2)?.x).toBe(0);
+      expect(movement.moverState(2)?.z).toBe(-80);
+    }
     movement.dispose();
   });
 

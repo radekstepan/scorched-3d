@@ -6,6 +6,12 @@ A browser remake of the classic Scorched Earth artillery game — currently a pl
 
 Every team unit has its own weapon reload clock, with staggered opening shots and a slower reload while moving. A gun that is turning, out of range, or blocked by terrain retries independently so other aimed units keep shooting. Up to 128 projectiles can be in flight; impact effects and lights retain separate small pools. When the projectile budget fills, rotating weapon service keeps later units from starving. Reinforcements receive a fresh clock, and destroyed units stop firing.
 
+## Movement in crowds
+
+Autonomous units combine forward drive, collision separation and the short exit coast into one velocity with bounded acceleration. A packed column therefore brakes and changes direction gradually, while crowd priority continues until its final pair separates so the last two units cannot resume circling each other. Orders, holds and hit recoil take control immediately. Terrain still rejects every accepted step, and tree crushing follows the actual driven travel.
+
+Firing lines keep their seats when nearby units leave no room for routine circling. Genuine clearer firing positions and flanks still allow a shuffle, provided its whole travel lane clears nearby hulls and earlier reserved shuffles. Isolated duels retain their combat movement.
+
 ## Maps
 
 Six seeded worlds ship in the Worlds panel, each re-rolled by REGEN: Greenreach (lush island with bay and north ridge), Gods Channel (scattered volcanic isles), Ashen Pass (dry highland corridor), Glass Caldera (crater lake ringed by steep walls), River Crossing (meandering river through forest and plains, held by two ford crossings), and Dust Plains (wide flat steppe with gentle swells and scattered copses, built for armor battles). Every world spans a 320×256 attribute grid (about 5.1k × 4.1k world units — double the classic extent on each axis), so there is room to maneuver: guns reach well under half the map and only threaten the enemy HQ on deep push-ins.

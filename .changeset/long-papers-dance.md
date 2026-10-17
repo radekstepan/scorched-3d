@@ -1,0 +1,18 @@
+---
+"@scorched-3d/core": patch
+"@scorched-3d/web": patch
+---
+
+Make autonomous crowd movement continuous and stop combat footwork from cycling through occupied lanes.
+
+The remaining dance was visible in actual core displacement, rather than walker animation: a dense crowd alternated its forward drive, summed separation pushes and exit coast on consecutive ticks. Previous pair-gap and four-unit arrival tests missed it. A 16-way crossing reproduced 942 rapid direction reversals over 90 seconds; a dense 16-scout column reproduced 1,520 visible reversals over 30 seconds. The renderer also scheduled routine combat orbits into nearby occupied seats, repeatedly provoking the same avoidance response.
+
+Roster movement now records its last accepted world velocity and applies one bounded-acceleration response (100 world units/s²) to the combined autonomous drive/separation/coast request when two or more neighbors are nearby. The response continues until it catches the request after the crowd opens; it is not a render-only position filter. Explicit orders, holds and impact recoil retain immediate control, and orders/holds clear momentum. Terrain gates the accepted step, with axis sliding or absorption rather than stored blocked velocity. Tree crushing is deferred until the accepted driven travel is known, so an accelerated request cannot fell trees it has not reached; pure separation still does not crush trees.
+
+Keep the existing roster-order crowd drain, including its yield-only-to-elected-leaders rule, and retain it through a former crowd's final pair while the velocity response remains active. Dropping priority as soon as only one contact remained let the last two convergers resume mutual circling. Fresh isolated pairs keep their existing behavior. A frozen avoidance heading was rejected because touching hulls could advect together indefinitely; simply latching crowd leaders did not remove the discontinuous combined motion. Nanolathe's Modern steering contract provided the useful precedent of retaining encounter decisions and admitting an entire passage, while its occupancy-grid movement was not transplanted into this continuous world.
+
+Combat footwork now checks the whole shuffle segment against hulls and wrecks, and later roster units respect already carried shuffle reservations. Routine orbits pause near a packed firing line; clearer firing lanes and genuine flanks remain eligible, and isolated duels still move. This keeps tactical repositioning without ordering repeated collision/avoidance cycles. An older integration test's demand that both allies travel widely was replaced by retained engagement, adequate separation and an opened firing angle.
+
+Regression tests verify actual per-tick acceleration across thousands of crowded steps, all 16 crossing units advancing their route, more than 25,000 combined world units of crossing travel, a moving 16-scout column, terrain absorption, explicit-control momentum clearing, corrupt-state handling and deterministic replay. The final crossing has one rapid reversal instead of 942, with every unit passing; the scout column has 62 visible reversals instead of 1,520 while keeping more than 8,000 world units of travel. Renderer tests keep a packed firing line planted for 240 engaged ticks and mirror an orbit away from an immovable wreck. README and architecture documentation describe the new movement ownership.
+
+Validation: core movement and crowd regressions, renderer movement/retaliation integration tests, full workspace unit/integration suites, production build and typecheck. The pre-existing Pages workflow test still expects `main` while the workflow deploys `master`; it is unrelated to this change. No Playwright was run.
