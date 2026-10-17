@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
-  APP_NAME,
   APP_VERSION,
   CELL_PIXELS,
   DEFAULT_EXAGGERATION,
@@ -18,6 +17,7 @@ import {
   type ViewOptions,
 } from "@scorched-3d/core";
 import UnitFolio from "./folio/UnitFolio";
+import Brand from "./Brand";
 import TerrainCanvas from "./renderer/TerrainCanvas";
 import type { HqStatus } from "./renderer/hqFx";
 import {
@@ -214,9 +214,7 @@ export default function App() {
   return (
     <div className="command-shell" data-mobile-panel={mobilePanel ?? "closed"} data-view={view}>
       <header className="command-header">
-        <div className="command-brand"><span className="brand-mark" aria-hidden="true">✣</span>
-          <div><strong>{APP_NAME.toUpperCase()}</strong><small>REAL-TIME TACTICAL COMMAND</small></div>
-        </div>
+        <Brand />
         <nav className="command-nav" aria-label="Game views">
           <button className={view === "battlefield" ? "active" : ""} aria-current={view === "battlefield" ? "page" : undefined} onClick={() => setView("battlefield")}>01 / BATTLEFIELD</button>
           <button className={view === "folio" ? "active" : ""} aria-current={view === "folio" ? "page" : undefined} onClick={() => { setMobilePanel(null); setView("folio"); }}>02 / UNIT FOLIO</button>

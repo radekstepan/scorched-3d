@@ -14,9 +14,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .command-shell { height: 100vh; height: 100dvh; display: grid; grid-template: 68px minmax(0, 1fr) 30px / 244px minmax(0, 1fr) 244px; overflow: hidden; }
 .command-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 36px; padding: 0 22px; background: #11140f; border-bottom: 1px solid var(--chrome-line); }
 .command-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-.brand-mark { color: var(--chrome-accent); font-size: 32px; }
-.command-brand strong { font-family: var(--font-display); font-size: 23px; font-weight: 600; letter-spacing: 2px; color: var(--chrome-accent); }
-.command-brand small { display: block; font-size: 7px; letter-spacing: 1.6px; color: #9aa68c; }
+.brand-mark { color: #d3e398; flex-shrink: 0; }
+.command-brand strong { display: block; font-family: var(--font-display); font-size: 26px; font-weight: 700; letter-spacing: 2px; line-height: 1; color: #d3e398; white-space: nowrap; }
+.brand-3d { display: inline-block; font-size: 14px; letter-spacing: 0; color: #ced2c2; border: 1px solid #ced2c24a; padding: 2px 3px; margin-left: 6px; transform: translateY(-2px); }
+.command-brand small { display: block; font: 7px var(--font-mono); letter-spacing: 1.9px; margin-top: 7px; color: #818975; }
 .command-nav { display: flex; align-self: stretch; gap: 24px; align-items: stretch; }
 .command-nav > * { display: flex; align-items: center; padding: 0 4px; font: 10px var(--font-mono); letter-spacing: 1px; color: #9aa68c; border-bottom: 2px solid transparent; }
 .command-nav .active { color: var(--chrome-accent); border-bottom-color: var(--chrome-accent); }
@@ -116,7 +117,9 @@ input[type="range"] { height: 4px; background: transparent; }
 @media (max-width: 600px) {
   .command-header { gap: 12px; padding: 0 10px; }
   .command-brand strong { font-size: 15px; letter-spacing: 1px; }
-  .brand-mark { display: none; }
+  .command-brand { gap: 6px; }
+  .brand-mark { width: 25px; height: 27px; }
+  .brand-3d { font-size: 10px; padding: 1px 2px; margin-left: 4px; transform: translateY(-1px); }
   .command-nav { gap: 10px; }
   .command-nav > * { font-size: 7px; letter-spacing: .3px; }
   .unit-folio { grid-template: 76px minmax(0,1fr) 44px / minmax(0,1fr); }
