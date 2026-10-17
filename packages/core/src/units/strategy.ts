@@ -71,6 +71,18 @@ export const STRATEGY_THREAT_WEIGHT = 120;
 /** Distance-equivalent pull of staying on the current gun target (no thrash). */
 export const STRATEGY_STICKY_WEIGHT = 200;
 /**
+ * Range-gate hysteresis for the engaged gun target, world units. The
+ * admitted/unadmitted tier is a cliff by design (an in-range enemy always
+ * beats a far one), but a current target bobbing one step across `maxDist`
+ * — strafe steps, separation shoves, turn arcs — must not cost the gun its
+ * aim and restart traverse every volley. The sticky candidate counts as
+ * admitted out to `maxDist + margin`, so range-edge jitter holds while a
+ * target that is truly gone (past the margin, dead, or fled) still drops
+ * promptly. Sized to cover several 48u strafe steps of jitter between a
+ * gun's volleys while staying small against 850–1050 weapon admissions.
+ */
+export const STRATEGY_STICKY_ADMISSION_MARGIN = 150;
+/**
  * Peewee scout notice radius, world units: the lightest hull carries the
  * sharpest eyes. Past the regular `HUNT_ENGAGE_RADIUS` (so a scout spots a
  * column its heavier teammates cannot see yet) yet inside the shared
@@ -517,10 +529,14 @@ export interface GunTargetOptions {
  * in-range duels keep their pace), steered by wounded/focus/sticky pulls —
  * guns finish burning hulls and pile onto the squad's target instead of
  * spreading shots across the roster. Candidates inside `maxDist` win over
- * farther ones; when nothing is admitted, the best far target still returns
- * (the launch gate retries, exactly like the old random-far-pair rhythm).
- * Returns -1 when no live enemy exists. Pure: no rng — the caller draws the
- * attacker uniformly and aims deterministically.
+ * farther ones — except the engaged target, which counts as admitted out to
+ * `maxDist + STRATEGY_STICKY_ADMISSION_MARGIN`, so range-edge jitter holds
+ * the aim instead of flickering it (hysteresis, not a lock: a clearly
+ * better admitted challenger still wins on the score, and a target past the
+ * margin drops like any far contact). When nothing is admitted, the best far
+ * target still returns (the launch gate retries, exactly like the old
+ * random-far-pair rhythm). Returns -1 when no live enemy exists. Pure: no
+ * rng — the caller draws the attacker uniformly and aims deterministically.
  */
 export function pickStrategicTarget(
   attacker: number,
@@ -557,7 +573,15 @@ export function pickStrategicTarget(
     if (!foe || !Number.isFinite(foe.x) || !Number.isFinite(foe.z)) continue;
     const dist = Math.hypot(foe.x - me.x, foe.z - me.z);
     if (!(dist >= 0)) continue;
-    const admitted = maxDist === undefined || maxDist === null ? true : dist <= maxDist;
+    // Range-gate hysteresis: the engaged target counts as admitted within
+    // the sticky margin past the gate, so it is never dropped by the tier
+    // cliff on jitter alone. A degenerate gate (maxDist <= 0) admits
+    // nothing, exactly as before.
+    const admitted =
+      maxDist === undefined || maxDist === null
+        ? true
+        : dist <= maxDist ||
+          (i === sticky && maxDist > 0 && dist <= maxDist + STRATEGY_STICKY_ADMISSION_MARGIN);
     // An admitted candidate always beats an unadmitted one; within each
     // tier the strategic score decides.
     const score = targetScore(dist, healthAt(opts?.hp, i), focusOf(i), false, i === sticky);

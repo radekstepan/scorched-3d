@@ -31,6 +31,8 @@ import {
   shouldHold,
   squadFocus,
   STRATEGY_HOLD_RATIO,
+  STRATEGY_STICKY_ADMISSION_MARGIN,
+  STRATEGY_STICKY_WEIGHT,
   targetScore,
 } from "./strategy.js";
 
@@ -544,6 +546,137 @@ describe("pickStrategicTarget", () => {
     expect(pickStrategicTarget(0, matesOnly.positions, matesOnly.teams, matesOnly.alive)).toBe(-1);
     expect(pickStrategicTarget(0, positions, [undefined, undefined, undefined], alive)).toBe(-1);
     expect(pickStrategicTarget(9, positions, teams, alive)).toBe(-1);
+  });
+});
+
+describe("gun stickiness (snap)", () => {
+  it("holds the engaged target across repeated volley re-picks", () => {
+    // A at 500 engaged; B at 520 takes a chip every volley. Ten re-picks —
+    // the scheduler re-aims the drawn gun every volley — must never stray
+    // while B's wounded pull stays under the sticky bonus.
+    const { positions, teams, alive } = roster({ x: 0, z: 0 }, [], [
+      { x: 500, z: 0 },
+      { x: 520, z: 0 },
+    ]);
+    const hp = [1, 1, 1];
+    for (let round = 0; round < 10; round++) {
+      hp[2] = 1 - 0.05 * (round + 1);
+      expect(pickStrategicTarget(0, positions, teams, alive, { hp, sticky: 1 })).toBe(1);
+    }
+  });
+
+  it("switches promptly when the engaged target dies", () => {
+    const { positions, teams } = roster({ x: 0, z: 0 }, [], [
+      { x: 500, z: 0 },
+      { x: 520, z: 0 },
+    ]);
+    expect(pickStrategicTarget(0, positions, teams, [true, false, true], { sticky: 1 })).toBe(2);
+  });
+
+  it("holds the engaged target bobbing just past the range gate", () => {
+    // The admitted tier used to be a cliff: one step past maxDist and the
+    // gun instantly re-aimed at an admitted challenger, restarting traverse.
+    // The engaged target now counts as admitted within the sticky margin,
+    // so range-edge jitter holds instead of flickering.
+    const { positions, teams, alive } = roster({ x: 0, z: 0 }, [], [
+      { x: 901, z: 0 },
+      { x: 800, z: 0 },
+    ]);
+    expect(pickStrategicTarget(0, positions, teams, alive, { sticky: 1, maxDist: 900 })).toBe(1);
+  });
+
+  it("drops the engaged target once it is truly out of range", () => {
+    const gate = 900;
+    const edge = gate + STRATEGY_STICKY_ADMISSION_MARGIN;
+    const challenger = { x: 890, z: 0 };
+    // Exactly on the margin edge: still held (850 vs 890 scores here).
+    const held = roster({ x: 0, z: 0 }, [], [{ x: edge, z: 0 }, challenger]);
+    expect(
+      pickStrategicTarget(0, held.positions, held.teams, held.alive, { sticky: 1, maxDist: gate }),
+    ).toBe(1);
+    // One step past the margin: the tier cliff is back, promptly.
+    const dropped = roster({ x: 0, z: 0 }, [], [{ x: edge + 1, z: 0 }, challenger]);
+    expect(
+      pickStrategicTarget(0, dropped.positions, dropped.teams, dropped.alive, {
+        sticky: 1,
+        maxDist: gate,
+      }),
+    ).toBe(2);
+  });
+
+  it("pins the sticky admission margin absolutely", () => {
+    // Covers several strafe steps / separation shoves of range-edge jitter,
+    // stays small against 850–1050 weapon admissions. A future retune must
+    // update this pin consciously (cadence-precedent: absolute pins guard
+    // pacing constants against silent drift).
+    expect(STRATEGY_STICKY_ADMISSION_MARGIN).toBe(150);
+  });
+
+  it("steals only when the challenger beats the sticky bonus (quantified)", () => {
+    // No focus, both pristine: the challenger must be strictly more than
+    // STRATEGY_STICKY_WEIGHT closer; equality holds by lowest-index tie-break
+    // when the engaged target sorts first.
+    expect(STRATEGY_STICKY_WEIGHT).toBe(200);
+    const tied = roster({ x: 0, z: 0 }, [], [
+      { x: 600, z: 0 },
+      { x: 400, z: 0 },
+    ]);
+    expect(pickStrategicTarget(0, tied.positions, tied.teams, tied.alive, { sticky: 1 })).toBe(1);
+    const stolen = roster({ x: 0, z: 0 }, [], [
+      { x: 600, z: 0 },
+      { x: 399, z: 0 },
+    ]);
+    expect(pickStrategicTarget(0, stolen.positions, stolen.teams, stolen.alive, { sticky: 1 })).toBe(
+      2,
+    );
+    // Equality goes to the lowest roster index even when that is the
+    // challenger — the margin is strict, modulo index ties.
+    const tieLost = roster({ x: 0, z: 0 }, [], [
+      { x: 400, z: 0 },
+      { x: 600, z: 0 },
+    ]);
+    expect(
+      pickStrategicTarget(0, tieLost.positions, tieLost.teams, tieLost.alive, { sticky: 2 }),
+    ).toBe(1);
+  });
+
+  it("needs two teammates' focus to pull a gun off its aim (equal distance)", () => {
+    const { positions, teams, alive } = roster({ x: 0, z: 0 }, [], [
+      { x: 500, z: 0 },
+      { x: 500, z: 0 },
+    ]);
+    // One teammate (170) stays under the sticky bonus (200).
+    expect(
+      pickStrategicTarget(0, positions, teams, alive, { sticky: 1, focusCounts: [2] }),
+    ).toBe(1);
+    // Two teammates (340) overcome it: focus fire still concentrates.
+    expect(
+      pickStrategicTarget(0, positions, teams, alive, { sticky: 1, focusCounts: [2, 2] }),
+    ).toBe(2);
+  });
+
+  it("finishes near-dead enemies but holds through chips (equal distance)", () => {
+    const { positions, teams, alive } = roster({ x: 0, z: 0 }, [], [
+      { x: 600, z: 0 },
+      { x: 600, z: 0 },
+    ]);
+    // Missing 0.7 (182 pull) holds; missing 0.8 (208 pull) steals.
+    expect(
+      pickStrategicTarget(0, positions, teams, alive, { sticky: 1, hp: [1, 1, 0.3] }),
+    ).toBe(1);
+    expect(
+      pickStrategicTarget(0, positions, teams, alive, { sticky: 1, hp: [1, 1, 0.2] }),
+    ).toBe(2);
+  });
+
+  it("lets a clearly better admitted challenger steal past the gate (not a lock)", () => {
+    // The engaged target at 950 is held inside the margin — but a challenger
+    // 350 closer still wins on the score: hysteresis, not a lock.
+    const { positions, teams, alive } = roster({ x: 0, z: 0 }, [], [
+      { x: 950, z: 0 },
+      { x: 600, z: 0 },
+    ]);
+    expect(pickStrategicTarget(0, positions, teams, alive, { sticky: 1, maxDist: 900 })).toBe(2);
   });
 });
 

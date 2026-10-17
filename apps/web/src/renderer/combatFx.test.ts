@@ -3308,3 +3308,162 @@ describe("CombatFx fire on the move", () => {
     expect([...hooked.damage]).toEqual([...legacy.damage]);
   });
 });
+
+describe("CombatFx gun stickiness (snap)", () => {
+  function makeSnap(
+    specs: { kind: UnitKind; team: number; x: number; z: number; rot: number }[],
+  ): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = specs.map((s, n) => ({
+      kind: s.kind,
+      cellX: n + 1,
+      cellZ: n + 1,
+      rotation: s.rot,
+      team: s.team,
+    }));
+    for (const s of specs) {
+      const body = new THREE.Group();
+      body.rotation.y = s.rot;
+      body.position.set(s.x, 100, s.z);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  function pendingOf(fx: CombatFx): Map<number, number> {
+    return (fx as unknown as { pending: Map<number, number> }).pending;
+  }
+
+  function liveShots(fx: CombatFx): { attacker: number; target: number }[] {
+    return (fx as unknown as { shots: { attacker: number; target: number }[] }).shots;
+  }
+
+  function destroyedOf(fx: CombatFx): boolean[] {
+    return (fx as unknown as { destroyed: boolean[] }).destroyed;
+  }
+
+  it("keeps shooting the engaged target across scheduler re-picks", () => {
+    const scene = new THREE.Scene();
+    // One flash gun vs two peewees at 707 (inside flash admission 950, past
+    // peewee admission 600): the flash is the only engaged gun, so every
+    // volley re-picks its aim — and every volley must keep target 1.
+    const units = makeSnap([
+      { kind: "flash", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "peewee", team: 1, x: -100, z: 700, rot: Math.PI },
+      { kind: "peewee", team: 1, x: 100, z: 700, rot: Math.PI },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(41));
+    const seen = new Set<unknown>();
+    const targets: number[] = [];
+    // 8 s ≈ 11 volleys ≈ 0.66 damage on the engaged target: all aimed
+    // before any kill could force a switch.
+    for (let n = 0; n < 160; n++) {
+      fx.update(0.05);
+      for (const s of liveShots(fx)) {
+        if (!seen.has(s)) {
+          seen.add(s);
+          if (s.attacker === 0) targets.push(s.target);
+        }
+      }
+    }
+    // Volleys from the only engaged gun, all on one target, and both
+    // enemies alive at the end so no kill forced a switch.
+    expect(targets.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(targets)).toEqual(new Set([1]));
+    expect(pendingOf(fx).get(0)).toBe(1);
+    expect(destroyedOf(fx)).toEqual([false, false, false]);
+    fx.dispose();
+  });
+
+  it("switches promptly when the engaged target is killed", () => {
+    const scene = new THREE.Scene();
+    const units = makeSnap([
+      { kind: "flash", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "peewee", team: 1, x: -100, z: 700, rot: Math.PI },
+      { kind: "peewee", team: 1, x: 100, z: 700, rot: Math.PI },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(42));
+    fx.update(1 / 60);
+    expect(pendingOf(fx).get(0)).toBe(1);
+    // White-box kill (suite precedent): the aim reaps and re-acquires.
+    (fx as unknown as { destroyed: boolean[] }).destroyed[1] = true;
+    for (let n = 0; n < 60; n++) fx.update(1 / 60);
+    expect(pendingOf(fx).get(0)).toBe(2);
+    fx.dispose();
+  });
+
+  it("holds a bobbing target across the range gate, drops it when truly gone", () => {
+    const scene = new THREE.Scene();
+    // Gun 0 (flash, admission 950) acquires A at 800 over the peewee
+    // challenger B at 850 (B's short reach keeps it from ever firing back,
+    // so the hold phase is damage-free and deterministic).
+    const units = makeSnap([
+      { kind: "flash", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "flash", team: 1, x: 0, z: 800, rot: Math.PI },
+      { kind: "peewee", team: 1, x: 0, z: 850, rot: Math.PI },
+    ]);
+    const fx = new CombatFx(scene, units, mulberry32(43));
+    fx.update(1 / 60);
+    expect(pendingOf(fx).get(0)).toBe(1);
+    // A bobs 50 past the gate (inside the 150 sticky margin): re-picks hold
+    // the aim instead of flipping to B — silently, since the launch gate
+    // still holds fire past max range. Four seconds guarantees re-picks
+    // (first expiry ≤1.1 s, then ~0.17 s retries), so the hold is exercised,
+    // not just the initial aim.
+    (units.children[1] as THREE.Group).position.z = 1000;
+    for (let n = 0; n < 240; n++) {
+      fx.update(1 / 60);
+      expect(pendingOf(fx).get(0)).toBe(1);
+    }
+    expect(fx.totalFired).toBe(0);
+    // A retreats past the margin: the gun drops it and re-engages B.
+    (units.children[1] as THREE.Group).position.z = 1200;
+    for (let n = 0; n < 240; n++) fx.update(1 / 60);
+    expect(pendingOf(fx).get(0)).toBe(2);
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(destroyedOf(fx)).toEqual([false, false, false]);
+    fx.dispose();
+  });
+
+  it("group engagements hold aims without thrash (6v6 lines)", () => {
+    const scene = new THREE.Scene();
+    // Part-1 repro shape, committed: two facing flash lines trade volleys
+    // for 30 s. Switches between live targets must stay near zero while the
+    // shared-timer throughput holds its floor (the hysteresis must never
+    // silence guns by parking aims out of range).
+    const specs: { kind: UnitKind; team: number; x: number; z: number; rot: number }[] = [];
+    for (let i = 0; i < 6; i++) {
+      specs.push({ kind: "flash", team: 0, x: (i - 2.5) * 200, z: 0, rot: 0 });
+    }
+    for (let i = 0; i < 6; i++) {
+      specs.push({ kind: "flash", team: 1, x: (i - 2.5) * 200, z: 600, rot: Math.PI });
+    }
+    const fx = new CombatFx(scene, makeSnap(specs), mulberry32(7), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    const last = new Array<number>(12).fill(-2);
+    let switches = 0;
+    for (let n = 0; n < 600; n++) {
+      fx.update(0.05);
+      const pending = pendingOf(fx);
+      const destroyed = destroyedOf(fx);
+      for (let i = 0; i < 12; i++) {
+        if (destroyed[i]) continue;
+        const p = pending.get(i) ?? -1;
+        if (last[i] === -2) last[i] = p;
+        else if (p !== last[i]) {
+          if (last[i]! >= 0 && p >= 0 && !destroyed[last[i]!]) switches++;
+          last[i] = p;
+        }
+      }
+    }
+    expect(fx.totalFired).toBeGreaterThanOrEqual(20);
+    expect(switches / Math.max(fx.totalFired, 1)).toBeLessThan(0.05);
+    fx.dispose();
+  });
+});
