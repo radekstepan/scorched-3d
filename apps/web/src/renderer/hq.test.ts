@@ -106,9 +106,9 @@ describe("buildHq", () => {
       expect(group.getObjectByName("hq-silo")).not.toBeNull();
       expect(group.getObjectByName("hq-annex")).not.toBeNull();
       expect(group.getObjectByName("hq-monitor")).not.toBeNull();
-      // Factory massing: well beyond the old pillbox box count.
+      // Fixed architecture is batched by finish; moving parts keep their pivots.
       const solids = group.children.filter((c) => c.type === "Mesh").length;
-      expect(solids).toBeGreaterThan(18);
+      expect(solids).toBeGreaterThan(8);
       // Every factory-built surface is a shared-style Lambert (the team
       // ring keeps its own marker material, and the beacon beams are a
       // diffused additive shader per the glow convention — a light effect,
@@ -828,7 +828,7 @@ describe("hq reinforcement exit", () => {
     const torso = new THREE.Box3();
     cmd.getObjectByName("turret")!.traverse((child) => {
       if (child.type !== "Mesh") return;
-      if ((child as THREE.Mesh).geometry instanceof THREE.CylinderGeometry) return;
+      if (child.name === "commander-mast") return;
       tmp.setFromObject(child);
       torso.union(tmp);
     });

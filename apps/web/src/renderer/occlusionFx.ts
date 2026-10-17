@@ -214,7 +214,7 @@ function tagGhost(obj: THREE.Object3D): void {
 
 /**
  * Mirror one source child into a ghost clone: meshes share the source
- * geometry (fill mesh + edge outline), groups recurse. Pose pairs sync the
+ * geometry (fill mesh + edge outline); mesh children and groups recurse. Pose pairs sync the
  * live local transforms every tick.
  */
 function cloneSilhouette(
@@ -248,6 +248,14 @@ function cloneSilhouette(
     tagGhost(outline);
     wrap.add(fill, outline);
     pairs.push({ src, dst: wrap });
+    // Articulated legs use a painted mesh as the pivot, with finish batches
+    // beneath it. Mirror those children in the same local frame as groups.
+    for (const child of src.children) {
+      if (child.name === "select-marker" || child.name === "healthbar" || child.name === "team-ring") continue;
+      if (child.getObjectByName("occlusion-fill")) continue;
+      const clone = cloneSilhouette(child, mats, pairs, edgeGeos, fallbackSize);
+      if (clone) wrap.add(clone);
+    }
     return wrap;
   }
   if ((src as THREE.LineSegments).isLineSegments || (src as THREE.Line).isLine) {

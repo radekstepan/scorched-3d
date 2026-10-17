@@ -17,7 +17,9 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | --- | --- |
 | `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers and HQ fort squares, team + HQ + unit legend, probe readout. |
 | `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, team HQ forts with reinforcements, hover picking. |
-| `apps/web/src/renderer/units.ts` | Low-poly TA unit meshes (Commander/Stumpy/Flash/Hammer) with elevating barrel pivots + muzzle tips, team ground rings, and exaggeration re-snapping. |
+| `apps/web/src/renderer/units.ts` | Integrates the Commander/Stumpy/Flash/Hammer/Peewee model builders, weapon pivots + muzzle markers, team ground rings, locomotion and exaggeration re-snapping. |
+| `apps/web/src/renderer/vehicleGeometry.ts` | Shared chamfered armor lofts and per-finish geometry batching; individual model builders preserve separate animated assemblies. |
+| `apps/web/src/renderer/hqModel.ts` | Cached armored HQ geometry and independently owned instance finishes, with shutter, roof and complete chimney wreck assemblies. |
 | `apps/web/src/renderer/camo.ts` | Subtle procedural hull camo: one shared near-white grayscale texture per kind bound as hull-material map (hue-preserving, no hull tint), deterministic bake. |
 | `apps/web/src/renderer/shaders.ts` | Terrain/sky/water GLSL shaders. |
 | `apps/web/src/index.css` | Visual tokens and HUD panel styling. |
@@ -49,6 +51,10 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 | `packages/core/src/terrain/texture.ts` | Albedo/height/minimap `ImageData` composition. |
 | `packages/core/src/index.ts` | Public barrel export for `@scorched-3d/core`. |
 | `scripts/sync-app-version.mjs` | Rewrites `APP_VERSION` from workspace versions (see Versioning). |
+
+## Model design and integration
+
+[Art direction](art-direction.md) is the reusable visual design reference for units and structures. It explains role silhouettes, shared armor construction, material hierarchy and visual iteration. Model builders own appearance; existing renderer systems own motion, aiming, damage and selection, while core retains simulation and balance. Mobile models face +Z; the HQ production axis is local +X. Keep geometry batching inside animation boundaries and preserve independent instance resources for recoloring and disposal.
 
 ## Build notes
 

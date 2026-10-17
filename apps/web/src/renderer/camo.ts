@@ -139,6 +139,7 @@ export function disposeCamoTextures(): void {
 /**
  * Dress one unit body in its kind's camo: bind the shared texture as `map`
  * on every hull-paint Lambert mesh. Skips road wheels (rubber stays flat),
+ * bare mechanical/optical finishes (`noCamo`),
  * selection/team markers (`noHighlight` — damage charring skips them too),
  * and non-Lambert marker materials. Idempotent; hull `color` hexes are never
  * touched, so the stashed-base damage/wreck char math is byte-identical.
@@ -148,7 +149,7 @@ export function applyCamo(body: THREE.Object3D, kind: UnitKind): void {
   const tex = getCamoTexture(kind);
   body.traverse((child) => {
     if (child.userData.noHighlight) return;
-    if (child.name === "wheel") return;
+    if (child.name === "wheel" || child.userData.noCamo) return;
     const mesh = child as THREE.Mesh;
     if (!mesh.isMesh) return;
     const mat = mesh.material as THREE.MeshLambertMaterial | undefined;

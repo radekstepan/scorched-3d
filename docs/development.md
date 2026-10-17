@@ -13,6 +13,8 @@ How to extend Scorched 3D and how to verify a change. Start here after the READM
 
 The primary tokens are at the top of `apps/web/src/index.css`: `--font-display`, `--font-mono`, and the `.hud-panel` style. The terrain look itself lives in `apps/web/src/renderer/shaders.ts` (terrain/sky/water shaders) plus the tile ramps in `packages/core/src/terrain/palette.ts`.
 
+For unit and structure modeling, follow [Art direction](art-direction.md). It defines the shared shape and material language, each reference model's role, animation contracts, rendering cost guidance and screenshot review process. Record why a design changed in its changeset; update the guide when introducing a durable extension to the theme.
+
 ## Versioning
 
 The app has one overall version, shared by both workspaces

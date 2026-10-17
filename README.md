@@ -32,5 +32,6 @@ serves from `https://<owner>.github.io/<repo>/` after each push.
 
 ## More information
 
+- [Art direction](docs/art-direction.md) explains the unit/HQ theme, design rationale and visual review requirements.
 - [Architecture](docs/architecture.md) shows workspaces, files, and build notes.
 - [Development](docs/development.md) shows how to extend and verify the app.

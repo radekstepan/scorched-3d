@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { buildHqArchitecture } from "./hqModel";
 import { HQ_FOUNDATION_MARGIN, TEAM_DEFS, type TeamId } from "@scorched-3d/core";
 import { buildTeamRing } from "./units";
 
@@ -9,9 +10,9 @@ import { buildTeamRing } from "./units";
  * pillbox: a walled production hall under a monitor (clerestory) roof with
  * vents and a skylight, twin chimney stacks + caps at the back corners, a
  * silo tank and a side workshop annex on the slab, and a framed sectional
- * door with gate lamps under a canopy. Built from plain Lambert boxes and
- * cylinders (no new materials per frame — everything is created once in
- * `buildHq`), so the door animation is a single position write per tick
+ * door under an armored shutter cassette. Chamfered lofts and layered
+ * service panels are cached and batched by Lambert finish in `hqModel`.
+ * Each instance owns its resources; the door animation remains one position write per tick
  * and the wreck pose is a one-time recolor. A red warning beacon on the
  * canopy top (a clear lens over a hot centered core, wrapped in a soft
  * additive halo, with twin diffused light-tower cones circling on a rotor)
@@ -224,25 +225,6 @@ function hqBox(
   return mesh;
 }
 
-function hqStack(
-  parent: THREE.Group,
-  rTop: number,
-  rBottom: number,
-  h: number,
-  x: number,
-  y: number,
-  z: number,
-  color: number,
-): THREE.Mesh {
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(rTop, rBottom, h, 12),
-    new THREE.MeshLambertMaterial({ color }),
-  );
-  mesh.position.set(x, y, z);
-  parent.add(mesh);
-  return mesh;
-}
-
 /**
  * Diffused light-tower beam material: an additive shader over an open cone
  * whose alpha melts away both along the beam (bright at the hot-core apex,
@@ -305,69 +287,10 @@ export function buildHq(team: TeamId): THREE.Group {
     o.userData.noHighlight = true;
   };
 
-  // Base slab + team ground ring (scaled up from the hull-size ring: the
-  // bunker reads as a team asset from the same signal as the hulls).
-  const slab = hqBox(group, HQ_BASE_W, 4, HQ_BASE_D, 0, 2, 0, HQ_CONCRETE);
-  tag(slab);
+  buildHqArchitecture(group, TEAM_DEFS[team]?.color ?? 0xffffff);
   const ring = buildTeamRing(team);
   ring.scale.setScalar(3);
   group.add(ring);
-
-  // Bunker: back wall, full-length side walls, front segments flanking the
-  // door opening (|z| < HQ_DOOR_W/2 stays open), and a roof slab.
-  const wallY = 4 + HQ_WALL_H / 2;
-  tag(hqBox(group, 8, HQ_WALL_H, HQ_BASE_D, -44, wallY, 0, HQ_DARK));
-  for (const s of [-1, 1]) {
-    tag(hqBox(group, HQ_BASE_W, HQ_WALL_H, 8, 0, wallY, s * 34, HQ_DARK));
-    tag(hqBox(group, 8, HQ_WALL_H, 17, 44, wallY, s * 25.5, HQ_DARK));
-  }
-  tag(hqBox(group, HQ_BASE_W, 5, HQ_BASE_D, 0, 4 + HQ_WALL_H + 2.5, 0, HQ_CONCRETE));
-  // Factory roof furniture: a monitor (clerestory) hall crown with vents
-  // and a skylight strip, so the roofline reads as works sheds.
-  const monitor = hqBox(group, 56, 7, 22, -4, 4 + HQ_WALL_H + 5 + 3.5, 0, HQ_DARK);
-  monitor.name = "hq-monitor";
-  tag(monitor);
-  tag(hqBox(group, 40, 1.5, 8, -4, 4 + HQ_WALL_H + 5 + 7.75, 0, HQ_CONCRETE));
-  for (const vx of [-24, 18]) {
-    tag(hqBox(group, 8, 5, 8, vx, 4 + HQ_WALL_H + 5 + 2.5, vx > 0 ? -14 : 14, HQ_CONCRETE));
-  }
-  // Twin chimney stacks at the back corners, with dark caps (crowned above
-  // the monitor roof so the works beats the commander's antenna).
-  for (const s of [-1, 1]) {
-    const stack = hqStack(group, 4, 5, 44, -38, 4 + 22, s * 28, HQ_CONCRETE);
-    stack.name = "hq-chimney";
-    tag(stack);
-    tag(hqStack(group, 5.5, 5.5, 2, -38, 4 + 44 + 1, s * 28, HQ_DARK));
-  }
-  // Silo tank + side workshop annex on the slab (kept inside the base so
-  // the whole works sits on seated ground).
-  const silo = hqStack(group, 9, 9, 38, 18, 4 + 19, -28, HQ_CONCRETE);
-  silo.name = "hq-silo";
-  tag(silo);
-  tag(hqStack(group, 9.5, 9.5, 2, 18, 4 + 38 + 1, -28, HQ_DARK));
-  const annex = hqBox(group, 30, 14, 24, -20, 4 + 7, 24, HQ_DARK);
-  annex.name = "hq-annex";
-  tag(annex);
-  tag(hqBox(group, 32, 2, 26, -20, 4 + 14 + 1, 24, HQ_CONCRETE));
-  // Team trim stripe across the front, above the door.
-  const trim = hqBox(group, 4, 3, HQ_BASE_D, 45, 4 + HQ_WALL_H - 1.5, 0, TEAM_DEFS[team]?.color ?? 0xffffff);
-  tag(trim);
-
-  // Sliding sectional door: thin shutter in the front opening, base seated
-  // on the slab, framed by jambs + lintel with team gate lamps and a
-  // canopy over the hall mouth.
-  for (const s of [-1, 1]) {
-    tag(hqBox(group, 4, HQ_WALL_H, 3, 44, 4 + HQ_WALL_H / 2, s * 18.5, HQ_CONCRETE));
-    tag(hqBox(group, 2, 2, 2, 46.5, 12, s * 21, TEAM_DEFS[team]?.color ?? 0xffffff));
-  }
-  tag(hqBox(group, 4, 4, 40, 44, 4 + HQ_WALL_H + 1, 0, HQ_CONCRETE));
-  tag(hqBox(group, 14, 2, 44, 53, 4 + HQ_WALL_H + 2, 0, HQ_DARK));
-
-  // Sliding door: thin shutter in the front opening, base seated on the slab.
-  const door = hqBox(group, 3, HQ_DOOR_H, HQ_DOOR_W, 46, 4 + HQ_DOOR_H / 2, 0, HQ_DARK);
-  door.name = "hq-door";
-  door.userData.baseY = door.position.y;
-  tag(door);
 
   // Warning beacon on the canopy top, centered over the door: a clear red
   // lens (`hq-beacon`, bare hemisphere — no mast, no platform) over a
@@ -462,13 +385,7 @@ export function buildHq(team: TeamId): THREE.Group {
   group.add(beaconLight);
   group.userData.hqBeaconLevel = 1;
 
-  // Open hall toward the map center: floor strip + low guide curbs the
-  // reinforcement drives between on its way out.
   const hallCx = 48 + HQ_HALL_LEN / 2;
-  tag(hqBox(group, HQ_HALL_LEN, 2, 30, hallCx, 1, 0, HQ_CONCRETE));
-  for (const s of [-1, 1]) {
-    tag(hqBox(group, HQ_HALL_LEN, 6, 4, hallCx, 3, s * 17, HQ_DARK));
-  }
   // Deep foundations: a concrete footing under the slab plus one under the
   // hall floor, both hanging straight down from the slab underside (local
   // y=0). On flat ground they sit fully buried and invisible; on a slope
@@ -760,10 +677,8 @@ export function poseHqWreck(group: THREE.Group): void {
     door.position.y = base - 8;
     door.rotation.z = 0.18;
   }
-  // Roof slab is the topmost wide box: settle it onto the walls.
-  const roof = group.children.find(
-    (c) => c.type === "Mesh" && Math.abs((c as THREE.Mesh).position.y - (4 + HQ_WALL_H + 2.5)) < 1,
-  ) as THREE.Mesh | undefined;
+  // The complete roof crown settles together, including its vents and trim.
+  const roof = group.getObjectByName("hq-roof");
   if (roof) {
     roof.position.y -= 6;
     roof.rotation.z = 0.05;

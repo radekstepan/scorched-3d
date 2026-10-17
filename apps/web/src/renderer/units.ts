@@ -1,6 +1,10 @@
 import * as THREE from "three";
+import { buildCommander } from "./commander";
+import { buildPeewee } from "./peewee";
+import { buildHammer } from "./hammer";
+import { buildFlash } from "./flash";
+import { buildStumpy } from "./stumpy";
 import { applyCamo } from "./camo";
-import { unitHullMaterial } from "./unitFog";
 import {
   advanceGait,
   GAIT_SETTLE_RATE,
@@ -9,7 +13,6 @@ import {
   legSwing,
   settleToward,
   TEAM_DEFS,
-  UNIT_DEFS,
   seatHull,
   unitAnchor,
   WHEEL_RADIUS,
@@ -29,81 +32,6 @@ import {
  * ~26-unit tank hull reads as roughly a 2-cell footprint.
  */
 
-function box(
-  parent: THREE.Group,
-  w: number,
-  h: number,
-  d: number,
-  x: number,
-  y: number,
-  z: number,
-  color: number,
-): void {
-  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), unitHullMaterial(color));
-  mesh.position.set(x, y, z);
-  parent.add(mesh);
-}
-
-function barrel(
-  parent: THREE.Group,
-  radius: number,
-  length: number,
-  x: number,
-  y: number,
-  z: number,
-  elevation: number,
-  color: number,
-): void {
-  // Elevating pivot at the trunnion: the tube lies straight along +Z inside
-  // it so combat FX can aim barrel pitch by setting pivot.rotation.x, and a
-  // "tip" marker at the muzzle gives the exact barrel-tip world position
-  // (including hull grade pitch/roll and turret yaw) for muzzle solutions.
-  const pivot = new THREE.Group();
-  pivot.name = "barrel";
-  pivot.position.set(x, y, z);
-  pivot.rotation.x = -elevation;
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(radius, radius * 1.25, length, 8),
-    unitHullMaterial(color),
-  );
-  // CylinderGeometry runs along +Y; rotate to lie along +Z.
-  mesh.rotation.x = Math.PI / 2;
-  mesh.position.set(0, 0, length / 2);
-  pivot.add(mesh);
-  const tip = new THREE.Object3D();
-  tip.name = "tip";
-  tip.position.set(0, 0, length);
-  pivot.add(tip);
-  parent.add(pivot);
-}
-
-/**
- * Road wheels for a tracked hull: `stations.length` wheels per side at the
- * given half-track `x`, rolling radius `radius` (mesh origin on the axle so
- * `rotation.x` spins them). Geometry is pre-rotated (axle along X), so the
- * meshes stay direct hull children and the hull-bbox tests keep reading the
- * same footprint.
- */
-function addWheels(
-  parent: THREE.Group,
-  radius: number,
-  width: number,
-  stations: readonly number[],
-  halfTrack: number,
-  axleY: number,
-): void {
-  for (const z of stations) {
-    for (const x of [-halfTrack, halfTrack]) {
-      const geo = new THREE.CylinderGeometry(radius, radius, width, 10);
-      geo.rotateZ(Math.PI / 2);
-      const wheel = new THREE.Mesh(geo, unitHullMaterial(0x3a3a40));
-      wheel.name = "wheel";
-      wheel.position.set(x, axleY, z);
-      parent.add(wheel);
-    }
-  }
-}
-
 /** Rest barrel elevation per tank kind, radians (matches the build poses). */
 export function restBarrelElevation(kind: UnitKind): number {
   switch (kind) {
@@ -121,7 +49,6 @@ export function restBarrelElevation(kind: UnitKind): number {
 }
 
 function buildBody(kind: UnitKind, parent: THREE.Group): void {
-  const def = UNIT_DEFS[kind];
   // Traverse-limited turret subgroup: tanks carry the turret box + barrel
   // here, the commander its whole upper torso. Combat FX yaws the body
   // (hull) and this group (relative) separately.
@@ -130,72 +57,15 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
   parent.add(turret);
   parent.userData.turret = turret;
   if (kind === "flash") {
-    // Hull longer than wide along +Z (direction of travel): a tank wider
-    // than long reads as driving sideways.
-    box(parent, 13, 6, 18, 0, 4, 0, def.color);
-    addWheels(parent, 3, 1.6, [-6, 0, 6], 6.9, 3);
-    box(turret, 8, 5, 9, 0, 9.5, -1, def.color);
-    box(turret, 8.5, 1.5, 9.5, 0, 7, -1, def.accent);
-    barrel(turret, 1.2, 14, 0, 9.5, 3, 0.03, def.accent);
+    buildFlash(parent, turret);
   } else if (kind === "stump") {
-    box(parent, 18, 8, 26, 0, 5, 0, def.color);
-    box(parent, 19, 2.5, 27, 0, 2, 0, def.accent);
-    addWheels(parent, 4, 2, [-8, 0, 8], 9.4, 4);
-    box(turret, 12, 7, 14, 0, 12.5, -2, def.color);
-    barrel(turret, 1.6, 22, 0, 12.5, 4, 0.05, def.accent);
+    buildStumpy(parent, turret);
   } else if (kind === "hammer") {
-    box(parent, 16, 8, 24, 0, 5, 0, def.color);
-    addWheels(parent, 4, 2, [-7, 0, 7], 8.4, 4);
-    box(turret, 10, 6, 10, 0, 11, -2, def.accent);
-    barrel(turret, 1.8, 32, 0, 13, 0, Math.PI / 4.5, def.accent);
+    buildHammer(parent, turret);
   } else if (kind === "peewee") {
-    // peewee: light infantry scout bot — a small two-leg walker with a
-    // hand-cannon on a light torso mount, the smallest silhouette on the
-    // field. Legs pivot at the hip (geometry translated to the joint) so
-    // the commander's alternating walk gait strides it via `getLegs`.
-    for (const x of [-2.5, 2.5]) {
-      const geo = new THREE.BoxGeometry(3, 5, 4);
-      geo.translate(0, -2.5, 0);
-      const leg = new THREE.Mesh(geo, unitHullMaterial(def.accent));
-      leg.name = "leg";
-      leg.position.set(x, 5, 0);
-      leg.userData.baseY = 5;
-      parent.add(leg);
-    }
-    box(turret, 7, 4.5, 8, 0, 7.25, 0, def.color);
-    box(turret, 7.5, 1.5, 8.5, 0, 5.5, 0, def.accent);
-    box(turret, 3.5, 3, 3.5, 0, 11, 0, def.color);
-    box(turret, 1.5, 2, 1.5, 0, 11, 2.25, def.accent);
-    barrel(turret, 0.9, 10, 0, 8, 2, 0.04, def.accent);
+    buildPeewee(parent, turret);
   } else {
-    // commander: biped construction kbot, the tallest silhouette on the field.
-    // Legs pivot at the hip (geometry translated so the mesh origin sits at
-    // the hip joint) for the alternating walk gait in `advanceLocomotion`.
-    for (const x of [-4, 4]) {
-      const geo = new THREE.BoxGeometry(5, 14, 6);
-      geo.translate(0, -7, 0);
-      const leg = new THREE.Mesh(geo, unitHullMaterial(def.color));
-      leg.name = "leg";
-      leg.position.set(x, 14, 0);
-      leg.userData.baseY = 14;
-      parent.add(leg);
-    }
-    box(turret, 15, 15, 11, 0, 21.5, 0, def.color);
-    box(turret, 16, 3, 12, 0, 26, 0, def.accent);
-    box(turret, 7, 6, 7, 0, 32, 0, def.color);
-    box(turret, 2, 3, 2, 0, 32, 4, def.accent);
-    const antenna = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.6, 0.6, 14, 6),
-      unitHullMaterial(def.accent),
-    );
-    antenna.position.set(3, 40, -2);
-    turret.add(antenna);
-    // No gun tube: the bolt leaves from a chest-height muzzle marker so the
-    // muzzle solution reads live world state like every other kind.
-    const tip = new THREE.Object3D();
-    tip.name = "tip";
-    tip.position.set(0, 30, 6);
-    turret.add(tip);
+    buildCommander(parent, turret);
   }
 }
 

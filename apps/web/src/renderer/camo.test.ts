@@ -37,7 +37,7 @@ function hullPaintMeshes(body: THREE.Group): THREE.Mesh[] {
   body.traverse((child) => {
     if (child.userData.noHighlight) return;
     const mesh = child as THREE.Mesh;
-    if (!mesh.isMesh || child.name === "wheel") return;
+    if (!mesh.isMesh || child.name === "wheel" || child.userData.noCamo) return;
     const mat = mesh.material as THREE.MeshLambertMaterial | undefined;
     if (mat && "emissive" in mat && "color" in mat) out.push(mesh);
   });
