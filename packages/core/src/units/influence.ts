@@ -11,14 +11,25 @@ import { TEAM_DEFS, type TeamId } from "./types.js";
  * per-tick grid walk). A cell's freshness holds at 1 through
  * `INFLUENCE_FRESH_SECONDS`, then fades linearly to 0 at
  * `INFLUENCE_STALE_SECONDS` (nanolathe's `freshness` precedent: full for
- * seconds, fading across the one-minute memory limit).
+ * seconds, fading across the memory limit — but to 0, not their 0.25
+ * floor, so abandoned ground fully clears).
  *
- * Claim rules (see `paintInfluence`):
- * - claimed by one team: that faction's color, alpha scaled by freshness —
- *   stale ground (no unit nearby for a long time) fades toward transparent;
+ * Claim rules (see `paintInfluence`): per-team freshness is first smoothed
+ * with a 3×3 box blur (the timestamps-compatible analogue of nanolathe's
+ * soft `AddDisc` falloff — weights can't live in last-seen cells, so the
+ * softening happens at read time instead of write time), then:
+ * - claimed by one team: that faction's color, alpha scaled by smoothed
+ *   freshness — stale ground (no unit nearby for a long time) fades
+ *   toward transparent;
  * - claimed by both (contested): the two faction colors blended, weighted
- *   by relative freshness — the fresher side leans the mix;
+ *   by relative smoothed freshness — the fresher side leans the mix;
  * - claimed by neither: fully transparent.
+ *
+ * The blur is what makes territory read as one contiguous blob per side
+ * instead of scattered cells: it fills single-cell pinholes, softens the
+ * ragged disc edges, and damps the leading-edge pop when a moving unit's
+ * disc first covers a cell (a lone fresh cell paints at ~1/9 strength and
+ * swells as its neighbours stamp in).
  *
  * Perf: the grid is ~40×32 cells for the shipping map size, updates touch
  * only the discs around live units (~20 cells each), and the full repaint
@@ -34,9 +45,9 @@ export const INFLUENCE_CELL_WORLD = 128;
 /** Presence radius stamped around each live unit, world units. */
 export const INFLUENCE_RADIUS_WORLD = 384;
 /** Full-strength window after a unit was last nearby, seconds. */
-export const INFLUENCE_FRESH_SECONDS = 8;
+export const INFLUENCE_FRESH_SECONDS = 12;
 /** Age at which presence has fully faded, seconds. */
-export const INFLUENCE_STALE_SECONDS = 60;
+export const INFLUENCE_STALE_SECONDS = 90;
 /** Peak overlay alpha for fully fresh ground (terrain must read through). */
 export const TERRITORY_MAX_ALPHA = 0.38;
 
@@ -135,8 +146,11 @@ export function influenceFreshness(lastSeen: number, now: number): number {
   // Negative stamps mean "never visited" — without this guard a fresh map
   // at small `now` reads the -1 sentinel as a recent visit (age = now + 1).
   if (lastSeen < 0) return 0;
-  const age = now - lastSeen;
-  if (!(age >= 0)) return 0;
+  // Clamp, never zero: stamps live in a Float32Array while `now` is float64,
+  // so a stamp taken this very tick rounds *up* past `now` on ~half of all
+  // ticks — reading that as "future, therefore stale" strobed fresh ground
+  // transparent on ~1 in 9 repaints. A future stamp means "just seen".
+  const age = Math.max(0, now - lastSeen);
   if (age <= INFLUENCE_FRESH_SECONDS) return 1;
   if (age >= INFLUENCE_STALE_SECONDS) return 0;
   return 1 - (age - INFLUENCE_FRESH_SECONDS) / (INFLUENCE_STALE_SECONDS - INFLUENCE_FRESH_SECONDS);
@@ -156,9 +170,11 @@ export function factionColorBytes(team: TeamId): RgbBytes {
 
 /**
  * Paint the field into `out` (cols*rows RGBA, row 0 north) at `now`:
+ * per-team freshness is smoothed with a 3×3 box blur (edge-clamped), then
  * single-team ground takes its faction color, contested ground blends both
- * weighted by relative freshness, and alpha scales with the strongest claim
- * so stale ground fades out. One buffer feeds both surfaces.
+ * weighted by relative smoothed freshness, and alpha scales with the
+ * strongest smoothed claim so stale ground fades out. One buffer feeds
+ * both surfaces.
  */
 export function paintInfluence(
   field: InfluenceField,
@@ -168,24 +184,40 @@ export function paintInfluence(
 ): void {
   const [a0, a1] = [field.seen[0]!, field.seen[1]!];
   const [c0, c1] = colors;
-  for (let i = 0; i < field.cols * field.rows; i++) {
-    const fa = influenceFreshness(a0[i]!, now);
-    const fb = influenceFreshness(a1[i]!, now);
-    const o = i * 4;
-    const peak = Math.max(fa, fb);
-    if (!(peak > 0)) {
-      out[o] = 0;
-      out[o + 1] = 0;
-      out[o + 2] = 0;
-      out[o + 3] = 0;
-      continue;
+  const { cols, rows } = field;
+  // Mean freshness over the 3×3 neighbourhood (edges replicate outward).
+  const smooth = (grid: Float32Array, r: number, c: number): number => {
+    let sum = 0;
+    for (let dr = -1; dr <= 1; dr++) {
+      const rr = Math.min(rows - 1, Math.max(0, r + dr));
+      for (let dc = -1; dc <= 1; dc++) {
+        const cc = Math.min(cols - 1, Math.max(0, c + dc));
+        sum += influenceFreshness(grid[rr * cols + cc]!, now);
+      }
     }
-    // Contested: lean the mix toward the fresher side (even strengths meet
-    // halfway); single-team: the weight collapses to that faction exactly.
-    const w = fb / (fa + fb);
-    out[o] = Math.round(c0.r + (c1.r - c0.r) * w);
-    out[o + 1] = Math.round(c0.g + (c1.g - c0.g) * w);
-    out[o + 2] = Math.round(c0.b + (c1.b - c0.b) * w);
-    out[o + 3] = Math.round(255 * TERRITORY_MAX_ALPHA * peak);
+    return sum / 9;
+  };
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const i = r * cols + c;
+      const fa = smooth(a0, r, c);
+      const fb = smooth(a1, r, c);
+      const o = i * 4;
+      const peak = Math.max(fa, fb);
+      if (!(peak > 0)) {
+        out[o] = 0;
+        out[o + 1] = 0;
+        out[o + 2] = 0;
+        out[o + 3] = 0;
+        continue;
+      }
+      // Contested: lean the mix toward the fresher side (even strengths meet
+      // halfway); single-team: the weight collapses to that faction exactly.
+      const w = fb / (fa + fb);
+      out[o] = Math.round(c0.r + (c1.r - c0.r) * w);
+      out[o + 1] = Math.round(c0.g + (c1.g - c0.g) * w);
+      out[o + 2] = Math.round(c0.b + (c1.b - c0.b) * w);
+      out[o + 3] = Math.round(255 * TERRITORY_MAX_ALPHA * peak);
+    }
   }
 }

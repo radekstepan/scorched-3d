@@ -98,6 +98,18 @@ describe("TerritoryFx", () => {
     fx.dispose();
   });
 
+  it("never strobes fresh ground at float32-hostile timestamps", () => {
+    // Stamps round through a Float32Array while `now` is float64: 8/30
+    // rounds *up*, so stamping + painting at that tick used to read the
+    // whole fresh disc as "future, therefore stale" (transparent).
+    const stored = new Float32Array([8 / 30]);
+    expect(stored[0]!).toBeGreaterThan(8 / 30);
+    const fx = new TerritoryFx(WORLD_W, WORLD_D);
+    fx.update([unit(0, 0, 0)], 8 / 30, true);
+    expect(texelOf(fx, 0, 0)[3]).toBe(Math.round(255 * TERRITORY_MAX_ALPHA));
+    fx.dispose();
+  });
+
   it("hands the minimap a copy, so React state never aliases the live buffer", () => {
     const fx = new TerritoryFx(WORLD_W, WORLD_D);
     fx.update([unit(0, 0, 0)], 10, true);

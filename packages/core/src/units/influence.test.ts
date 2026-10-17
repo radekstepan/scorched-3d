@@ -90,6 +90,38 @@ describe("influence freshness", () => {
     expect(influenceFreshness(Number.NaN, 10)).toBe(0);
     expect(influenceFreshness(10, Number.NaN)).toBe(0);
   });
+
+  it("pins the slower fade shape: 12 s hold, gone at 90 s", () => {
+    // Tripwire on the retune (was 8 s / 60 s): ground must linger longer.
+    expect(INFLUENCE_FRESH_SECONDS).toBe(12);
+    expect(INFLUENCE_STALE_SECONDS).toBe(90);
+    expect(influenceFreshness(100, 100 + 12)).toBe(1);
+    const justPast = influenceFreshness(100, 100 + 12.01);
+    expect(justPast).toBeGreaterThan(0.99);
+    expect(justPast).toBeLessThan(1);
+    // At age 30 the old curve read ~0.58; the slower tail must read higher.
+    expect(influenceFreshness(100, 130)).toBeGreaterThan(0.7);
+    expect(influenceFreshness(100, 100 + 90)).toBe(0);
+  });
+
+  it("reads float32-rounded-up stamps as fresh instead of strobing (no flash)", () => {
+    // Stamps live in a Float32Array while `now` is float64: a stamp taken
+    // this very tick rounds *up* past `now` on ~half of all ticks. That
+    // used to read as "future, therefore stale" and blanked fresh ground
+    // on ~1 in 9 repaints — the territory flash.
+    expect(influenceFreshness(10, 9.999)).toBe(1);
+    const stored = new Float32Array(1);
+    let hostile = 0;
+    for (let k = 0; k <= 300; k++) {
+      const now = k / 30;
+      stored[0] = now;
+      if (stored[0]! > now) hostile++;
+      // The exact production path: stamp `now`, paint at the same `now`.
+      expect(influenceFreshness(stored[0]!, now)).toBe(1);
+    }
+    // The sweep must actually cover hostile ticks or it proves nothing.
+    expect(hostile).toBeGreaterThan(0);
+  });
 });
 
 describe("paintInfluence", () => {
@@ -152,6 +184,48 @@ describe("paintInfluence", () => {
     const field = createInfluenceField(WORLD_W, WORLD_D);
     const [, , , a] = paintAt(field, 100, 0, 0);
     expect(a).toBe(0);
+  });
+
+  it("fills a single-cell pinhole inside held ground (contiguous blob)", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    field.seen[0]!.fill(10);
+    const mid = (field.rows >> 1) * field.cols + (field.cols >> 1);
+    field.seen[0]![mid] = -1;
+    const out = new Uint8ClampedArray(field.cols * field.rows * 4);
+    paintInfluence(field, 10, out, [BLUE, ORANGE]);
+    // 8 of 9 neighbours fresh → ~8/9 peak alpha, faction color kept.
+    const peak = Math.round(255 * TERRITORY_MAX_ALPHA);
+    expect(out[mid * 4 + 3]).toBeGreaterThan(peak / 2);
+    expect([out[mid * 4], out[mid * 4 + 1], out[mid * 4 + 2]]).toEqual([BLUE.r, BLUE.g, BLUE.b]);
+  });
+
+  it("dims a lone stamped cell instead of painting a scattered dot", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    const mid = (field.rows >> 1) * field.cols + (field.cols >> 1);
+    field.seen[0]![mid] = 10;
+    const out = new Uint8ClampedArray(field.cols * field.rows * 4);
+    paintInfluence(field, 10, out, [BLUE, ORANGE]);
+    // 1 of 9 fresh → ~1/9 peak: present, but reads as a swell, not a pop.
+    const peak = Math.round(255 * TERRITORY_MAX_ALPHA);
+    const alpha = out[mid * 4 + 3]!;
+    expect(alpha).toBeGreaterThan(0);
+    expect(alpha).toBeLessThan(peak / 4);
+  });
+
+  it("softens held-ground edges over one cell instead of a hard rim", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    const { cols, rows } = field;
+    for (let r = 0; r < rows >> 1; r++) field.seen[0]!.fill(10, r * cols, (r + 1) * cols);
+    const out = new Uint8ClampedArray(field.cols * field.rows * 4);
+    paintInfluence(field, 10, out, [BLUE, ORANGE]);
+    const peak = Math.round(255 * TERRITORY_MAX_ALPHA);
+    const edge = (rows >> 1) * cols + (cols >> 1);
+    // First unheld row: 3 of 9 neighbours fresh → a partial fringe.
+    const fringe = out[edge * 4 + 3]!;
+    expect(fringe).toBeGreaterThan(0);
+    expect(fringe).toBeLessThan(peak);
+    // Two rows out: no fresh neighbours → transparent.
+    expect(out[(edge + 2 * cols) * 4 + 3]).toBe(0);
   });
 
   it("pins the radius below the disengage bound so discs read local", () => {
