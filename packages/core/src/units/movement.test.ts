@@ -21,6 +21,7 @@ import {
   ROUTE_WAYPOINTS,
   sampleGround,
   separationVector,
+  SEPARATION_COAST_DISTANCE,
   SEPARATION_RADIUS,
   SEPARATION_SIDESTEP,
   SEPARATION_SPEED,
@@ -772,8 +773,13 @@ describe("adjacent-unit deadlock", () => {
     // Both arrived instead of grinding inside the stop radius.
     expect(hasOrder(movers[0]!)).toBe(false);
     expect(hasOrder(movers[1]!)).toBe(false);
-    expect(movers[0]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS);
-    expect(movers[1]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS);
+    // Post-arrival the pair still un-stacks (empty routes, so nothing drives
+    // on): the arrival slop (14) plus one separation-coast glide (8) past
+    // the goal is the honest bound — the old arrival-slop-only bound held
+    // with 0.48u of margin and pinned post-arrival stillness that separation
+    // was never contracted to keep (the sibling already rests 33+ past).
+    expect(movers[0]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS - SEPARATION_COAST_DISTANCE);
+    expect(movers[1]!.z).toBeGreaterThan(400 - ARRIVE_RADIUS - SEPARATION_COAST_DISTANCE);
   });
 
   it("opens coincident patrol hulls past the stop radius", () => {
@@ -969,6 +975,245 @@ describe("crowd separation", () => {
     }
     const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
     expect(gap).toBeGreaterThan(16);
+  });
+});
+
+describe("separation coast", () => {
+  /**
+   * Count gap-direction reversals landing within 4 ticks of the previous one:
+   * the ~30 Hz boundary sawtooth, where the homing drive pulls the pair back
+   * inside the stop radius every other tick. Legitimate passes and slow
+   * jostling space their reversals tens of ticks apart; chatter alternates
+   * every 1-2 ticks. Base rates on these fixtures: 23-95 per 900 ticks.
+   */
+  function chatterFlips(gaps: readonly number[]): number {
+    let chatter = 0;
+    let prev = 0;
+    let lastFlip = -Infinity;
+    for (let n = 1; n < gaps.length; n++) {
+      const radial = gaps[n]! - gaps[n - 1]!;
+      if (n > 1 && radial !== 0 && prev !== 0 && Math.sign(radial) !== Math.sign(prev)) {
+        if (n - lastFlip <= 4) chatter++;
+        lastFlip = n;
+      }
+      if (radial !== 0) prev = radial;
+    }
+    return chatter;
+  }
+
+  function pairGap(a: Mover, b: Mover): number {
+    return Math.hypot(a.x - b.x, a.z - b.z);
+  }
+
+  it("crossing patrol pair exits the radius without chattering", () => {
+    // Head-on patrol crossing through each other: the exit must glide, not
+    // sawtooth ~1u at ~30 Hz against the homing drive (base: 66 chatter
+    // flips here). The final gap proves the pair actually passes instead of
+    // freezing apart.
+    const field = openField();
+    const kinds = ["hammer", "hammer"] as const;
+    const routes: RoutePoint[][] = [
+      [
+        { x: -30, z: 0 },
+        { x: 400, z: 0 },
+      ],
+      [
+        { x: 30, z: 0 },
+        { x: -400, z: 0 },
+      ],
+    ];
+    let movers: Mover[] = [
+      { x: -15, z: 0, hull: Math.PI / 2, leg: 1 },
+      { x: 15, z: 0, hull: -Math.PI / 2, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    const gaps: number[] = [pairGap(movers[0]!, movers[1]!)];
+    for (let n = 0; n < 900; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      gaps.push(pairGap(movers[0]!, movers[1]!));
+    }
+    expect(chatterFlips(gaps)).toBe(0);
+    expect(gaps[gaps.length - 1]).toBeGreaterThan(300);
+  });
+
+  it("fast pack-advance pair rides clear without chattering", () => {
+    // Two peewees converging on one point (the pack-advance shape, with the
+    // fastest crawl on the field): base pins the gap at the boundary
+    // [48.0, 49.0] with 89 chatter flips; the pair must ride outside and
+    // advance instead. Total travel guards against freezing trivially green.
+    const field = openField();
+    const kinds = ["peewee", "peewee"] as const;
+    const routes: RoutePoint[][] = [
+      [
+        { x: -10, z: 0 },
+        { x: 0, z: 400 },
+      ],
+      [
+        { x: 10, z: 0 },
+        { x: 0, z: 400 },
+      ],
+    ];
+    let movers: Mover[] = [
+      { x: -10, z: 0, hull: 0, leg: 1 },
+      { x: 10, z: 0, hull: 0, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    const gaps: number[] = [pairGap(movers[0]!, movers[1]!)];
+    let travel = 0;
+    for (let n = 0; n < 900; n++) {
+      const next = advanceMovers([...kinds], movers, routes, dt, field);
+      travel += Math.hypot(next[0]!.x - movers[0]!.x, next[0]!.z - movers[0]!.z);
+      movers = next;
+      gaps.push(pairGap(movers[0]!, movers[1]!));
+    }
+    expect(chatterFlips(gaps)).toBe(0);
+    expect(Math.min(...gaps.slice(-120))).toBeGreaterThan(STOP_RADIUS);
+    expect(travel).toBeGreaterThan(500);
+  });
+
+  it("grazing fast cross resolves without chattering", () => {
+    // Fast tanks brushing past on crossing courses: the pair axis rotates
+    // under the coast heading here, which re-entered mid-glide until the
+    // drive paused for the glide (base: 51 chatter flips). Max gap proves
+    // the encounter resolves into open water instead of sticking.
+    const field = openField();
+    const kinds = ["flash", "flash"] as const;
+    const routes: RoutePoint[][] = [
+      [
+        { x: -30, z: 0 },
+        { x: 400, z: 0 },
+      ],
+      [
+        { x: 30, z: 0 },
+        { x: -400, z: 0 },
+      ],
+    ];
+    let movers: Mover[] = [
+      { x: -15, z: 0, hull: Math.PI / 2, leg: 1 },
+      { x: 15, z: 0, hull: -Math.PI / 2, leg: 1 },
+    ];
+    const dt = 1 / 60;
+    const gaps: number[] = [pairGap(movers[0]!, movers[1]!)];
+    for (let n = 0; n < 900; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+      gaps.push(pairGap(movers[0]!, movers[1]!));
+    }
+    expect(chatterFlips(gaps)).toBe(0);
+    expect(Math.max(...gaps)).toBeGreaterThan(100);
+  });
+
+  it("parked holders settle exactly on the radius", () => {
+    // Two holders parked 20 apart: no drive, so separation alone opens them
+    // and motion must end exactly — per-tick displacement to zero, no
+    // limit cycle, no leftover coast budget. Holds never arm the coast, so
+    // they stop on the radius instead of gliding past their parking spot.
+    const field = openField();
+    const kinds = ["stump", "stump"] as const;
+    const routes: RoutePoint[][] = [[], []];
+    let movers: Mover[] = [
+      { x: -10, z: 0, hull: 0, leg: 0, hold: true },
+      { x: 10, z: 0, hull: 0, leg: 0, hold: true },
+    ];
+    const dt = 1 / 60;
+    const tailSteps: number[] = [];
+    for (let n = 0; n < 600; n++) {
+      const next = advanceMovers([...kinds], movers, routes, dt, field);
+      if (n >= 540) {
+        tailSteps.push(Math.hypot(next[0]!.x - movers[0]!.x, next[0]!.z - movers[0]!.z));
+        tailSteps.push(Math.hypot(next[1]!.x - movers[1]!.x, next[1]!.z - movers[1]!.z));
+      }
+      movers = next;
+    }
+    expect(pairGap(movers[0]!, movers[1]!)).toBeGreaterThanOrEqual(STOP_RADIUS);
+    expect(Math.max(...tailSteps)).toBe(0);
+    expect(movers[0]!.sep).toBeUndefined();
+    expect(movers[1]!.sep).toBeUndefined();
+  });
+
+  it("drains the coast budget exactly, then ends", () => {
+    // A lone hull with a hand-armed 8u budget and nowhere to drive (empty
+    // route): the glide covers exactly the budget at separation speed — 16
+    // ticks at 0.5u — and the key drops, so no residue can revive later.
+    const field = openField();
+    const kinds = ["flash"] as const;
+    const routes: RoutePoint[][] = [[]];
+    let movers: Mover[] = [{ x: 0, z: 0, hull: 0, leg: 0, sep: { x: 8, z: 0 } }];
+    const dt = 1 / 60;
+    for (let n = 0; n < 16; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    expect(movers[0]!.x).toBe(8);
+    expect(movers[0]!.z).toBe(0);
+    expect(movers[0]!.sep).toBeUndefined();
+    for (let n = 0; n < 60; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    expect(movers[0]!.x).toBe(8);
+    expect(movers[0]!.z).toBe(0);
+  });
+
+  it("absorbs the coast against a wall instead of banking it", () => {
+    // A hull gliding into a steep wall holds and drops the budget: a pinned
+    // hull rests like before instead of owing motion it can never spend.
+    const field = walledField();
+    const wallEdge = worldX(field, 16) - CELL_PIXELS / 2;
+    const kinds = ["flash"] as const;
+    const routes: RoutePoint[][] = [[]];
+    let movers: Mover[] = [{ x: wallEdge - 0.25, z: 0, hull: 0, leg: 0, sep: { x: 8, z: 0 } }];
+    const dt = 1 / 60;
+    for (let n = 0; n < 60; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt, field);
+    }
+    expect(movers[0]!.x).toBe(wallEdge - 0.25);
+    expect(movers[0]!.z).toBe(0);
+    expect(movers[0]!.sep).toBeUndefined();
+    const { cellX, cellZ } = cellFromWorld(field, movers[0]!.x, movers[0]!.z);
+    expect(isWalkable(field, cellX, cellZ)).toBe(true);
+  });
+
+  it("pauses unordered drive for the glide but never the ordered floor", () => {
+    // A coasting patrol hull turns in place while the glide carries it (no
+    // drive-back into the crowd it just left); an ordered twin keeps its
+    // floor drive under the same glide, so explicit orders stay alive.
+    const field = openField();
+    const dt = 1 / 60;
+    const route: RoutePoint[][] = [[{ x: 0, z: 0 }, { x: 0, z: 400 }]];
+    const patrol = advanceMovers(
+      ["stump"],
+      [{ x: 0, z: 0, hull: Math.PI, leg: 1, sep: { x: 8, z: 0 } }],
+      route,
+      dt,
+      field,
+    )[0]!;
+    expect(patrol.x).toBeCloseTo(0.5, 9);
+    expect(patrol.z).toBe(0);
+    expect(patrol.hull).not.toBe(Math.PI);
+    // An ordered twin carrying a live coast (armed mid-order by a shove, as
+    // `orderMover` itself strips stale ones): the glide AND the drive both
+    // advance, so explicit orders stay alive through crowds.
+    const orderedMover: Mover = {
+      x: 0,
+      z: 0,
+      hull: 0,
+      leg: 0,
+      sep: { x: 8, z: 0 },
+      order: { points: [{ x: 0, z: 400 }], at: 0 },
+    };
+    const ordered = advanceMovers(["stump"], [orderedMover], [[]], dt, field)[0]!;
+    expect(ordered.x).toBeCloseTo(0.5, 9);
+    expect(ordered.z).toBeGreaterThan(0.5);
+  });
+
+  it("clears the coast on new orders and holds", () => {
+    // Explicit new intent supersedes the glide like the departure lead-in:
+    // a repathed hull never resumes a stale coast heading.
+    const coasting: Mover = { x: 0, z: 0, hull: 0, leg: 0, sep: { x: 8, z: 0 } };
+    const ordered = orderMover(coasting, [{ x: 0, z: 400 }]);
+    expect(ordered.sep).toBeUndefined();
+    expect(hasOrder(ordered)).toBe(true);
+    const held = holdMover(coasting);
+    expect(held.sep).toBeUndefined();
+    expect(held.hold).toBe(true);
   });
 });
 

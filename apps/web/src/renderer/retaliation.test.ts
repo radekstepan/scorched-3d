@@ -1656,24 +1656,29 @@ describe("UnitMovement firing footwork", () => {
     movement.threatenUnit(3, 0, 0, 0);
     let victimDrift = 0;
     let victimStepped = false;
+    const winnerTravel = [0, 0, 0];
+    let winnerPrev = [1, 2, 3].map((i) => ({ ...movement.moverState(i)! }));
     for (let n = 0; n < 600; n++) {
       movement.update(1 / 60);
       const victim = movement.moverState(0)!;
       victimDrift = Math.max(victimDrift, Math.hypot(victim.x - 0, victim.z - 0));
       if (victim.threat?.sidestep) victimStepped = true;
+      [1, 2, 3].forEach((i, k) => {
+        const s = movement.moverState(i)!;
+        winnerTravel[k]! += Math.hypot(s.x - winnerPrev[k]!.x, s.z - winnerPrev[k]!.z);
+        winnerPrev[k] = { ...s };
+      });
     }
     // Engaged the whole time (live memory) yet never a single step.
     expect(movement.hasThreat(0)).toBe(true);
     expect(victimStepped).toBe(false);
     expect(victimDrift).toBeLessThan(1e-9);
-    // Every winner strafes around the loser.
-    for (const [i, sx, sz] of [
-      [1, 200, 0],
-      [2, 200, 60],
-      [3, 200, -60],
-    ] as const) {
-      const winner = movement.moverState(i)!;
-      expect(Math.hypot(winner.x - sx, winner.z - sz)).toBeGreaterThan(30);
+    // Every winner strafes around the loser: path length, not endpoint —
+    // the orbit's phase at tick 600 is steering detail (an endpoint pin
+    // breaks on any glide retune), but circling 150u+ in 10 s is the
+    // strafing itself, on either side of the separation-coast change.
+    for (const travel of winnerTravel) {
+      expect(travel).toBeGreaterThan(150);
     }
     movement.dispose();
   });

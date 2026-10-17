@@ -162,6 +162,29 @@ export const SEPARATION_SPEED = 30;
  */
 export const SEPARATION_SIDESTEP = 0.6;
 /**
+ * Separation-coast budget, world units: after a hull's last fresh push (see
+ * `resolveSeparation`), it keeps gliding along the applied push heading for
+ * up to this distance instead of stopping dead on the stop radius. A hard
+ * push cutoff chatters against the homing drive — the drive pulls the pair
+ * back inside every other tick, so the gap sawtooths ~1u at ~30 Hz (measured
+ * on patrol crossings and pack advances) — while the coast carries the pair
+ * clear of the boundary in one smooth glide and then ends exactly. The coast
+ * only ever drains: it cannot re-arm without re-entering the radius, so
+ * cruising convoys outside the deadlock band still feel nothing (the task-72
+ * verdict stands — this is a time-decaying exit glide, not an outer band).
+ */
+export const SEPARATION_COAST_DISTANCE = 8;
+/**
+ * Valid separation-coast budget on a mover, if any (see `Mover.sep`): finite
+ * and non-zero, so a corrupted budget strips instead of steering the hull.
+ */
+function validSep(mover: Mover): { x: number; z: number } | undefined {
+  const sep = mover.sep;
+  if (!sep || !Number.isFinite(sep.x) || !Number.isFinite(sep.z)) return undefined;
+  if (sep.x === 0 && sep.z === 0) return undefined;
+  return sep;
+}
+/**
  * Blocked-drive patience, seconds: a patrolling hull pinned against too-steep
  * ground (a patrol leg can cut across a slope its waypoints straddle) skips
  * to its next waypoint after this long instead of grinding in place forever.
@@ -282,6 +305,17 @@ export interface Mover {
    * once joined, matching the `stuck`/`stun` convention.
    */
   leadIn?: RoutePoint;
+  /**
+   * Remaining separation-coast displacement, world units along the last
+   * applied push heading (see `SEPARATION_COAST_DISTANCE`): the exit glide a
+   * hull keeps after leaving the stop radius, drained by `resolveSeparation`
+   * at `SEPARATION_SPEED` — never re-armed except by a fresh push, so it
+   * always ends exactly. Absent — never zero-length — once drained, walled
+   * off (absorbed, not banked), or superseded: orders and holds clear it
+   * like the departure lead-in, since explicit new intent wins over a glide.
+   * Non-finite values strip instead of lingering, fail clean never stuck.
+   */
+  sep?: { x: number; z: number };
 }
 
 /**
@@ -434,8 +468,9 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * orders omit it and drive at full kind speed.
  */
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
-  // A player order supersedes any departure: the hull never resumes it.
-  const { leadIn: _superseded, ...rest } = clearThreat(mover);
+  // A player order supersedes any departure and any separation coast: the
+  // hull never resumes either — explicit new intent wins over a glide.
+  const { leadIn: _superseded, sep: _glide, ...rest } = clearThreat(mover);
   const calm = rest;
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
   const order: MoveOrder =
@@ -447,8 +482,9 @@ export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: numb
 
 /** Hold in place: drop any order and stop patrolling until ordered again. */
 export function holdMover(mover: Mover): Mover {
-  // A hold supersedes any departure like an order does: nothing resumes it.
-  const { leadIn: _superseded, ...rest } = clearThreat(mover);
+  // A hold supersedes any departure and any separation coast like an order
+  // does: nothing resumes them, so a held hull stops crisply.
+  const { leadIn: _superseded, sep: _glide, ...rest } = clearThreat(mover);
   return { ...rest, order: undefined, hold: true };
 }
 
@@ -1122,7 +1158,17 @@ export function advanceMovers(
   const scales = movers.map((m, i) => {
     const scale = spacingScale(i, movers);
     // Ordered hulls never fully stop for spacing: see ORDER_SPACING_FLOOR.
-    return hasOrder(m) ? Math.max(scale, ORDER_SPACING_FLOOR) : scale;
+    if (hasOrder(m)) return Math.max(scale, ORDER_SPACING_FLOOR);
+    // A coasting hull lets the glide carry it instead of driving back into
+    // the crowd it just left: without the pause the homing drive re-enters
+    // the radius mid-glide (faster than any fixed coast rate once the pair
+    // axis rotates under the frozen heading) and the exit stutters. The
+    // pause always lifts — the budget drains in finite time, so this can
+    // never deadlock — and ordered hulls are exempt so explicit orders stay
+    // alive through crowds (their floor drive is slower than the glide, and
+    // the goal-opposed strip keeps the two from fighting head-on).
+    if (validSep(m)) return 0;
+    return scale;
   });
   // Pursuit tracks moving attackers: the pre-tick roster positions double as
   // the foe lookup (same snapshot discipline as spacing/separation). The
@@ -1134,7 +1180,24 @@ export function advanceMovers(
       tactics ? { ...tactics, self: i } : null,
     ),
   );
-  return resolveSeparation(driven, kinds, dt, terrain);
+  // Separation-coast state rides the tick, not the drive: `driveToward`
+  // rebuilds movers without it (like the departure lead-in), so re-attach
+  // each input's coast budget onto its driven step here — one place instead
+  // of every `advanceMover` return — before the resolve drains it. Only
+  // finite, non-zero budgets survive; anything else strips, fail clean.
+  const coasted = driven.map((d, i) => {
+    const input = movers[i];
+    const sep = input ? validSep(input) : undefined;
+    if (sep) {
+      return { ...d, sep: { x: sep.x, z: sep.z } };
+    }
+    if (d.sep) {
+      const { sep: _dropped, ...rest } = d;
+      return rest;
+    }
+    return d;
+  });
+  return resolveSeparation(coasted, kinds, dt, terrain);
 }
 
 /**
@@ -1359,38 +1422,113 @@ function resolveSeparation(
     const { radial, side, coincident } = separationComponents(i, movers, SEPARATION_RADIUS);
     let pushX = radial.x + side.x;
     let pushZ = radial.z + side.z;
-    if (pushX === 0 && pushZ === 0) return mover;
-    // Ordered hulls keep the lane-opening shove but never the radial part
-    // that pushes them back away from their goal: a trailer following a
-    // leader still sidesteps off the line (the circulation half is always
-    // kept - it is what staggers pairs instead of letting them mirror in
-    // lockstep), it just never loses ground. Coincident splits are exempt:
-    // with no pair axis "away from the goal" is meaningless, so the
-    // deterministic split stays whole and drive still opens the pair.
-    // Arrival still closes, and the full-weight inner radial still opens
-    // ordered deadlocks.
-    const goal = coincident ? null : orderGoalDir(mover);
-    if (goal) {
-      const along = radial.x * goal.x + radial.z * goal.z;
-      if (along < 0) {
-        pushX -= along * goal.x;
-        pushZ -= along * goal.z;
-        if (pushX === 0 && pushZ === 0) return mover;
+    if (pushX !== 0 || pushZ !== 0) {
+      // Ordered hulls keep the lane-opening shove but never the radial part
+      // that pushes them back away from their goal: a trailer following a
+      // leader still sidesteps off the line (the circulation half is always
+      // kept - it is what staggers pairs instead of letting them mirror in
+      // lockstep), it just never loses ground. Coincident splits are exempt:
+      // with no pair axis "away from the goal" is meaningless, so the
+      // deterministic split stays whole and drive still opens the pair.
+      // Arrival still closes, and the full-weight inner radial still opens
+      // ordered deadlocks.
+      const goal = coincident ? null : orderGoalDir(mover);
+      if (goal) {
+        const along = radial.x * goal.x + radial.z * goal.z;
+        if (along < 0) {
+          pushX -= along * goal.x;
+          pushZ -= along * goal.z;
+        }
       }
     }
-    const nx = mover.x + pushX * step;
-    const nz = mover.z + pushZ * step;
-    if (!terrain || !stepBlocked(terrain, mover.x, mover.z, nx, nz, kind)) {
-      return { ...mover, x: nx, z: nz };
+    if (pushX !== 0 || pushZ !== 0) {
+      // Fresh push: the unstack step itself is unchanged (constant magnitude,
+      // finite-time exit, terrain-gated with axis-slide fallback) — and a
+      // move also re-arms the coast budget along the applied heading, so the
+      // eventual exit glides instead of stopping dead on the radius. A push
+      // walled off on every axis arms nothing: a hull that never moved has
+      // no exit to smooth, and stays bit-identical to before. Explicit holds
+      // never arm either: a held hull has no drive to chatter against, so it
+      // exits to the radius and stops exactly there instead of gliding on
+      // past its parking spot.
+      const arm = mover.hold !== true;
+      const nx = mover.x + pushX * step;
+      const nz = mover.z + pushZ * step;
+      const blocked =
+        terrain != null && stepBlocked(terrain, mover.x, mover.z, nx, nz, kind);
+      const slideX =
+        terrain != null && blocked && !stepBlocked(terrain, mover.x, mover.z, nx, mover.z, kind);
+      const slideZ =
+        terrain != null &&
+        blocked &&
+        !slideX &&
+        !stepBlocked(terrain, mover.x, mover.z, mover.x, nz, kind);
+      if (terrain == null || !blocked) {
+        return arm ? { ...mover, x: nx, z: nz, sep: freshCoast(pushX, pushZ) } : { ...mover, x: nx, z: nz };
+      }
+      // Blocked push: try sliding along one axis rather than clipping.
+      if (slideX) return arm ? { ...mover, x: nx, sep: freshCoast(pushX, pushZ) } : { ...mover, x: nx };
+      if (slideZ) return arm ? { ...mover, z: nz, sep: freshCoast(pushX, pushZ) } : { ...mover, z: nz };
+      return mover;
     }
-    // Blocked push: try sliding along one axis rather than clipping.
-    if (!stepBlocked(terrain, mover.x, mover.z, nx, mover.z, kind)) {
-      return { ...mover, x: nx };
+    // No fresh push: drain the armed coast, if any, along its stored heading
+    // — the frozen direction is what kills the chatter, since the applied
+    // step stays continuous across boundary crossings instead of toggling
+    // 0↔full every other tick. The glide ends exactly (the last tick takes
+    // only what remains), degrades to axis slides against terrain like a
+    // fresh push, and absorbs against a wall instead of banking motion.
+    // Explicit holds drain nothing (they never arm, so this only strips a
+    // stale budget that predates the hold order — belt and braces).
+    const sep = mover.sep;
+    if (!sep) return mover;
+    if (mover.hold === true) {
+      const { sep: _stale, ...rest } = mover;
+      return rest;
     }
-    if (!stepBlocked(terrain, mover.x, mover.z, mover.x, nz, kind)) {
-      return { ...mover, z: nz };
+    const remain = Math.hypot(sep.x, sep.z);
+    if (!(remain > 1e-9)) {
+      const { sep: _drained, ...rest } = mover;
+      return rest;
     }
-    return mover;
+    const take = Math.min(remain, SEPARATION_SPEED * dt);
+    const dx = (sep.x / remain) * take;
+    const dz = (sep.z / remain) * take;
+    const px = mover.x + dx;
+    const pz = mover.z + dz;
+    let ax = 0;
+    let az = 0;
+    if (!terrain || !stepBlocked(terrain, mover.x, mover.z, px, pz, kind)) {
+      ax = dx;
+      az = dz;
+    } else if (dx !== 0 && !stepBlocked(terrain, mover.x, mover.z, px, mover.z, kind)) {
+      ax = dx;
+    } else if (dz !== 0 && !stepBlocked(terrain, mover.x, mover.z, mover.x, pz, kind)) {
+      az = dz;
+    } else {
+      const { sep: _absorbed, ...rest } = mover;
+      return rest;
+    }
+    const left = { x: sep.x - ax, z: sep.z - az };
+    if (Math.hypot(left.x, left.z) <= 1e-9) {
+      const { sep: _drained, ...rest } = mover;
+      return { ...rest, x: mover.x + ax, z: mover.z + az };
+    }
+    return { ...mover, x: mover.x + ax, z: mover.z + az, sep: left };
   });
   return unstacked;
+}
+
+/**
+ * Fresh separation-coast budget along an applied push heading: a full
+ * `SEPARATION_COAST_DISTANCE` glide that `resolveSeparation` drains after
+ * the hull exits the stop radius. The heading is normalized, so a crowded
+ * hull coasts no further than a paired one — the budget is an exit glide,
+ * not stacked momentum. The push is never zero here (callers check first).
+ */
+function freshCoast(pushX: number, pushZ: number): { x: number; z: number } {
+  const mag = Math.hypot(pushX, pushZ);
+  return {
+    x: (pushX / mag) * SEPARATION_COAST_DISTANCE,
+    z: (pushZ / mag) * SEPARATION_COAST_DISTANCE,
+  };
 }
