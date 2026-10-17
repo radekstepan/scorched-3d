@@ -59,6 +59,7 @@ import {
   solveBallisticHigh,
   solveShotClearing,
   stepElevation,
+  STRATEGY_STICKY_ADMISSION_MARGIN,
   THREAT_ENGAGE_RADIUS,
   treesOnSegment,
   trunksOnBarrel,
@@ -1222,23 +1223,32 @@ export class CombatFx {
   }
 
   /**
-   * Traverse a shelled hull's turret toward its live attacker (the canvas
-   * calls this alongside `threatenUnit` on every threat hook): the victim's
-   * gun answers the incoming direction even before the scheduler draws the
-   * pair, so turrets visibly turn toward shell fire instead of sitting on
-   * stale aims. Rides the shared pending traverse (slewed every tick in
-   * `slewPending`, turret-only while hulls are externally driven), so it
-   * never fires by itself — the range/terrain admission in `launchShot`
-   * still gates every round — never fights the scheduler (drawn pairs
-   * overwrite the goal, and the aim feeds squad focus + sticky preference
-   * like any traverse), and dies with either end. Wrecks, self-tracks, and
-   * unknown indices refuse.
+   * Answer incoming fire without restarting a valid gun acquisition. The
+   * damage hook can arrive from several shooters between weapon retries;
+   * letting each hit steal the goal prevents the turret from ever settling.
+   * Like Nanolathe's retain-before-acquire weapon scan (retail spec 06
+   * §3), threats acquire only after the current enemy becomes invalid.
+   * Strategic scheduling still chooses better targets on its normal clock;
+   * range/wood/terrain admission and obstruction pursuit remain authoritative.
    */
   trackThreat(victim: number, attacker: number): void {
     const count = this.units.children.length;
     if (!Number.isInteger(victim) || !Number.isInteger(attacker)) return;
     if (victim < 0 || attacker < 0 || victim >= count || attacker >= count) return;
     if (victim === attacker || this.destroyed[victim] || this.destroyed[attacker]) return;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const side = placed?.[victim]?.team;
+    const hostile = (index: number): boolean =>
+      side === undefined || (placed?.[index]?.team !== undefined && placed[index]!.team !== side);
+    if (!hostile(attacker)) return;
+    const current = this.pending.get(victim);
+    const kind = this.unitKind(victim);
+    const target = current === undefined ? undefined : this.units.children[current];
+    const body = this.units.children[victim]!;
+    if (current !== undefined && target && kind && !this.destroyed[current] && hostile(current)) {
+      const distance = Math.hypot(target.position.x - body.position.x, target.position.z - body.position.z);
+      if (distance <= this.admissionFor(kind) + STRATEGY_STICKY_ADMISSION_MARGIN) return;
+    }
     this.aimPending(victim, attacker);
   }
 

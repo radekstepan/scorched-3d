@@ -3656,3 +3656,69 @@ describe("CombatFx independent team weapon clocks", () => {
     expect(moving[2]).toBe(resting[2]);
   });
 });
+
+describe("CombatFx retaliation aim retention", () => {
+  function skirmish() {
+    const units = new THREE.Group();
+    const placements = [
+      { kind: "stump" as const, team: 0 as const, x: 0, z: 0, rotation: 0 },
+      { kind: "flash" as const, team: 1 as const, x: -300, z: 300, rotation: (3 * Math.PI) / 4 },
+      { kind: "flash" as const, team: 1 as const, x: 300, z: 300, rotation: (-3 * Math.PI) / 4 },
+    ];
+    units.userData.units = placements.map((p) => ({ ...p, cellX: 0, cellZ: 0 }));
+    for (const p of placements) {
+      units.add(buildSpawnedUnit(p.kind, p.team, p.x, p.z, p.rotation, () => 100));
+    }
+    // A forest seat with two clear diagonals around the defender.
+    const trees = [-75, 0, 75].map((x) => ({ x, z: -50, groundY: 90, standing: true }));
+    const fx = new CombatFx(new THREE.Scene(), units, () => 0, {
+      groundY: () => 100, blastFeatures: () => {}, treeStands: () => trees,
+    });
+    fx.setExternalHull(true);
+    fx.onUnitThreatened = (victim, attacker) => fx.trackThreat(victim, attacker);
+    return { fx, units };
+  }
+
+  it("finishes aiming and returns fire in a forest under alternating incoming threats", () => {
+    const { fx } = skirmish();
+    const defenderShots = new Set<unknown>();
+    const priv = fx as unknown as { shots: { attacker: number }[]; pending: Map<number, number> };
+    fx.trackThreat(0, 1);
+    for (let frame = 0; frame < 150; frame++) {
+      // Canvas damage hook at burst cadence, alongside real independent
+      // enemy weapons and their projectile impacts.
+      if (frame % 6 === 0) fx.onUnitThreatened!(0, frame % 12 === 0 ? 2 : 1, 0, 0, 0.01, false);
+      fx.update(1 / 60);
+      for (const shot of priv.shots) if (shot.attacker === 0) defenderShots.add(shot);
+    }
+    expect(fx.isDestroyedAt(0)).toBe(false);
+    expect(defenderShots.size).toBeGreaterThanOrEqual(2);
+    expect(priv.pending.get(0)).toBe(1);
+    fx.dispose();
+  });
+
+  it.each(["wreck", "retreat"])("answers a new threat after its target becomes a %s", (reason) => {
+    const { fx, units } = skirmish();
+    fx.trackThreat(0, 1);
+    fx.trackThreat(0, 2);
+    const priv = fx as unknown as { pending: Map<number, number>; destroyed: boolean[] };
+    expect(priv.pending.get(0)).toBe(1);
+    if (reason === "wreck") priv.destroyed[1] = true;
+    else units.children[1]!.position.x = -2000;
+    fx.trackThreat(0, 2);
+    expect(priv.pending.get(0)).toBe(2);
+    fx.dispose();
+  });
+
+  it("refuses friendly threats without replacing the enemy aim", () => {
+    const { fx, units } = skirmish();
+    units.userData.units[2].team = 0;
+    fx.trackThreat(0, 2);
+    const priv = fx as unknown as { pending: Map<number, number> };
+    expect(priv.pending.has(0)).toBe(false);
+    fx.trackThreat(0, 1);
+    fx.trackThreat(0, 2);
+    expect(priv.pending.get(0)).toBe(1);
+    fx.dispose();
+  });
+});

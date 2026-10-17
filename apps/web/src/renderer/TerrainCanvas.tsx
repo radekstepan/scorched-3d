@@ -717,9 +717,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // (ordered hulls record a self-defense memory and keep driving —
     // pursuing on arrival — while holding hulls refuse, and wrecks and
     // self-splashes stay silent). Arcing shells investigate past the
-    // retaliation gates, and the victim's turret traverses onto the live
-    // shooter either way (range and terrain still gate every round). The
-    // threat feeds the same core drive the patrol uses, so pursuit never
+    // retaliation gates; an idle gun acquires the shooter while an engaged
+    // gun finishes its current aim (range and terrain still gate every round).
+    // The threat feeds the same core drive the patrol uses, so pursuit never
     // teleports.
     combat.onUnitThreatened = (victim, attacker, ax, az, _damageAdd, shell) => {
       movement.threatenUnit(victim, attacker, ax, az, shell);
