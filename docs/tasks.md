@@ -16,12 +16,12 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-The red HQ light needs to travel further, be more dispersed with a gentler fade
+The red HQ light needs to have wider cones, travel further and fade more gently into the distance but also onto the sides.
 
-Make new units drive off the road leading from HQ and not block the entrance
+Make new units drive off the road leading from HQ and not block the entrance. THis is still not fixed from the last batch.
 
-Fireflies need to move slightly faster and illuminate an area slightly less but the light radius travels further
+Fireflies need to move slightly faster.
 
-Fog should appear during daytime also in low lying areas
+Add an overlay we can toggle that would show in the minimap and on actual map the area each team considers "theirs". If an area is contested, fade the 2 factions colors. Same in an area that hasn't been around a unit in a long time. Make this performant.
 
-Make the starting teams units more balanced
+When we manually move units somewhere, they stop all their behaviors like movememtn, attacking etc. Wrong. They should go where we ask them to do, while responding to any fire if attacked, but still moving to where we want them. And once they get to the destination, they continue with the SAME behavior as now of wayfinding, monitoring, attacking, defending etc.
