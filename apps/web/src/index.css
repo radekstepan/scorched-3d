@@ -12,16 +12,17 @@ button { cursor: pointer; }
 button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--chrome-accent); outline-offset: 3px; }
 .font-display { font-family: var(--font-display); }
 .command-shell { height: 100vh; height: 100dvh; display: grid; grid-template: 68px minmax(0, 1fr) 30px / 244px minmax(0, 1fr) 244px; overflow: hidden; }
-.command-header { grid-column: 1 / -1; display: flex; align-items: center; gap: 36px; padding: 0 22px; background: #11140f; border-bottom: 1px solid var(--chrome-line); }
-.command-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+/* Share the shell tracks so the tabs follow the viewport, independent of logo width. */
+.command-header { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; background: #11140f; border-bottom: 1px solid var(--chrome-line); }
+.command-brand { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin-left: 22px; }
 .brand-mark { color: #d3e398; flex-shrink: 0; }
 .command-brand strong { display: block; font-family: var(--font-display); font-size: 26px; font-weight: 700; letter-spacing: 2px; line-height: 1; color: #d3e398; white-space: nowrap; }
 .brand-3d { display: inline-block; font-size: 14px; letter-spacing: 0; color: #ced2c2; border: 1px solid #ced2c24a; padding: 2px 3px; margin-left: 6px; transform: translateY(-2px); }
 .command-brand small { display: block; font: 7px var(--font-mono); letter-spacing: 1.9px; margin-top: 7px; color: #818975; }
-.command-nav { display: flex; align-self: stretch; gap: 24px; align-items: stretch; }
+.command-nav { grid-column: 2; display: flex; align-self: stretch; gap: 24px; align-items: stretch; padding-left: 14px; }
 .command-nav > * { display: flex; align-items: center; padding: 0 4px; font: 10px var(--font-mono); letter-spacing: 1px; color: #9aa68c; border-bottom: 2px solid transparent; }
 .command-nav .active { color: var(--chrome-accent); border-bottom-color: var(--chrome-accent); }
-.command-status { margin-left: auto; display: flex; gap: 9px; align-items: center; color: #b4bfa6; font-size: 8px; letter-spacing: 1px; }
+.command-status { margin-left: auto; margin-right: 22px; display: flex; gap: 9px; align-items: center; color: #b4bfa6; font-size: 8px; letter-spacing: 1px; }
 .command-status span { margin-left: 12px; color: #9aa68c; }
 .command-status i, .command-footer i { display: inline-block; width: 5px; height: 5px; background: var(--chrome-accent); border-radius: 50%; }
 .battlefield { grid-column: 2; grid-row: 2; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #171d17; }
@@ -48,10 +49,11 @@ input[type="range"] { height: 4px; background: transparent; }
    controls stay reachable without two overlapping permanent sidebars. */
 @media (max-width: 1000px) {
   .command-shell { grid-template: 60px 36px minmax(0, 1fr) 28px / minmax(0, 1fr); position: relative; }
-  .command-header { gap: 20px; padding: 0 14px; }
+  .command-header { display: flex; gap: 20px; padding: 0 14px; }
+  .command-brand { margin-left: 0; }
   .command-brand strong { font-size: 19px; }
   .command-brand small, .command-status { display: none; }
-  .command-nav { margin-left: auto; }
+  .command-nav { margin-left: auto; padding-left: 0; }
   .command-nav > * { font-size: 8px; }
   .mobile-panel-controls { grid-row: 2; display: flex; background: var(--chrome); border-bottom: 1px solid var(--chrome-line); }
   .mobile-panel-controls button { flex: 1; font-size: 9px; color: #c1cca7; border-right: 1px solid var(--chrome-line); }

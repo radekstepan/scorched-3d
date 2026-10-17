@@ -19,6 +19,27 @@ describe("RTS command shell", () => {
     expect(source.indexOf("<TerrainCanvas")).toBeLessThan(source.indexOf("</main>"));
   });
 
+  it("aligns desktop navigation with viewport content using the shell's own tracks", () => {
+    const desktop = css.split("@media (max-width: 1000px)")[0] ?? "";
+    const rule = (selector: string) => desktop.slice(desktop.indexOf(`${selector} {`)).split("}")[0] ?? "";
+    expect(rule(".command-header")).toContain("display: grid;");
+    expect(rule(".command-header")).toContain("grid-template-columns: subgrid;");
+    expect(rule(".command-nav")).toContain("grid-column: 2;");
+    expect(rule(".battlefield")).toContain("grid-column: 2;");
+    // The button's padding completes the viewport heading's 18px inset.
+    const navInset = Number(rule(".command-nav").match(/padding-left: (\d+)px/)?.[1]);
+    const buttonInset = Number(rule(".command-nav > *").match(/padding: 0 (\d+)px/)?.[1]);
+    const headingInset = Number(rule(".viewport-heading").match(/left: (\d+)px/)?.[1]);
+    expect(navInset + buttonInset).toBe(headingInset);
+  });
+
+  it("restores compact navigation after the desktop tracks collapse on mobile", () => {
+    const mobile = css.split("@media (max-width: 1000px)")[1];
+    expect(mobile).toMatch(/\.command-header\s*\{[^}]*display: flex;/);
+    expect(mobile).toMatch(/\.command-brand\s*\{[^}]*margin-left: 0;/);
+    expect(mobile).toMatch(/\.command-nav\s*\{[^}]*margin-left: auto;[^}]*padding-left: 0;/);
+  });
+
   it("scrolls both rails and selection cards inside their available space", () => {
     expect(css).toMatch(/\.command-rail\s*\{[^}]*min-height: 0;[^}]*overflow-y: auto/);
     expect(css).toMatch(/\.selection-tray\s*\{[^}]*left: 12px;[^}]*right: 12px;[^}]*overflow-x: auto/);
