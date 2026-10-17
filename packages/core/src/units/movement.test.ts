@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
-import { HULL_PIVOT_FLOOR, HULL_TURN_RATE, turnAuthority, yawToTarget } from "./facing.js";
+import { HULL_PIVOT_FLOOR, HULL_TURN_RATE, TURRET_LIMIT, turnAuthority, yawToTarget } from "./facing.js";
 import { THREAT_MEMORY_DURATION } from "./retaliation.js";
 import {
   advanceMover,
@@ -471,6 +471,128 @@ describe("hit-stun hesitation", () => {
     expect(gap).toBeGreaterThan(20);
     // And the stun clock still ticked down through the shove.
     expect(next[0]!.stun).toBeCloseTo(0.35, 12);
+  });
+});
+
+describe("stunned threat facing (defender retaliation)", () => {
+  const DT = 1 / 60;
+  const yawDelta = (a: number, b: number): number =>
+    Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+  // Patrol leg at bearing atan2(-400, -400) ≈ -2.36: facing it from hull 2.5
+  // INCREASES the hull, while the threat sits at bearing 0 (facing it
+  // DECREASES the hull) — the two facings discriminate by direction.
+  function duelRoute(): RoutePoint[] {
+    return [
+      { x: 0, z: 0 },
+      { x: -400, z: -400 },
+    ];
+  }
+  function threatened(stun: number, hull: number, tx: number, tz: number, ttl = 10): Mover {
+    return { x: 0, z: 0, hull, leg: 1, stun, threat: { attacker: 1, x: tx, z: tz, ttl } };
+  }
+  // Traverse-limited turrets (knee under 90°): only these can sit strictly
+  // past twice their traverse without wrapping — walkers at ±90° hit full
+  // urgency exactly dead-astern instead.
+  const TURRETED = ["flash", "stump", "hammer"] as const;
+
+  it("faces a live attacker while stunned instead of the patrol leg", () => {
+    const mover = threatened(0.5, 2.5, 0, 200);
+    const next = advanceMover("hammer", mover, duelRoute(), DT);
+    // Toward the threat bearing (0), away from the leg bearing (-2.36).
+    expect(next.hull).toBeLessThan(mover.hull);
+    expect(yawDelta(next.hull, 0)).toBeLessThan(yawDelta(mover.hull, 0));
+    // Still a stun: no translation, the clock ticks, the memory is kept.
+    expect(next.x).toBe(0);
+    expect(next.z).toBe(0);
+    expect(next.stun).toBeCloseTo(0.5 - DT, 12);
+    expect(next.threat?.attacker).toBe(1);
+  });
+
+  it("turns at full traverse while stunned and far off its attacker", () => {
+    // Past twice the turret traverse the gun provably cannot bear, so the
+    // hull hurries at the traverse cap instead of pivot-crawling.
+    for (const kind of TURRETED) {
+      const knee = TURRET_LIMIT[kind] ?? Math.PI / 2;
+      const mover = threatened(0.5, 2 * knee + 0.2, 0, 200);
+      const next = advanceMover(kind, mover, duelRoute(), DT);
+      expect(Math.abs(next.hull - mover.hull)).toBeCloseTo(
+        (HULL_TURN_RATE[kind] ?? 1.5) * DT,
+        9,
+      );
+      expect(yawDelta(next.hull, 0)).toBeLessThan(yawDelta(mover.hull, 0));
+    }
+  });
+
+  it("pivots deliberately once a stand-off hold brings the gun to bear", () => {
+    // Inside the turret arc the gun answers while the hull settles at the
+    // pivot floor — the task-186 anti-whip regime, preserved bit-exactly.
+    for (const kind of UNIT_KINDS) {
+      const mover: Mover = {
+        x: 0, z: 0, hull: 0.3, leg: 1,
+        threat: { attacker: 1, x: 0, z: 100, ttl: 10 },
+      };
+      const next = advanceMover(kind, mover, duelRoute(), DT);
+      expect(next.x).toBe(0);
+      expect(next.z).toBe(0);
+      expect(Math.abs(next.hull - mover.hull)).toBeCloseTo(
+        (HULL_PIVOT_FLOOR[kind] ?? 0.35) * (HULL_TURN_RATE[kind] ?? 1.5) * DT,
+        9,
+      );
+    }
+  });
+
+  it("hurries a far-off stand-off hold at full traverse", () => {
+    for (const kind of TURRETED) {
+      const knee = TURRET_LIMIT[kind] ?? Math.PI / 2;
+      const mover: Mover = {
+        x: 0, z: 0, hull: 2 * knee + 0.2, leg: 1,
+        threat: { attacker: 1, x: 0, z: 100, ttl: 10 },
+      };
+      const next = advanceMover(kind, mover, duelRoute(), DT);
+      expect(next.x).toBe(0);
+      expect(next.z).toBe(0);
+      expect(Math.abs(next.hull - mover.hull)).toBeCloseTo(
+        (HULL_TURN_RATE[kind] ?? 1.5) * DT,
+        9,
+      );
+    }
+  });
+
+  it("eases between deliberate and full across the urgency band", () => {
+    // Mid-band (1.5× traverse) reads strictly between the floor and the cap.
+    for (const kind of ["hammer", "peewee"] as const) {
+      const knee = TURRET_LIMIT[kind] ?? Math.PI / 2;
+      const mover: Mover = {
+        x: 0, z: 0, hull: 1.5 * knee, leg: 1,
+        threat: { attacker: 1, x: 0, z: 100, ttl: 10 },
+      };
+      const next = advanceMover(kind, mover, duelRoute(), DT);
+      const step = Math.abs(next.hull - mover.hull);
+      const cap = (HULL_TURN_RATE[kind] ?? 1.5) * DT;
+      expect(step).toBeGreaterThan((HULL_PIVOT_FLOOR[kind] ?? 0.35) * cap);
+      expect(step).toBeLessThan(cap);
+    }
+  });
+
+  it("keeps player orders winning over threat facing while stunned", () => {
+    const ordered = orderMover({ x: 0, z: 0, hull: 2.5, leg: 0 }, [{ x: -400, z: -400 }]);
+    const mover: Mover = { ...ordered, stun: 0.5, threat: { attacker: 1, x: 0, z: 200, ttl: 10 } };
+    const next = advanceMover("hammer", mover, duelRoute(), DT);
+    // Toward the order cursor (bearing -2.36: the hull increases), not the
+    // threat — and the cursor stays frozen, at the deliberate floor.
+    expect(next.hull).toBeGreaterThan(mover.hull);
+    expect(next.order!.at).toBe(0);
+    expect(next.hull - mover.hull).toBeCloseTo(
+      (HULL_PIVOT_FLOOR.hammer ?? 0.35) * (HULL_TURN_RATE.hammer ?? 1.5) * DT,
+      9,
+    );
+  });
+
+  it("falls back to the patrol leg when the memory dies under the stun", () => {
+    const mover = threatened(0.5, 2.5, 0, 200, DT / 2);
+    const next = advanceMover("hammer", mover, duelRoute(), DT);
+    expect(next.threat).toBeUndefined();
+    expect(next.hull).toBeGreaterThan(mover.hull);
   });
 });
 

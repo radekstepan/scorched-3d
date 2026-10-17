@@ -1845,3 +1845,77 @@ describe("UnitMovement firing footwork", () => {
     movement.dispose();
   });
 });
+
+describe("1v1 defender retaliation", () => {
+  it("lets a slow-traverse defender answer a rapid attacker instead of only taking hits", () => {
+    // The full game loop (movement → combat, canvas hook wiring): a hammer
+    // with its back to a peewee at 500u. Before the fix the hammer's hull
+    // oscillated — stuns faced the patrol leg while pursuit gaps faced the
+    // threat — all at the 0.35× pivot floor, so its ±50° turret never bore
+    // and it died having fired 0 volleys (peewee untouched). Stunned hulls
+    // now face their attacker urgently, so the gun answers mid-duel.
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "hammer", team: 0, cellX: 1, cellZ: 1, rotation: Math.PI },
+      { kind: "peewee", team: 1, cellX: 2, cellZ: 2, rotation: Math.PI },
+    ];
+    for (const spot of [
+      { pos: new THREE.Vector3(0, 100, 0), rot: Math.PI },
+      { pos: new THREE.Vector3(0, 100, 500), rot: Math.PI },
+    ]) {
+      const body = new THREE.Group();
+      body.rotation.order = "YXZ";
+      body.rotation.y = spot.rot;
+      body.position.copy(spot.pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const routeSet: RoutePoint[][] = [
+      [
+        { x: 0, z: 0 },
+        { x: 300, z: 0 },
+      ],
+      [
+        { x: 0, z: 500 },
+        { x: -300, z: 500 },
+      ],
+    ];
+    const fx = new CombatFx(new THREE.Scene(), group, mulberry32(7), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    fx.setExternalHull(true);
+    const movement = new UnitMovement(group, routeSet, { groundY: () => 100 });
+    fx.onUnitKilled = (i) => movement.markDestroyed(i);
+    fx.onUnitStunned = (i, damageAdd, blastX, blastZ) => movement.stunUnit(i, damageAdd, blastX, blastZ);
+    fx.onUnitThreatened = (victim, attacker, ax, az, _damageAdd, shell) => {
+      movement.threatenUnit(victim, attacker, ax, az, shell);
+      fx.trackThreat(victim, attacker);
+    };
+    fx.onObstructedShot = (attacker, target, x, z) => movement.seekEngage(attacker, target, x, z);
+    const priv = fx as unknown as { shots: { attacker: number }[] };
+    const seen = new Set<unknown>();
+    let hammerVolleys = 0;
+    for (let frame = 0; frame < 60 * 40; frame++) {
+      movement.update(1 / 60);
+      fx.update(1 / 60);
+      movement.setDamage(fx.damageList());
+      for (const shot of priv.shots) {
+        if (!seen.has(shot)) {
+          seen.add(shot);
+          if (shot.attacker === 0) hammerVolleys++;
+        }
+      }
+      if (fx.isDestroyedAt(0) || fx.isDestroyedAt(1)) break;
+    }
+    // The defender fights back: multiple aimed volleys downrange, real
+    // damage on the attacker (a hammer shell chips 0.16 point-blank).
+    expect(hammerVolleys).toBeGreaterThanOrEqual(2);
+    expect(fx.damageList()[1]!).toBeGreaterThan(0.2);
+    movement.dispose();
+    fx.dispose();
+  });
+});

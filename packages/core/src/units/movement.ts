@@ -1,7 +1,7 @@
 import { terrainDetour } from "./detour.js";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
-import { HULL_TURN_RATE, stepAngle, turnAuthority, wrapAngle, yawToTarget } from "./facing.js";
+import { HULL_TURN_RATE, stepAngle, TURRET_LIMIT, turnAuthority, wrapAngle, yawToTarget } from "./facing.js";
 import { accumulateStun, IMPACT_MAX_SHOVE, impactKick, tickStun } from "./impact.js";
 import {
   THREAT_LEASH_RADIUS,
@@ -902,24 +902,52 @@ export function advanceMover(
 
 /**
  * Tick a hit-stunned mover by `dt` seconds: turn the hull toward its current
- * target (order cursor, departure lead-in, or patrol leg — frozen, never
- * advanced) at the kind's turn rate, count the clock down, and drain the
- * standing recoil slide so the hull recoils away from the blast instead of
- * freezing. Both keys drop
+ * target (order cursor, departure lead-in, live threat memory, or patrol leg —
+ * frozen, never advanced) at the kind's turn rate, count the clock down, and
+ * drain the standing recoil slide so the hull recoils away from the blast
+ * instead of freezing. Both keys drop
  * when the clock expires so recoiled-then-free snapshots compare equal with
- * never-hit ones. Pure: returns a new mover.
+ * never-hit ones. The threat slots between the departure and the patrol leg,
+ * mirroring `advanceMover` steering priority: a stunned defender staggers to
+ * face its attacker (urgently — see `turnHull`) so the gun answers through
+ * the recoil instead of oscillating between patrol-facing stuns and
+ * threat-facing gaps while it dies, while ordered and departing hulls keep
+ * their heading and the drive itself stays held. Pure: returns a new mover.
  */
 /**
  * Turn a hull toward `want` at the kind's traverse cap scaled by turn
  * authority for `speed` (see facing `turnAuthority`): rolling hulls carve
  * at full traverse exactly as before, held hulls neutral-steer at the
  * pivot floor instead of whipping — and the cap still bounds every step.
- * Pure.
+ *
+ * `urgent` marks facing a live threat while held: the hull hurries at full
+ * traverse while its gun provably cannot bear (facing error past twice the
+ * kind's turret traverse), then eases down to the pivot floor across the
+ * urgency band as the error closes inside the traverse — where the turret
+ * takes over and the deliberate task-186 settle applies bit-exactly. A
+ * defender caught flat-footed spins its gun into action instead of
+ * pivot-crawling while it dies, and steady stand-off tracking still creeps.
+ * Rolling callers already hold full authority, so urgency only ever lifts
+ * held facing. Pure.
  */
-function turnHull(kind: UnitKind, hull: number, want: number, dt: number, speed: number): number {
+function turnHull(
+  kind: UnitKind,
+  hull: number,
+  want: number,
+  dt: number,
+  speed: number,
+  urgent = false,
+): number {
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const top = MOVE_SPEED[kind] ?? 32;
-  return stepAngle(hull, want, rate * turnAuthority(kind, speed, top) * dt);
+  let authority = turnAuthority(kind, speed, top);
+  if (urgent && speed <= 0) {
+    const knee = TURRET_LIMIT[kind] ?? Math.PI / 2;
+    const error = Math.abs(wrapAngle(want - hull));
+    const urgency = knee > 0 ? Math.min(Math.max((error - knee) / knee, 0), 1) : 1;
+    authority = authority + (1 - authority) * urgency;
+  }
+  return stepAngle(hull, want, rate * authority * dt);
 }
 
 function tickStunned(
@@ -934,20 +962,31 @@ function tickStunned(
   const awake = tickThreat(mover, dt);
   const order = awake.order;
   let target: RoutePoint | null = null;
+  let urgent = false;
   if (order && order.at < order.points.length) {
     target = order.points[order.at] ?? null;
   } else if (!awake.hold && route.length >= 2) {
     // A departure in progress is the current target, ahead of the leg.
     if (awake.leadIn) {
       target = awake.leadIn;
+    } else if (awake.threat && awake.threat.ttl > 0) {
+      // A live grudge outranks the patrol leg (but never an order or a
+      // departure): the hull staggers to face its attacker at combat
+      // urgency, so rapid incoming fire cannot pin it patrol-facing while
+      // the turret waits for an arc that never comes.
+      target = { x: awake.threat.x, z: awake.threat.z };
+      urgent = true;
     } else {
       const leg = ((awake.leg % route.length) + route.length) % route.length;
       target = route[leg] ?? null;
     }
   }
   // A recoiling hull does not drive, so it faces its frozen target at the
-  // pivot floor — deliberately, never a whip mid-rock.
-  const hull = target ? turnHull(kind, awake.hull, yawToTarget(awake, target), dt, 0) : awake.hull;
+  // pivot floor — deliberately, never a whip mid-rock — unless it is
+  // staggering onto a live threat, which hurries at combat urgency.
+  const hull = target
+    ? turnHull(kind, awake.hull, yawToTarget(awake, target), dt, 0, urgent)
+    : awake.hull;
   const clock = awake.stun ?? 0;
   const remain = tickStun(clock, dt);
   // Recoil slide: drain the standing knockback over the beat at constant
@@ -1096,8 +1135,9 @@ function pursueStep(
       foes, tactics.teams, tactics.alive, tactics.hp,
     )
   ) {
-    // Holding hulls do not translate, so they face at the pivot floor.
-    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
+    // Holding hulls do not translate, so they face at combat urgency —
+    // hurrying until the gun bears, then settling deliberately.
+    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0, true), threat: memory };
   }
   // Firing-position footwork: a hull carrying a sidestep point walks the
   // short lateral shuffle first at any range — through the same drive
@@ -1110,7 +1150,7 @@ function pursueStep(
   if (step && Number.isFinite(step.x) && Number.isFinite(step.z)) {
     if (Math.hypot(step.x - mover.x, step.z - mover.z) <= SIDESTEP_ARRIVE_RADIUS) {
       const { sidestep: _arrived, ...rest } = memory;
-      return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: rest };
+      return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0, true), threat: rest };
     }
     const shuffle = driveToward(kind, mover, step, dt, spacing, terrain, undefined, crush);
     if (shuffle.skipped) {
@@ -1119,7 +1159,7 @@ function pursueStep(
     return { ...shuffle.mover, threat: memory };
   }
   if (holding) {
-    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
+    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0, true), threat: memory };
   }
   const driven = driveToward(kind, mover, { x: tx, z: tz }, dt, spacing, terrain, undefined, crush);
   if (driven.skipped) {
