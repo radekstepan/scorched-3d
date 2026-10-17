@@ -275,13 +275,17 @@ describe("UnitMovement retaliation", () => {
     expect(movement.hasThreat(0)).toBe(true);
     movement.dispose();
   });
-  it("lets player orders, holds, wrecks, and self-hits refuse the memory", () => {
+  it("lets wrecks and self-hits refuse the memory (ordered hulls answer)", () => {
     const { movement } = makeMovement();
+    // An ordered hull records a self-defense memory instead of refusing
+    // (holds still refuse — covered at the core level, where holds live).
     movement.orderUnit(0, { x: 100, z: 100 });
     movement.threatenUnit(0, 1, 500, 300);
-    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.isFighting(0)).toBe(true);
+    // A self-splash never steals it (victim === attacker refuses outright).
     movement.threatenUnit(0, 0, 500, 300);
-    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(1);
     movement.markDestroyed(1);
     movement.threatenUnit(1, 0, 0, 0);
     expect(movement.hasThreat(1)).toBe(false);
@@ -559,6 +563,75 @@ describe("UnitMovement team advance", () => {
     // on its order instead of pushing.
     expect(movement.moverState(1)?.threat?.attacker).toBe(2);
     expect(movement.hasThreat(0)).toBe(false);
+    movement.dispose();
+  });
+
+  it("answers fire while ordered, then pursues on arrival and patrols after", () => {
+    // A (team 0) ordered across the pocket while E (team 1) sits near the
+    // destination: the hit records a self-defense memory that never steers
+    // the march, converts to a pursuit on arrival, and expires into patrol.
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 12, cellZ: 10, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(250, 100, 80)]) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.copy(pos);
+      group.add(body);
+    }
+    const movement = new UnitMovement(
+      group,
+      [
+        [
+          { x: 0, z: 0 },
+          { x: 0, z: 400 },
+          { x: 400, z: 400 },
+          { x: 400, z: 0 },
+        ],
+        [
+          { x: 250, z: 80 },
+          { x: 250, z: 480 },
+          { x: 650, z: 480 },
+          { x: 650, z: 80 },
+        ],
+      ],
+      { groundY: () => 100 },
+    );
+    movement.orderUnit(0, { x: 300, z: 0 });
+    movement.threatenUnit(0, 1, 250, 80);
+    movement.update(1 / 60);
+    // The ordered hull answers the fire (live grudge, fighting) without
+    // abandoning its order — and never acquires a hunt of its own.
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.isFighting(0)).toBe(true);
+    expect(movement.moverState(0)?.threat?.attacker).toBe(1);
+    // It drives the full march to the destination with the memory live.
+    let ticks = 0;
+    while (movement.hasOrder(0) && ticks < 1200) {
+      movement.update(1 / 60);
+      ticks++;
+    }
+    expect(movement.hasOrder(0)).toBe(false);
+    const arrived = movement.moverState(0)!;
+    expect(arrived.x).toBeGreaterThan(200);
+    expect(arrived.hold).not.toBe(true);
+    // On arrival the memory converts to a normal pursuit: the leg stays
+    // frozen while the grudge steers instead of the patrol loop.
+    expect(movement.hasThreat(0)).toBe(true);
+    expect(arrived.leg).toBe(1);
+    for (let n = 0; n < 30; n++) movement.update(1 / 60);
+    expect(movement.moverState(0)!.leg).toBe(1);
+    // Once the attacker is wrecked the grudge clears and the patrol loop
+    // resumes: the hull leaves for its frozen leg (north toward waypoint 1).
+    movement.markDestroyed(1);
+    for (let n = 0; n < 600; n++) movement.update(1 / 60);
+    expect(movement.hasThreat(0)).toBe(false);
+    const resumed = movement.moverState(0)!;
+    expect(resumed.z).toBeGreaterThan(arrived.z);
+    expect(resumed.x).toBeLessThan(arrived.x);
     movement.dispose();
   });
 
@@ -1154,13 +1227,13 @@ describe("UnitMovement active battlefield", () => {
       [0, 0, 1],
       ["flash", "flash", "flash"],
     );
-    // A is driving a player order: it refuses the memory itself…
+    // A is driving a player order: it records a self-defense memory itself…
     movement.orderUnit(0, { x: -500, z: -500 });
     movement.threatenUnit(0, 2, 500, 0);
-    expect(movement.hasThreat(0)).toBe(false);
+    expect(movement.hasThreat(0)).toBe(true);
     movement.update(1 / 60);
-    // …but the side still reinforces the firing position.
-    expect(movement.hasThreat(0)).toBe(false);
+    // …and the side still reinforces the firing position.
+    expect(movement.hasThreat(0)).toBe(true);
     expect(movement.moverState(1)?.threat?.attacker).toBe(-1);
     movement.dispose();
   });

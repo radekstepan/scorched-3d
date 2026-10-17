@@ -298,8 +298,10 @@ export class UnitMovement {
 
   /**
    * Point a live hull at its attacker from (`ax`, `az`) (core
-   * `notifyThreat` against the patrol anchor, so only idle/patrolling hulls
-   * with a near, reachable threat pursue — ordered/holding hulls refuse).
+   * `notifyThreat` against the patrol anchor, so idle/patrolling hulls
+   * with a near, reachable threat pursue — ordered hulls record a
+   * self-defense memory the guns answer without steering the march
+   * (converting to a pursuit on arrival), while holding hulls refuse).
    * Arcing shell wounds (`shell`) investigate past the retaliation gates on
    * the hunt leash instead of staying silent, so a tank being shelled turns
    * toward the firing position. Wrecks refuse the memory (they hold
@@ -307,8 +309,8 @@ export class UnitMovement {
    * ignored), and same-team attackers never draw retaliation (friendly
    * shells are honest splash, never a grudge). Every genuine cross-team hit
    * also writes the side's shared intel board (see `intel`), even when the
-   * victim refuses the memory under orders — the mates still reinforce the
-   * firing position. Idempotent per tick: re-hits refresh, they never stack.
+   * victim is holding — the mates still reinforce the firing position.
+   * Idempotent per tick: re-hits refresh, they never stack.
    */
   threatenUnit(victim: number, attacker: number, ax: number, az: number, shell = false): void {
     const mover = this.movers[victim];
@@ -318,7 +320,7 @@ export class UnitMovement {
     if (victimTeam !== undefined && victimTeam === this.teamAt(attacker)) return;
     // Team-wide alert: the side learns the attacker's position the moment a
     // mate takes fire — even when the victim itself refuses the memory
-    // (ordered/holding hulls never pursue, but their mates still reinforce).
+    // (holding hulls never answer, but their mates still reinforce).
     // Damage is ground truth (the shooter is always inside weapon range), so
     // no engage gate applies; the sweep turns the record into advances.
     // Unknown shooters share nothing (there is no subject to remember).
@@ -435,8 +437,9 @@ export class UnitMovement {
     * hull's eyes (spotting is passive — ordered, holding, threatened, and
     * outnumbered hulls all report what they see through the same sight
     * picture, scout-aware), on top of damage alerts (`threatenUnit` writes
-    * the firing position even when the victim refuses the memory under
-    * orders) and HQ sightings — then prunes it (stale, dead, and
+    * the firing position even when the victim is holding — ordered victims
+    * record a self-defense memory too) and HQ sightings — then prunes it
+    * (stale, dead, and
     * confirmed-gone records drop, see core `sweepIntel`), so a side
     * remembers each enemy's last-known position while it is fresh and
     * forgets it after. A free hull whose side knows the enemy direction

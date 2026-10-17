@@ -84,9 +84,13 @@ import type { UnitField } from "./place.js";
  *   disengage bound, the patrol-anchor leash, or memory expiry. With the
  *   optional strategic context (core `strategy.ts` `PursuitTactics`) an
  *   outnumbered pursuer holds in place facing the threat instead of charging
- *   alone into the stronger force, re-engaging once backup arrives. Orders and
- *   holds clear and refuse threats (player orders win); stun only pauses the
- *   drive, the threat clock keeps ticking underneath.
+ *   alone into the stronger force, re-engaging once backup arrives. A new
+ *   order (or hold) clears any live memory, but hits taken while ordered
+ *   record a self-defense memory the guns answer without steering the hull
+ *   (a blocked move prevents a chase, not weapon fire — retail TA); holds
+ *   still record nothing. On arrival the order clears without holding, so
+ *   the hull rejoins its patrol loop (pursuing a live memory first); stun
+ *   only pauses the drive, the threat clock keeps ticking underneath.
  */
 
 /** Patrol speed per kind, world units per second (fast scouts → slow guns). */
@@ -239,23 +243,25 @@ export interface Mover {
   /**
    * Player-issued move order: a smoothed world-space waypoint list with a
    * cursor. Present while the unit drives to an ordered destination;
-   * patrol is suspended until the order completes or is replaced. Chosen
-   * over patrol-resume so an ordered unit stays where it was sent.
+   * patrol is suspended until the order completes — arrival rejoins the
+   * loop — or is replaced.
    */
   order?: MoveOrder;
   /**
-   * Set when a move order completes (or via `holdMover`): the unit holds
-   * position instead of patrolling. Cleared by a new order; patrol never
-   * auto-resumes so orders stay where they were put.
+   * Set via `holdMover` (or by an empty order, or on a wreck): the unit
+   * holds position instead of patrolling. Cleared by a new order; arrivals
+   * no longer hold — the patrol loop resumes past the destination.
    */
   hold?: boolean;
   /**
    * Retaliation threat memory (core `retaliation.ts`): who last hit this
-   * hull, from where, and for how much longer. Present only while an
-   * idle/patrolling hull is pursuing (or memory is fresh); absent — never
-   * zero-ttl — otherwise, matching the `stuck`/`stun` convention. Ordered,
-   * holding, and wrecked hulls never carry it (orders/holds clear it, kills
-   * drop it), and the patrol leg freezes while it steers.
+   * hull, from where, and for how much longer. Present while a hull is
+   * pursuing (or the memory is fresh) — including a self-defense memory on
+   * an ordered hull (recorded by hits taken en route: the guns answer it
+   * but the drive keeps the order); absent — never zero-ttl — otherwise,
+   * matching the `stuck`/`stun` convention. Holding and wrecked hulls never
+   * carry it (holds clear and refuse it, kills drop it), and the patrol leg
+   * freezes while it steers.
    */
   threat?: ThreatMemory;
   /**
@@ -415,11 +421,13 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * Issue (or repath) a move order: the mover leaves patrol and drives the
  * given world-space waypoints in order, clearing any hold. An empty path
  * holds the unit in place instead of stranding it on a degenerate order.
- * Player orders win over retaliation: any live threat memory is cleared, so
- * an ordered hull never peels off to pursue. Pass `groupSpeed` (see
- * `groupSpeedCap`) for orders issued together as a group: faster members
- * cap at the slowest member's pace instead of cutting ahead; single orders
- * omit it and drive at full kind speed.
+ * A new order cancels any in-progress pursuit (its live threat memory is
+ * cleared), but hits taken while ordered record a fresh self-defense
+ * memory the guns answer (see `notifyThreat`) without steering the hull —
+ * and arrival rejoins the patrol loop instead of holding. Pass `groupSpeed`
+ * (see `groupSpeedCap`) for orders issued together as a group: faster
+ * members cap at the slowest member's pace instead of cutting ahead; single
+ * orders omit it and drive at full kind speed.
  */
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
   // A player order supersedes any departure: the hull never resumes it.
@@ -562,8 +570,10 @@ export interface PursuitTactics {
 /**
  * Advance one mover by `dt` seconds. A live move order takes precedence:
  * arrive (advance the order cursor, skipping waypoints already reached),
- * and on the final waypoint arrive → hold (order cleared, patrol does not
- * resume). Without an order a holding mover stays put; otherwise a hull
+ * and on the final waypoint arrive → patrol resumes (order cleared, no
+ * hold). A self-defense memory ticks underneath an order but never steers
+ * (the hull keeps driving where it was sent). Without an order a holding
+ * mover stays put; otherwise a hull
  * with a live retaliation threat pursues it (see `retaliation.ts`: steer to
  * the attacker's last-known position through the same drive, freezing the
  * patrol leg, holding at weapons-range stand-off, giving up past the
@@ -615,16 +625,28 @@ export function advanceMover(
     const dz0 = target.z - mover.z;
     if (dx0 * dx0 + dz0 * dz0 <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
       at += 1;
-      if (at >= order.points.length) return { ...mover, order: undefined, hold: true };
+      if (at >= order.points.length) {
+        // Arrival: the order is done and the hull rejoins its patrol loop
+        // (no hold) — with a live self-defense memory intact, so a hull
+        // under fire pursues like a normal patrol hull on the next tick.
+        return { ...tickThreat(mover, dt), order: undefined, hold: false };
+      }
       target = order.points[at]!;
     }
-    return driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }, crush).mover;
+    const driven = driveToward(kind, mover, target, dt, spacing, terrain, { ...order, at }, crush);
+    // A self-defense memory ticks underneath the order but never steers —
+    // the hull keeps driving where it was sent while the guns answer the
+    // attacker. `driveToward` rebuilds without it, so re-attach (like the
+    // departure lead-in below); expiry drops the key.
+    const { threat } = tickThreat(mover, dt);
+    return threat ? { ...driven.mover, threat } : driven.mover;
   }
   if (mover.hold) return tickThreat(mover, dt);
   if (route.length < 2) return tickThreat(mover, dt);
   const leg = ((mover.leg % route.length) + route.length) % route.length;
   // Retaliation first: a live threat memory steers the hull instead of the
-  // patrol leg (orders/holds never carry one — they clear and refuse it).
+  // patrol leg (holds never carry one — they clear and refuse it; an order
+  // that just completed hands its self-defense memory over here).
   // A stale key (ttl run out without a re-hit) or a give-up (disengage /
   // leash, see `pursueStep`) drops the memory and falls through to patrol.
   let calm = mover;
@@ -1089,7 +1111,8 @@ export const PREDICT_STEP = 0.25;
  * Simulation cap per prediction: 80 s of drive at the default step, enough
  * for a full patrol loop on live maps. Longer loops truncate (the faint
  * static loop still shows the full context); reached destinations stop
- * early, so orders rarely run the whole budget.
+ * early (patrol resumes past them, off the trail), so orders rarely run
+ * the whole budget.
  */
 export const PREDICT_MAX_STEPS = 320;
 /**
@@ -1108,7 +1131,8 @@ export const PREDICT_PROGRESS = 0.5;
  * forward from the live state — hull turn-rate caps, alignment grip, rough
  * drag, and terrain gating included — so corners read as arcs and walls
  * read as stops instead of straight waypoint chords. Orders run to
- * arrival-hold; patrols run until the leg wraps once around the loop.
+ * arrival (patrol resumes past it, off the trail); patrols run until the
+ * leg wraps once around the loop.
  * Spacing/separation from other hulls is deliberately excluded (spacing 1):
  * this is intent, not traffic. Wood crush is excluded too (it would mutate
  * the caller's damage field), so forest lanes predict at full speed. Pure:
@@ -1173,7 +1197,7 @@ export function predictDrivenPath(
       break;
     }
     if (hasOrder(sim)) continue;
-    if (ordered) break; // Arrival-hold: the driven path ends at the destination.
+    if (ordered) break; // Arrival: the driven path ends at the destination (patrol resumes past it).
     const leg = ((sim.leg % n) + n) % n;
     if (leg !== startLeg) looped = true;
     else if (looped) break;

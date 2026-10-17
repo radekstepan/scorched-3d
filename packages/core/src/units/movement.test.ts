@@ -1069,7 +1069,9 @@ describe("shore slide", () => {
     };
     const { mover, excursion } = drive();
     expect(hasOrder(mover)).toBe(false);
-    expect(mover.hold).toBe(true);
+    // Arrival rejoins patrol instead of holding (no legs here, so it rests
+    // unheld where the slide rounded the pond).
+    expect(mover.hold).not.toBe(true);
     // It rounded the pond (more than a cell off the lane), not through it.
     expect(excursion).toBeGreaterThan(CELL_PIXELS);
     // Deterministic: the same slide replays exactly.

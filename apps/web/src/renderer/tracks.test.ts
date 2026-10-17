@@ -222,7 +222,7 @@ describe("TrackTrails", () => {
     walkTracks.dispose();
   });
 
-  it("stays silent while stunned, held, or wrecked — and stamps while driving", () => {
+  it("stays silent while stunned or wrecked — and stamps while driving", () => {
     const scene = new THREE.Scene();
     const { units, routes } = makeGroup();
     const movement = new UnitMovement(units, routes, { groundY: () => 100 });
@@ -239,9 +239,11 @@ describe("TrackTrails", () => {
     for (let n = 0; n < 600; n++) step(movement, tracks);
     expect(movement.moverState(0)!.stun).toBeUndefined();
     expect(tracks.count).toBeGreaterThan(0);
-    // Park it with a zero-length order (hold): silence again, fading out.
-    const m0 = movement.moverState(0)!;
-    movement.orderUnit(0, { x: m0.x, z: m0.z });
+    // Freeze it as a wreck (wrecks hold forever — arrival resumes patrol
+    // now, so a zero-length order no longer parks a hull; the hold gate
+    // itself is pinned by the `isDriving` unit test above): silence again,
+    // fading out.
+    movement.markDestroyed(0);
     for (let n = 0; n < Math.ceil(TRACK_LIFETIME * 60) + 60; n++) step(movement, tracks);
     expect(tracks.count).toBe(0);
     movement.dispose();

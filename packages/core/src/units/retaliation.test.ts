@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   advanceMover,
   advanceMovers,
+  hasOrder,
   initMover,
   orderMover,
   type Mover,
@@ -68,12 +69,31 @@ describe("notifyThreat", () => {
     expect(hasThreat(next)).toBe(false);
   });
 
-  it("lets player orders win: ordered and holding hulls record nothing", () => {
+  it("records a self-defense memory on ordered hulls, nothing on holding hulls", () => {
     const route = flatRoute();
+    // A blocked move prevents a chase, not weapon fire (retail TA): the hit
+    // records a memory for the guns (and for the pursuit after arrival) but
+    // the drive keeps the order — see the drive test below.
     const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
-    expect(notifyThreat(ordered, ordered, 1, 100, 0, route[0]).threat).toBeUndefined();
+    const answered = notifyThreat(ordered, ordered, 1, 100, 0, route[0]);
+    expect(hasThreat(answered)).toBe(true);
+    expect(answered.threat).toMatchObject({ attacker: 1, x: 100, z: 0, ttl: THREAT_MEMORY_DURATION });
+    expect(hasOrder(answered)).toBe(true);
+    // Holds stay passive: an explicitly held hull records nothing.
     const holding: Mover = { ...initMover(route, 0), hold: true };
     expect(notifyThreat(holding, holding, 1, 100, 0, route[0]).threat).toBeUndefined();
+  });
+
+  it("records ordered hits past the anchor leash, but keeps the engage gate", () => {
+    const route = flatRoute();
+    // Attacker 800 off (inside engage) but past the anchor leash: a patrol
+    // refuses (no cross-map chase), an ordered hull records (no chase at
+    // all — the memory is for the guns, so the leash is meaningless).
+    const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
+    expect(hasThreat(notifyThreat(ordered, ordered, 1, 800, 0, route[0]))).toBe(true);
+    // The victim-relative engage gate still applies: a distant sniper is
+    // beneath notice even for an ordered hull.
+    expect(notifyThreat(ordered, ordered, 1, THREAT_ENGAGE_RADIUS + 1, 0, route[0]).threat).toBeUndefined();
   });
 
   it("refreshes the same attacker inside disengage, drops past it", () => {
@@ -268,19 +288,57 @@ describe("pursuit driving", () => {
     expect(hasThreat(next)).toBe(false);
   });
 
-  it("keeps ordered hulls on their orders even with a stale memory key", () => {
+  it("keeps ordered hulls on their orders while a self-defense memory ticks", () => {
     const route = flatRoute();
-    // Belt-and-braces: a memory key smuggled onto an ordered hull never steers.
+    // A self-defense memory on an ordered hull never steers: the hull keeps
+    // driving where it was sent while the clock ticks underneath.
     const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
-    const smuggled: Mover = {
+    const defending: Mover = {
       ...ordered,
       threat: { attacker: 1, x: -400, z: -400, ttl: THREAT_MEMORY_DURATION },
     };
-    const next = advanceMover("stump", smuggled, route, 1);
+    const next = advanceMover("stump", defending, route, 1);
     const dest = { x: 500, z: 500 };
-    const before = Math.hypot(smuggled.x - dest.x, smuggled.z - dest.z);
+    const before = Math.hypot(defending.x - dest.x, defending.z - dest.z);
     const after = Math.hypot(next.x - dest.x, next.z - dest.z);
     expect(after).toBeLessThan(before);
+    expect(hasOrder(next)).toBe(true);
+    // The memory survives the drive step (re-attached past the rebuild) with
+    // its clock ticked — and drops at expiry instead of lingering.
+    expect(next.threat?.attacker).toBe(1);
+    expect(next.threat!.ttl).toBeCloseTo(THREAT_MEMORY_DURATION - 1, 9);
+    const expired = advanceMover("stump", defending, route, THREAT_MEMORY_DURATION + 1);
+    expect(hasThreat(expired)).toBe(false);
+    expect("threat" in expired).toBe(false);
+    expect(hasOrder(expired)).toBe(true);
+  });
+
+  it("resumes the patrol loop on arrival, pursuing a live self-defense memory first", () => {
+    const route = flatRoute();
+    // Ordered hull under fire reaches its destination with the memory live.
+    const ordered = orderMover({ ...initMover(route, 0), hull: 0 }, [{ x: 200, z: 0 }]);
+    const defending: Mover = {
+      ...ordered,
+      x: 200,
+      z: 0,
+      threat: { attacker: 1, x: 500, z: 0, ttl: THREAT_MEMORY_DURATION },
+    };
+    const arrived = advanceMover("stump", defending, route, 0.05);
+    // Arrival clears the order AND the hold: patrol (and pursuit) resume.
+    expect(hasOrder(arrived)).toBe(false);
+    expect(arrived.hold).not.toBe(true);
+    expect(hasThreat(arrived)).toBe(true);
+    // Next tick the live memory steers like any patrol pursuit — toward the
+    // attacker (past stand-off, inside disengage and the anchor leash), with
+    // the patrol leg frozen.
+    const foes = [
+      { x: arrived.x, z: arrived.z },
+      { x: 500, z: 0 },
+    ];
+    const chasing = advanceMover("stump", arrived, route, 1, 1, null, null, foes);
+    expect(hasThreat(chasing)).toBe(true);
+    expect(chasing.x).toBeGreaterThan(arrived.x);
+    expect(chasing.leg).toBe(arrived.leg);
   });
 
   it("is deterministic: the same hit sequence replays the same drive", () => {
@@ -591,12 +649,24 @@ describe("shell investigate", () => {
     });
   });
 
-  it("lets player orders and holds refuse shells too", () => {
+  it("records shell wounds on ordered hulls, refuses them on holds", () => {
     const route = flatRoute();
     const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
-    expect(notifyThreat(ordered, ordered, 1, 1000, 0, route[0], true).threat).toBeUndefined();
+    const answered = notifyThreat(ordered, ordered, 1, 1000, 0, route[0], true);
+    expect(hasThreat(answered)).toBe(true);
+    expect(answered.threat).toMatchObject({ attacker: 1, ttl: THREAT_MEMORY_DURATION });
     const holding: Mover = { ...initMover(route, 0), hold: true };
     expect(notifyThreat(holding, holding, 1, 1000, 0, route[0], true).threat).toBeUndefined();
+  });
+
+  it("records ordered shell wounds past the hunt leash of the anchor", () => {
+    const route = flatRoute();
+    // The victim drove far off on its order; the shell lands close to the
+    // victim but past every anchor leash — still recorded (guns, not chase).
+    const ordered = { ...orderMover(initMover(route, 0), [{ x: 2500, z: 0 }]), x: 2000, z: 0 };
+    const answered = notifyThreat(ordered, ordered, 1, 2800, 0, route[0], true);
+    expect(hasThreat(answered)).toBe(true);
+    expect(answered.threat?.attacker).toBe(1);
   });
 
   it("drives an investigate toward the firing position, facing it", () => {

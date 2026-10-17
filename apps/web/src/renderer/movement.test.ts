@@ -16,7 +16,7 @@ import {
 } from "@scorched-3d/core";
 import { UnitMovement } from "./movement";
 import { hqExitWorld, hqFacingFor, hqSpawnWorld, hqStagingRoute } from "./hq";
-import { buildUnits, getLegs, getWheels, IDLE_TILT } from "./units";
+import { buildUnits, getLegs, getWheels } from "./units";
 
 function makeGroup(): THREE.Group {
   const group = new THREE.Group();
@@ -195,7 +195,7 @@ describe("UnitMovement", () => {
     movement.dispose();
   });
 
-  it("drives ordered units to their target and holds on arrival", () => {
+  it("drives ordered units to their target and resumes patrol on arrival", () => {
     const units = makeGroup();
     const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
     expect(movement.orderUnit(0, { x: 600, z: 0 })).toBe(true);
@@ -206,19 +206,15 @@ describe("UnitMovement", () => {
     expect(movement.hasOrder(0)).toBe(false);
     const body = units.children[0] as THREE.Group;
     expect(body.position.x).toBeGreaterThan(300);
-    // Arrival holds: the mover never moves again (simulation exact)…
-    const parkedMover = movement.moverState(0)!;
-    for (let n = 0; n < 60; n++) movement.update(1 / 60);
-    const heldMover = movement.moverState(0)!;
-    expect(heldMover.x).toBe(parkedMover.x);
-    expect(heldMover.z).toBe(parkedMover.z);
-    // …while the body breathes faintly on its seat (engine idle, visual
-    // only: exact X/Z on the frozen mover, bounded tilt sway).
-    expect(body.position.x).toBe(heldMover.x);
-    expect(body.position.z).toBe(heldMover.z);
-    // Flat ground seats zero tilt, so the hull judder reads directly.
-    expect(Math.abs(body.rotation.x)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);
-    expect(Math.abs(body.rotation.z)).toBeLessThanOrEqual(IDLE_TILT + 1e-9);
+    // Arrival rejoins the patrol loop instead of parking: the mover drives
+    // its frozen leg again (leg 1 heads +Z from the route start).
+    const arrived = movement.moverState(0)!;
+    expect(arrived.hold).not.toBe(true);
+    for (let n = 0; n < 120; n++) movement.update(1 / 60);
+    const resumed = movement.moverState(0)!;
+    expect(Math.hypot(resumed.x - arrived.x, resumed.z - arrived.z)).toBeGreaterThan(0);
+    expect(body.position.x).toBe(resumed.x);
+    expect(body.position.z).toBe(resumed.z);
     // The unordered unit kept patrolling meanwhile.
     expect(movement.hasOrder(1)).toBe(false);
     movement.dispose();
@@ -548,14 +544,12 @@ describe("drive locomotion", () => {
     // The walker strides at full amplitude with phase advanced by the road.
     expect((walker.userData as { amp?: number }).amp).toBe(1);
     expect((walker.userData as { gait?: number }).gait).toBeGreaterThan(0);
-    // Park both hulls where they stand: orders complete, patrol holds.
-    group.children.forEach((_, i) => {
-      const m = movement.moverState(i)!;
-      movement.orderUnit(i, { x: m.x, z: m.z });
-    });
+    // Freeze both hulls where they stand (wrecks hold forever — arrival
+    // resumes patrol now, so self-orders no longer park a hull).
+    group.children.forEach((_, i) => movement.markDestroyed(i));
     for (let n = 0; n < 10; n++) movement.update(1 / 60);
-    expect(movement.hasOrder(0)).toBe(false);
-    expect(movement.hasOrder(1)).toBe(false);
+    expect(movement.isDestroyed(0)).toBe(true);
+    expect(movement.isDestroyed(1)).toBe(true);
     const parkedSpin = getWheels(tank)[0]!.rotation.x;
     for (let n = 0; n < 120; n++) movement.update(1 / 60);
     // Held hulls never roll: wheels frozen, legs back to neutral.

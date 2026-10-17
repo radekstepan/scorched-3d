@@ -367,7 +367,7 @@ describe("move orders in advanceMover", () => {
     expect(next.leg).toBe(before.leg);
   });
 
-  it("advances the cursor on waypoint arrival and holds at the end", () => {
+  it("advances the cursor on waypoint arrival and resumes patrol at the end", () => {
     let mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
     mover = orderMover(mover, [
       { x: ARRIVE_RADIUS / 2, z: 0 },
@@ -376,15 +376,16 @@ describe("move orders in advanceMover", () => {
     mover = advanceMover("flash", mover, route, 0.05);
     expect(mover.order?.at).toBe(1);
     expect(hasOrder(mover)).toBe(true);
-    // Park at the final waypoint: arrival clears the order into a hold.
+    // Arrival clears the order without holding: the hull rejoins its patrol
+    // loop instead of parking where it was sent.
     mover = { ...mover, x: 400, z: 0 };
     mover = advanceMover("flash", mover, route, 0.05);
     expect(hasOrder(mover)).toBe(false);
-    expect(mover.hold).toBe(true);
-    const parked = { ...mover };
-    mover = advanceMover("flash", mover, route, 1);
-    expect(mover.x).toBeCloseTo(parked.x, 9);
-    expect(mover.z).toBeCloseTo(parked.z, 9);
+    expect(mover.hold).not.toBe(true);
+    // Next tick it drives its frozen patrol leg again (leg 1 heads +Z).
+    const resumed = advanceMover("flash", mover, route, 1);
+    expect(resumed.z).toBeGreaterThan(mover.z);
+    expect(resumed.leg).toBe(1);
   });
 
   it("holds patrol while held and resumes only on a new order", () => {

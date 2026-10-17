@@ -577,7 +577,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         onDamaged: (index, shooter) => {
           // The garrison rallies: live same-team hulls near the shelled fort
           // are pointed at the shooter through the retaliation pipeline
-          // (ordered/holding hulls still refuse — player orders win).
+          // (holding hulls still refuse; ordered hulls record a self-defense
+          // memory without leaving their order).
           if (shooter === null || shooter === undefined) return;
           const fort = hq?.positionAt(index);
           const spots = movement.positions();
@@ -690,7 +691,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     };
     // Retaliation: a surviving splash points the victim at its live shooter
     // so idle/patrolling hulls turn and pursue while the memory is fresh
-    // (ordered/holding hulls refuse — player orders win — and wrecks and
+    // (ordered hulls record a self-defense memory and keep driving —
+    // pursuing on arrival — while holding hulls refuse, and wrecks and
     // self-splashes stay silent). Arcing shells investigate past the
     // retaliation gates, and the victim's turret traverses onto the live
     // shooter either way (range and terrain still gate every round). The

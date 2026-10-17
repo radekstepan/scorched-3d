@@ -34,9 +34,14 @@ import { canSpot, type SightContext } from "./visibility.js";
  *   resumes.
  *
  * Authority rules (decided, documented):
- * - Player orders win. Ordered and holding units never retaliate — a new
- *   order (or hold) clears any live memory, and hits taken while ordered
- *   record nothing. Only idle/patrolling hulls pursue.
+ * - Player orders win the drive, not the guns. A new order (or hold)
+ *   clears any live memory, so an ordered hull never peels off to pursue —
+ *   but hits taken while ordered record a self-defense memory the guns
+ *   answer (turret traverse, the ambient scheduler, the HQ-fire hold, and
+ *   squad focus all read it) while the hull keeps driving where it was
+ *   sent. Retail TA parallel: a blocked move prevents a chase, not weapon
+ *   fire. Holds still record nothing, and on arrival the memory converts
+ *   to a normal pursuit (or the patrol loop resumes).
  * - Movers never teleport: pursuit drives through the same turn-rate caps,
  *   alignment grip, rough-terrain drag, slope gating, spacing, and
  *   separation as patrol and orders — it only swaps the *target*.
@@ -226,13 +231,18 @@ export interface ThreatAnchor {
  * Record a hit from `attacker` at (`ax`, `az`) on `mover`: returns a new
  * mover with the threat memory set or refreshed. Pure: no rng, no clocks.
  *
- * - Ordered/holding movers ignore the hit (player orders win — the memory
- *   is never even recorded, so there is nothing to expire later).
+ * - Holding movers ignore the hit (an explicit hold stays passive — the
+ *   memory is never even recorded, so there is nothing to expire later).
+ *   Ordered movers record a self-defense memory instead: the same gates
+ *   minus the anchor leash (no chase, so nothing to leash — a hull sent
+ *   across the map still answers close fire), expiring and refreshing
+ *   like any memory but never steering until the order completes.
  * - Self-hits (`attacker === victim`) are ignored: a hull shelled by its
  *   own blast splash must not pursue itself.
  * - A fresh victim engages only inside `THREAT_ENGAGE_RADIUS` and only when
- *   the attacker sits inside the leash of `anchor` — distant snipers never
- *   pull a patrol off its loop. Wounds from arcing shells (`shell`, see
+ *   the attacker sits inside the leash of `anchor` (ordered hulls skip the
+ *   leash — see above) — distant snipers never pull a patrol off its loop.
+ *   Wounds from arcing shells (`shell`, see
  *   `SHELL_ENGAGE_RADIUS`) engage wider and range on the hunt leash instead:
  *   the same memory, the same drive, the same countdown — a shelled hull
  *   investigates the firing position instead of staying put, giving up at
@@ -268,8 +278,11 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   if (!Number.isInteger(attacker) || attacker < 0) return mover;
   if (!Number.isFinite(ax) || !Number.isFinite(az)) return mover;
   if (mover.hold) return mover;
+  // Only the hold refuses: an ordered hull records a self-defense memory
+  // (the drive never steers off the order for it, so the anchor leash — a
+  // leash on the chase — is meaningless there and skipped below).
   const order = mover.order as { at?: number; points?: readonly unknown[] } | undefined;
-  if (order && (order.at ?? 0) >= 0 && (order.at ?? 0) < (order.points?.length ?? 0)) return mover;
+  const ordered = !!order && (order.at ?? 0) >= 0 && (order.at ?? 0) < (order.points?.length ?? 0);
   const dx = ax - victim.x;
   const dz = az - victim.z;
   const dist = Math.hypot(dx, dz);
@@ -281,7 +294,7 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
   // investigate gates below.
   const close =
     dist <= THREAT_ENGAGE_RADIUS &&
-    !(anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS);
+    !(anchor && !ordered && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS);
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
   if (live) {
     // An HQ assault under fire holds its push until the fire proves
@@ -306,7 +319,7 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
       };
     }
     if (dist > engage) return mover;
-    if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
+    if (anchor && !ordered && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
     return {
       ...mover,
       threat:
@@ -316,7 +329,7 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
     };
   }
   if (dist > engage) return mover;
-  if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
+  if (anchor && !ordered && Math.hypot(ax - anchor.x, az - anchor.z) > leashGate) return mover;
   return {
     ...mover,
     threat:
