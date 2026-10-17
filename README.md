@@ -51,3 +51,23 @@ serves from `https://<owner>.github.io/<repo>/` after each push.
 - [Art direction](docs/art-direction.md) explains the unit/HQ theme, design rationale and visual review requirements.
 - [Architecture](docs/architecture.md) shows workspaces, files, and build notes.
 - [Development](docs/development.md) shows how to extend and verify the app.
+
+### Unit folio
+
+Open **02 / Unit folio** in the command bar to browse Commander, Stumpy,
+Flash, Hammer and Peewee. The studio renders the actual battlefield models
+at inspection scale. Drag to orbit, scroll/pinch to zoom, choose 3/4, front,
+rear or top studies, toggle a turntable or wireframe, and reset the camera.
+The roster and controls adapt to narrow screens.
+
+Opening the folio freezes battle simulation, effects, camera input and orders.
+The battlefield stays mounted, preserving its map, damage, selection and camera;
+returning to **01 / Battlefield** resumes from that point without catching up
+elapsed wall time. The battlefield's **Pause / Resume** button is independent:
+a battle paused before opening the folio stays paused when you return.
+
+The studio owns its WebGL context, controls and model resources. Each roster
+change or exit cancels its animation loop, disconnects its resize observer and
+releases geometry, materials, copied textures and the context. Camouflage
+textures are copied from the shared battlefield cache so inspecting a unit
+cannot dispose textures still used by the battle.

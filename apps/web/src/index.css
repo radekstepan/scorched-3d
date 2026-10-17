@@ -66,3 +66,71 @@ input[type="range"] { height: 4px; background: transparent; }
   .viewport-heading { font-size: 7px; }
   .viewport-heading > span:last-child { display: none; }
 }
+/* The folio occupies the battle's grid tracks. Keeping the battle mounted
+   preserves camera, orders, damage and selection throughout a study. */
+.command-shell[data-view="folio"] > .battlefield,
+.command-shell[data-view="folio"] > .command-rail,
+.command-shell[data-view="folio"] > .mobile-panel-controls { visibility: hidden; pointer-events: none; }
+.battle-pause { position: absolute; top: 42px; right: 20px; padding: 8px 10px; border: 1px solid var(--chrome-line); background: #11180ed9; font-size: 9px; color: var(--chrome-accent); }
+.unit-folio { grid-column: 1 / -1; grid-row: 2; min-height: 0; display: grid; grid-template-columns: 244px minmax(0,1fr) 244px; background: var(--chrome); z-index: 2; }
+.folio-roster, .folio-inspector { padding: 24px 16px; min-height: 0; overflow-y: auto; border-right: 1px solid var(--chrome-line); }
+.folio-inspector { border: 0; border-left: 1px solid var(--chrome-line); }
+.folio-eyebrow { color: #a4b38f; font-size: 8px; letter-spacing: 1.7px; }
+.folio-roster h1 { font: 42px var(--font-display); margin: 14px 0 24px; }
+.folio-roster h1 span { display: block; font: 8px var(--font-mono); letter-spacing: 1px; margin-top: 8px; color: #9da990; }
+.folio-unit-list { display: flex; flex-direction: column; gap: 8px; }
+.folio-unit-list button { display: flex; align-items: center; gap: 8px; padding: 12px 8px; text-align: left; border: 1px solid var(--chrome-line); background: #1e251a; }
+.folio-unit-list button[aria-pressed="true"] { border-color: #d4e991aa; background: #354129; box-shadow: inset 3px 0 var(--chrome-accent); }
+.folio-number { font-size: 7px; color: #a1ae90; }
+.folio-unit-list img { width: 38px; height: 38px; }
+.folio-unit-list strong { display: block; font: 20px var(--font-display); }
+.folio-unit-list small { font-size: 7px; color: #a1ae90; }
+.folio-unit-list button > span:last-child { margin-left: auto; color: var(--chrome-accent); }
+.folio-note { border-top: 1px solid var(--chrome-line); margin-top: 24px; padding-top: 20px; font-size: 9px; line-height: 1.9; color: #9eaf8b; }
+.folio-stage { min-width: 0; position: relative; overflow: hidden; background: #20271c; }
+.folio-canvas { position: absolute; inset: 0; touch-action: none; }
+.folio-canvas canvas { display: block; }
+.folio-stage-heading { position: absolute; top: 20px; left: 20px; right: 20px; display: flex; justify-content: space-between; font-size: 7px; letter-spacing: 1px; pointer-events: none; color: #c5d1b6; }
+.folio-caption { position: absolute; left: 24px; bottom: 68px; pointer-events: none; max-width: min(340px, 85%); text-shadow: 0 1px 5px #111; }
+.folio-caption h2 { font: 64px var(--font-display); line-height: 1; margin: 6px 0 12px; }
+.folio-caption > p:last-child { font-size: 9px; line-height: 1.7; color: #c5cdb9; }
+.folio-study-controls { position: absolute; bottom: 20px; left: 24px; display: flex; gap: 4px; }
+.folio-study-controls button { padding: 9px 12px; border: 1px solid var(--chrome-line); background: #141b11dc; font-size: 9px; text-transform: uppercase; }
+.folio-study-controls button[aria-pressed="true"] { background: #d4e991; color: #17200f; }
+.folio-inspector h2 { font: 32px var(--font-display); margin: 18px 0 10px; }
+.folio-inspector > p:not(.folio-eyebrow) { font-size: 9px; color: #a7b49a; line-height: 1.9; margin-bottom: 24px; }
+.folio-inspector > button { display: flex; justify-content: space-between; width: 100%; padding: 14px 0; border-bottom: 1px solid var(--chrome-line); font-size: 9px; }
+.folio-inspector > button span { color: var(--chrome-accent); }
+.folio-spec { display: flex; flex-direction: column; gap: 10px; margin-top: 32px; }
+.folio-spec small { font-size: 7px; color: #9eae8b; letter-spacing: 1px; }
+.folio-spec strong { font-size: 10px; font-weight: 400; margin-bottom: 14px; }
+.folio-error { position: absolute; top: 35%; left: 10%; right: 10%; padding: 20px; border: 1px solid var(--chrome-line); background: #141812; font-size: 12px; }
+@media (max-width: 1000px) {
+  .unit-folio { grid-row: 2 / 4; grid-template-columns: 190px minmax(0, 1fr); }
+  .folio-inspector { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-top: 1px solid var(--chrome-line); }
+  .unit-folio { grid-template-rows: minmax(0,1fr) 48px; }
+  .folio-inspector > p, .folio-inspector h2, .folio-spec { display: none; }
+  .folio-inspector > button { width: auto; gap: 14px; border: 0; padding: 8px 0; }
+  .folio-stage-heading span:last-child { display: none; }
+}
+@media (max-width: 600px) {
+  .command-header { gap: 12px; padding: 0 10px; }
+  .command-brand strong { font-size: 15px; letter-spacing: 1px; }
+  .brand-mark { display: none; }
+  .command-nav { gap: 10px; }
+  .command-nav > * { font-size: 7px; letter-spacing: .3px; }
+  .unit-folio { grid-template: 76px minmax(0,1fr) 44px / minmax(0,1fr); }
+  .folio-roster { padding: 8px; border-bottom: 1px solid var(--chrome-line); overflow-x: auto; overflow-y: hidden; }
+  .folio-roster > p, .folio-roster h1, .folio-number, .folio-unit-list small, .folio-unit-list button > span:last-child { display: none; }
+  .folio-unit-list { flex-direction: row; width: max-content; gap: 6px; }
+  .folio-unit-list button { padding: 7px; gap: 5px; }
+  .folio-unit-list img { width: 28px; height: 28px; }
+  .folio-unit-list strong { font-size: 16px; }
+  .folio-stage { grid-row: 2; }
+  .folio-inspector { grid-row: 3; gap: 20px; }
+  .folio-inspector > button { font-size: 8px; gap: 6px; }
+  .folio-caption h2 { font-size: 42px; }
+  .folio-caption { left: 16px; bottom: 60px; }
+  .folio-stage-heading { left: 16px; top: 14px; }
+  .folio-study-controls { left: 16px; bottom: 16px; }
+}

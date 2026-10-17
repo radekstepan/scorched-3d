@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { BattleClock } from "./battleClock";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
@@ -121,6 +122,8 @@ import { setUnitFog, unitFogUniforms } from "./unitFog";
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
 interface Props {
+  /** Suspend rendering, simulation and battle input without rebuilding the battle. */
+  suspended?: boolean;
   map: TNTMap;
   options: ViewOptions;
   onHover: (info: HoverInfo | null) => void;
@@ -144,7 +147,13 @@ interface Props {
   jumpTo?: { x: number; z: number; seq: number } | null;
 }
 
-export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, onTerritory, jumpTo }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, onTerritory, jumpTo, suspended = false }: Props) {
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
+  const clearInputRef = useRef<(() => void) | null>(null);
+  useLayoutEffect(() => {
+    if (suspended) clearInputRef.current?.();
+  }, [suspended]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
@@ -842,6 +851,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     let down: { x: number; y: number; button: number; shift: boolean } | null = null;
     let boxing = false;
     const onPointerDown = (ev: PointerEvent) => {
+      if (suspendedRef.current) return;
       if (ev.button !== 0 && ev.button !== 2) return;
       down = { x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey };
       boxing = false;
@@ -851,6 +861,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (ev.button === 0 && ev.shiftKey) controls.enabled = false;
     };
     const onPointerMove = (ev: PointerEvent) => {
+      if (suspendedRef.current) return;
       // Record only: the tick consumes the latest position (one raycast per
       // frame max, none while parked). No getBoundingClientRect here — that
       // layout read happens once per consumed probe in the tick.
@@ -882,8 +893,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // Shift-drag may have disabled orbiting mid-gesture: always restore.
       const wasBoxing = boxing;
       boxing = false;
-      controls.enabled = true;
+      controls.enabled = !suspendedRef.current;
       boxEl.style.display = "none";
+      if (suspendedRef.current) return;
       if (!wasDown || ev.button !== wasDown.button) return;
       const moved = Math.hypot(ev.clientX - wasDown.x, ev.clientY - wasDown.y);
       if (wasBoxing) {
@@ -950,6 +962,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // Keyboard pan: arrows / WASD translate camera + target in screen space.
     const pressed = new Set<string>();
     const onKeyDown = (ev: KeyboardEvent) => {
+      if (suspendedRef.current) return;
       if (ev.code === "Escape") {
         applySelection([]);
         return;
@@ -957,6 +970,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (!isPanKey(ev.code) || shouldIgnoreKeyEvent(ev.target)) return;
       ev.preventDefault();
       pressed.add(ev.code);
+    };
+    clearInputRef.current = () => {
+      pressed.clear();
+      down = null;
+      boxing = false;
+      boxEl.style.display = "none";
+      controls.enabled = false;
+      hoverGate.leave();
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       pressed.delete(ev.code);
@@ -1005,12 +1026,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const fpsSampler = createFpsSampler();
     const fpsEl = fpsRef.current;
 
+    const battleClock = new BattleClock();
     const tick = () => {
       raf = requestAnimationFrame(tick);
+      // Drain real time while suspended so returning never catches up the battle.
+      const frame = battleClock.sample(clock.getDelta(), suspendedRef.current);
+      if (!frame) return;
+      const { dt, t } = frame;
+      controls.enabled = !boxing;
       const fps = fpsSampler.frame(performance.now());
       if (fps !== null && fpsEl) fpsEl.textContent = formatFps(fps);
-      const dt = Math.min(clock.getDelta(), 0.05);
-      const t = clock.elapsedTime;
       const opt = optsRef.current;
 
       if (opt.exaggeration !== lastExag) {
@@ -1342,6 +1367,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     tick();
 
     return () => {
+      clearInputRef.current = null;
       cancelAnimationFrame(raf);
       ro.disconnect();
       movement.dispose();

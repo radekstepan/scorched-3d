@@ -17,6 +17,7 @@ import {
   type MapPreset,
   type ViewOptions,
 } from "@scorched-3d/core";
+import UnitFolio from "./folio/UnitFolio";
 import TerrainCanvas from "./renderer/TerrainCanvas";
 import type { HqStatus } from "./renderer/hqFx";
 import {
@@ -37,6 +38,8 @@ import type { TerritoryMinimap } from "./renderer/territory";
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
 export default function App() {
+  const [view, setView] = useState<"battlefield" | "folio">("battlefield");
+  const [battlePaused, setBattlePaused] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<"worlds" | "inspector" | null>(null);
   const [preset, setPreset] = useState<MapPreset>("greenreach");
   const [seed, setSeed] = useState(0xa11ce);
@@ -209,22 +212,24 @@ export default function App() {
   const tileH = map.height / 2;
 
   return (
-    <div className="command-shell" data-mobile-panel={mobilePanel ?? "closed"}>
+    <div className="command-shell" data-mobile-panel={mobilePanel ?? "closed"} data-view={view}>
       <header className="command-header">
         <div className="command-brand"><span className="brand-mark" aria-hidden="true">✣</span>
           <div><strong>{APP_NAME.toUpperCase()}</strong><small>REAL-TIME TACTICAL COMMAND</small></div>
         </div>
         <nav className="command-nav" aria-label="Game views">
-          <span className="active" aria-current="page">01 / BATTLEFIELD</span>
+          <button className={view === "battlefield" ? "active" : ""} aria-current={view === "battlefield" ? "page" : undefined} onClick={() => setView("battlefield")}>01 / BATTLEFIELD</button>
+          <button className={view === "folio" ? "active" : ""} aria-current={view === "folio" ? "page" : undefined} onClick={() => { setMobilePanel(null); setView("folio"); }}>02 / UNIT FOLIO</button>
         </nav>
-        <div className="command-status"><i aria-hidden="true" /> LIVE SIMULATION <span>v{APP_VERSION}</span></div>
+        <div className="command-status"><i aria-hidden="true" /> {view === "folio" || battlePaused ? "SIMULATION PAUSED" : "LIVE SIMULATION"} <span>v{APP_VERSION}</span></div>
       </header>
       <div className="mobile-panel-controls" aria-label="Battlefield panels">
         <button aria-expanded={mobilePanel === "worlds"} aria-controls="worlds-panel" onClick={() => setMobilePanel(mobilePanel === "worlds" ? null : "worlds")}>Worlds / radar</button>
         <button aria-expanded={mobilePanel === "inspector"} aria-controls="inspector-panel" onClick={() => setMobilePanel(mobilePanel === "inspector" ? null : "inspector")}>Inspector</button>
       </div>
-      <main className="battlefield" aria-label="Battlefield">
+      <main className="battlefield" aria-label="Battlefield" inert={view === "folio"}>
         <TerrainCanvas
+          suspended={view === "folio" || battlePaused}
           map={map}
           options={options}
           onHover={setHover}
@@ -235,6 +240,7 @@ export default function App() {
           jumpTo={jump}
         />
         <div className="viewport-heading"><span>TACTICAL VIEW / {map.name.toUpperCase()}</span><span>BLUE / ORANGE</span></div>
+        <button className="battle-pause" aria-pressed={battlePaused} onClick={() => setBattlePaused((p) => !p)}>{battlePaused ? "▶ RESUME" : "Ⅱ PAUSE"}</button>
         <div className="viewport-reticle" aria-hidden="true" />
 
         {selectedGroups.length > 0 && (
@@ -260,7 +266,8 @@ export default function App() {
           </div>
         )}
       </main>
-      <aside id="worlds-panel" className="command-rail worlds-rail" aria-label="Worlds and radar">
+      {view === "folio" && <UnitFolio />}
+      <aside id="worlds-panel" className="command-rail worlds-rail" aria-label="Worlds and radar" inert={view === "folio"}>
         <section className="operation-brief hud-panel p-3"><Label>Operation / skirmish</Label>
           <h1 className="font-display mt-1 text-2xl font-semibold leading-none tracking-wide text-white">
             {map.name}
@@ -338,7 +345,7 @@ export default function App() {
         </div>
       </aside>
 
-      <aside id="inspector-panel" className="command-rail inspector-rail" aria-label="Battlefield inspector">
+      <aside id="inspector-panel" className="command-rail inspector-rail" aria-label="Battlefield inspector" inert={view === "folio"}>
         <div className="hud-panel space-y-3 p-3">
           <Label>View</Label>
           <Slider
@@ -419,8 +426,8 @@ export default function App() {
         </div></details>
       </aside>
 
-      <footer className="command-footer"><span><i aria-hidden="true" /> COMMAND LINK ACTIVE</span>
-        <p>CLICK select · SHIFT+DRAG box · RIGHT-CLICK move · ESC clear · DRAG orbit · SCROLL zoom · WASD pan</p>
+      <footer className="command-footer"><span><i aria-hidden="true" /> {view === "folio" ? "FOLIO / BATTLE SUSPENDED" : "COMMAND LINK ACTIVE"}</span>
+        <p>{view === "folio" ? "DRAG orbit · SCROLL / PINCH zoom · CHOOSE a study angle · RETURN to battlefield to resume command" : "CLICK select · SHIFT+DRAG box · RIGHT-CLICK move · ESC clear · DRAG orbit · SCROLL zoom · WASD pan"}</p>
         <span>{map.width} × {map.height} GRID</span>
       </footer>
     </div>
