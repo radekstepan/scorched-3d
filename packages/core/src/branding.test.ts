@@ -53,10 +53,15 @@ describe("branding", () => {
     expect(match?.[1]).toBe(APP_DOCUMENT_TITLE);
   });
 
-  it("renders the HUD eyebrow from the branding constant (no stale Nanolathe copy)", () => {
+  it("integrates the shared logo with an accessible name from the branding constant", () => {
     const appSource = readFileSync(join(ROOT, "apps", "web", "src", "App.tsx"), "utf8");
-    expect(appSource).toMatch(/APP_NAME/);
+    const brandSource = readFileSync(join(ROOT, "apps", "web", "src", "Brand.tsx"), "utf8");
+    expect(appSource).toMatch(/import Brand from ["']\.\/Brand["']/);
+    expect(appSource).toMatch(/<header className="command-header">\s*<Brand \/>/);
+    expect(brandSource).toMatch(/import\s*\{\s*APP_NAME\s*\}\s*from ["']@scorched-3d\/core["']/);
+    expect(brandSource).toMatch(/role="img" aria-label=\{APP_NAME\}/);
     expect(appSource).not.toMatch(/nanolathe/i);
+    expect(brandSource).not.toMatch(/nanolathe/i);
   });
 
   it("labels every package with the adopted product name", () => {
