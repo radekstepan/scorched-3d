@@ -1,6 +1,6 @@
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
-import { HULL_TURN_RATE, stepAngle, wrapAngle, yawToTarget } from "./facing.js";
+import { HULL_TURN_RATE, stepAngle, turnAuthority, wrapAngle, yawToTarget } from "./facing.js";
 import { accumulateStun, IMPACT_MAX_SHOVE, impactKick, tickStun } from "./impact.js";
 import {
   THREAT_LEASH_RADIUS,
@@ -103,6 +103,16 @@ export const MOVE_SPEED: Record<UnitKind, number> = {
   peewee: 80,
 };
 
+/**
+ * Alignment-grip floor: a hull spun fully around its target still drives at
+ * this fraction of its top speed. Kept above the turn-authority blend
+ * (facing `TURN_AUTHORITY_BLEND` 0.25×) on purpose: even the slowest rolling
+ * recovery crawls faster than the blend band, so every rolling turn —
+ * recovery arcs, U-turns, beaching slides — runs at the full traverse cap
+ * exactly as before, and only genuinely held hulls pivot at the floor.
+ * Ordered crowd push-through is the separate `ORDER_SPACING_FLOOR`.
+ */
+export const GRIP_FLOOR = 0.3;
 /** Waypoints per looping route, including the spawn cell as waypoint 0. */
 export const ROUTE_WAYPOINTS = 4;
 /** Patrol radius around the spawn cell, in cells. */
@@ -805,6 +815,19 @@ export function advanceMover(
  * when the clock expires so recoiled-then-free snapshots compare equal with
  * never-hit ones. Pure: returns a new mover.
  */
+/**
+ * Turn a hull toward `want` at the kind's traverse cap scaled by turn
+ * authority for `speed` (see facing `turnAuthority`): rolling hulls carve
+ * at full traverse exactly as before, held hulls neutral-steer at the
+ * pivot floor instead of whipping — and the cap still bounds every step.
+ * Pure.
+ */
+function turnHull(kind: UnitKind, hull: number, want: number, dt: number, speed: number): number {
+  const rate = HULL_TURN_RATE[kind] ?? 1.5;
+  const top = MOVE_SPEED[kind] ?? 32;
+  return stepAngle(hull, want, rate * turnAuthority(kind, speed, top) * dt);
+}
+
 function tickStunned(
   kind: UnitKind,
   mover: Mover,
@@ -828,8 +851,9 @@ function tickStunned(
       target = route[leg] ?? null;
     }
   }
-  const rate = HULL_TURN_RATE[kind] ?? 1.5;
-  const hull = target ? stepAngle(awake.hull, yawToTarget(awake, target), rate * dt) : awake.hull;
+  // A recoiling hull does not drive, so it faces its frozen target at the
+  // pivot floor — deliberately, never a whip mid-rock.
+  const hull = target ? turnHull(kind, awake.hull, yawToTarget(awake, target), dt, 0) : awake.hull;
   const clock = awake.stun ?? 0;
   const remain = tickStun(clock, dt);
   // Recoil slide: drain the standing knockback over the beat at constant
@@ -958,7 +982,6 @@ function pursueStep(
       : {}),
     ...(holding && threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
   };
-  const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const want = yawToTarget(mover, { x: tx, z: tz });
   // Outnumbered: hold facing the threat and wait for backup instead of
   // driving alone into the stronger force. Allies count around me (who can
@@ -973,7 +996,8 @@ function pursueStep(
       foes, tactics.teams, tactics.alive, tactics.hp,
     )
   ) {
-    return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
+    // Holding hulls do not translate, so they face at the pivot floor.
+    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
   }
   if (holding) {
     // Firing-position footwork: a holder carrying a sidestep point walks the
@@ -988,7 +1012,7 @@ function pursueStep(
     if (step && Number.isFinite(step.x) && Number.isFinite(step.z)) {
       if (Math.hypot(step.x - mover.x, step.z - mover.z) <= SIDESTEP_ARRIVE_RADIUS) {
         const { sidestep: _arrived, ...rest } = memory;
-        return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: rest };
+        return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: rest };
       }
       const shuffle = driveToward(kind, mover, step, dt, spacing, terrain, undefined, crush);
       if (shuffle.skipped) {
@@ -996,7 +1020,7 @@ function pursueStep(
       }
       return { ...shuffle.mover, threat: memory };
     }
-    return { ...mover, hull: stepAngle(mover.hull, want, rate * dt), threat: memory };
+    return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
   }
   const driven = driveToward(kind, mover, { x: tx, z: tz }, dt, spacing, terrain, undefined, crush);
   if (driven.skipped) {
@@ -1046,34 +1070,44 @@ function driveToward(
   crush?: CrushContext | null,
 ): { mover: Mover; skipped: boolean } {
   const desired = yawToTarget(mover, target);
-  const rate = HULL_TURN_RATE[kind] ?? 1.5;
-  const endpoint = (want: number): { hull: number; nx: number; nz: number } => {
-    const hull = stepAngle(mover.hull, want, rate * dt);
-    // Forward grip: full speed when lined up, down to 0.3 spun around — the
-    // hull always faces travel, turrets aim independently while moving.
-    const grip = Math.max(0.3, Math.cos(wrapAngle(want - hull)));
-    // Rough-terrain drag: steep grades and trees/rocks bleed speed off the
-    // step (flat open ground scales by exactly 1). Probed to the full-stride
-    // candidate so the drag reads the ground the hull would actually cross;
-    // the hull still refuses unwalkable steps below, this only slows allowed
-    // ones. A step touching standing wood crawls further at CRUSH_DRAG —
-    // ploughing a fresh lane reads much slower than brushing canopy.
-    // Group cohesion: orders issued together cap faster members at the
-    // slowest member's base speed, so the column moves as a group. Single
-    // orders carry no cap and drive at full kind speed. The cap only ever
-    // slows (never speeds a slow hull past its own base).
-    const base = MOVE_SPEED[kind] ?? 32;
-    const cap = order?.groupSpeed;
-    const top = cap !== undefined && Number.isFinite(cap) && cap > 0 ? Math.min(base, cap) : base;
+  // Group cohesion: orders issued together cap faster members at the
+  // slowest member's base speed, so the column moves as a group. Single
+  // orders carry no cap and drive at full kind speed. The cap only ever
+  // slows (never speeds a slow hull past its own base). Needed up front:
+  // turn authority follows the speed this stride can carry.
+  const kindBase = MOVE_SPEED[kind] ?? 32;
+  const cap = order?.groupSpeed;
+  const top = cap !== undefined && Number.isFinite(cap) && cap > 0 ? Math.min(kindBase, cap) : kindBase;
+  // Forward stride for a heading `want`: alignment grip off the CURRENT
+  // hull (intent — full speed lined up, `GRIP_FLOOR` spun around, so the
+  // hull always faces travel, turrets aim independently while moving) times
+  // rough-terrain drag and the crush crawl, probed along the current nose.
+  // The turn then follows at the authority this stride carries (see
+  // `turnHull`): anything rolling turns at full traverse exactly as before
+  // (even the slowest recovery crawl clears the blend band), while a held
+  // stride pivots at the floor instead of whipping.
+  //
+  // Rough-terrain drag: steep grades and trees/rocks bleed speed off the
+  // step (flat open ground scales by exactly 1). Probed to the full-stride
+  // candidate so the drag reads the ground the hull would actually cross;
+  // the hull still refuses unwalkable steps below, this only slows allowed
+  // ones. A step touching standing wood crawls further at CRUSH_DRAG —
+  // ploughing a fresh lane reads much slower than brushing canopy.
+  const strideFor = (want: number): number => {
+    const grip = Math.max(GRIP_FLOOR, Math.cos(wrapAngle(want - mover.hull)));
     const stride = top * Math.max(spacing, 0) * grip * dt;
-    const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(hull) * stride, mover.z + Math.cos(hull) * stride) : 1;
-    const probeX = mover.x + Math.sin(hull) * stride * rough;
-    const probeZ = mover.z + Math.cos(hull) * stride * rough;
+    const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(mover.hull) * stride, mover.z + Math.cos(mover.hull) * stride) : 1;
+    const probeX = mover.x + Math.sin(mover.hull) * stride * rough;
+    const probeZ = mover.z + Math.cos(mover.hull) * stride * rough;
     const crushing =
       crush != null
         ? treesCrushedByStep(crush.points, crush.field.trees, mover.x, mover.z, probeX, probeZ, kind)
         : [];
-    const step = stride * rough * (crushing.length > 0 ? CRUSH_DRAG : 1);
+    return stride * rough * (crushing.length > 0 ? CRUSH_DRAG : 1);
+  };
+  const rollToward = (want: number): { hull: number; nx: number; nz: number } => {
+    const step = strideFor(want);
+    const hull = turnHull(kind, mover.hull, want, dt, dt > 0 ? step / dt : 0);
     return { hull, nx: mover.x + Math.sin(hull) * step, nz: mover.z + Math.cos(hull) * step };
   };
   const baseFor = (hull: number): Pick<Mover, "hull" | "leg"> & Partial<Mover> => ({
@@ -1082,7 +1116,7 @@ function driveToward(
     ...(order ? { order } : {}),
     ...(mover.hold ? { hold: true as const } : {}),
   });
-  const direct = endpoint(desired);
+  const direct = rollToward(desired);
   if (!terrain || !stepBlocked(terrain, mover.x, mover.z, direct.nx, direct.nz, kind)) {
     // Felled lanes stay felled, so later passes skip both the fell and the crawl.
     fellTreesOnStep(crush, kind, mover.x, mover.z, direct.nx, direct.nz);
@@ -1135,7 +1169,7 @@ function driveToward(
         const px = mover.x + Math.sin(h) * stride;
         const pz = mover.z + Math.cos(h) * stride;
         if (stepBlocked(terrain, mover.x, mover.z, px, pz, kind)) continue;
-        const esc = endpoint(h);
+        const esc = rollToward(h);
         if (!stepBlocked(terrain, mover.x, mover.z, esc.nx, esc.nz, kind)) {
           fellTreesOnStep(crush, kind, mover.x, mover.z, esc.nx, esc.nz);
           return {
@@ -1154,8 +1188,9 @@ function driveToward(
   // Pinned: turn in place, never enter the slope. Patrol legs (no live
   // order) skip ahead once patience runs out; orders hold their ground.
   // Wood never pins — crush steps above always drive — so only walls wait.
+  // Nothing rolls, so the pivot runs at the floor: deliberate, never a whip.
   const stuck = (mover.stuck ?? 0) + dt;
-  const base = baseFor(direct.hull);
+  const base = baseFor(turnHull(kind, mover.hull, desired, dt, 0));
   if (!order && stuck >= BLOCKED_SKIP_AFTER) return { mover: { ...mover, ...base }, skipped: true };
   return { mover: { ...mover, ...base, stuck }, skipped: false };
 }

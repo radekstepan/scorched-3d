@@ -5,10 +5,13 @@ import {
   canFire,
   clampTurret,
   FIRE_TOLERANCE,
+  HULL_PIVOT_FLOOR,
   HULL_TURN_RATE,
   muzzleYaw,
   slewTurret,
   stepAngle,
+  turnAuthority,
+  TURN_AUTHORITY_BLEND,
   TURRET_LIMIT,
   TURRET_OVERSHOOT,
   TURRET_OVERSHOOT_SWING,
@@ -281,5 +284,61 @@ describe("aimStep", () => {
       if (Math.abs(turret - Math.PI / 2) < 1e-9) break;
     }
     expect(steps).toBeGreaterThan(Math.PI / 2 / (3.0 * dt));
+  });
+});
+
+describe("turnAuthority", () => {
+  const TOP = 72;
+
+  it("pins the neutral-steer pivot floor per kind (tracked slow, walkers nimble)", () => {
+    // Tracked hulls share one deliberate pivot; walkers shuffle-turn on
+    // their legs, infantry fastest — but nobody pivots at full traverse.
+    expect(HULL_PIVOT_FLOOR.flash).toBe(0.35);
+    expect(HULL_PIVOT_FLOOR.stump).toBe(0.35);
+    expect(HULL_PIVOT_FLOOR.hammer).toBe(0.35);
+    expect(HULL_PIVOT_FLOOR.commander).toBe(0.55);
+    expect(HULL_PIVOT_FLOOR.peewee).toBe(0.65);
+    for (const kind of UNIT_KINDS) {
+      const floor = HULL_PIVOT_FLOOR[kind]!;
+      expect(floor).toBeGreaterThan(0);
+      expect(floor).toBeLessThan(1);
+      expect(turnAuthority(kind, 0, TOP)).toBe(floor);
+    }
+  });
+
+  it("runs full authority past the blend band (recovery always full)", () => {
+    expect(TURN_AUTHORITY_BLEND).toBe(0.25);
+    for (const kind of UNIT_KINDS) {
+      // Even a fully-spun hull crawls at the 0.3× grip floor — above the
+      // blend — so every rolling recovery turns at full traverse.
+      expect(turnAuthority(kind, 0.3 * TOP, TOP)).toBe(1);
+      expect(turnAuthority(kind, TOP, TOP)).toBe(1);
+      expect(turnAuthority(kind, TOP * 2.5, TOP)).toBe(1);
+    }
+  });
+
+  it("eases linearly from the floor at rest to full across the blend", () => {
+    for (const kind of UNIT_KINDS) {
+      const floor = HULL_PIVOT_FLOOR[kind]!;
+      const band = TURN_AUTHORITY_BLEND * TOP;
+      expect(turnAuthority(kind, band / 2, TOP)).toBeCloseTo((floor + 1) / 2, 12);
+      const quarter = turnAuthority(kind, band / 4, TOP);
+      const threeQuarter = turnAuthority(kind, (3 * band) / 4, TOP);
+      expect(quarter).toBeGreaterThan(floor);
+      expect(threeQuarter).toBeGreaterThan(quarter);
+      expect(threeQuarter).toBeLessThan(1);
+    }
+  });
+
+  it("fails to the floor on corrupt input, never to zero or NaN", () => {
+    for (const kind of UNIT_KINDS) {
+      const floor = HULL_PIVOT_FLOOR[kind]!;
+      // A zero authority would deadlock facing; NaN would poison the hull.
+      expect(turnAuthority(kind, Number.NaN, TOP)).toBe(floor);
+      expect(turnAuthority(kind, TOP, Number.NaN)).toBe(floor);
+      expect(turnAuthority(kind, TOP, 0)).toBe(floor);
+      expect(turnAuthority(kind, -10, TOP)).toBe(floor);
+      expect(turnAuthority(kind, Number.POSITIVE_INFINITY, TOP)).toBe(floor);
+    }
   });
 });

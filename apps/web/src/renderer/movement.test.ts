@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
   FORMATION_MIN_SEPARATION,
+  HULL_TURN_RATE,
   createDamageField,
   isWalkable,
   pathWorldToCell,
@@ -938,6 +939,69 @@ describe("isMoving", () => {
     expect(movement.moverState(0)!.x).toBe(pinned.x);
     expect(movement.moverState(0)!.z).toBe(pinned.z);
     expect(movement.isMoving(0)).toBe(false);
+    movement.dispose();
+  });
+});
+
+describe("UnitMovement hull yaw continuity", () => {
+  it("never snaps body yaw through patrol corners, orders, pursuit, and stuns", () => {
+    // End-to-end pin: whatever the sweep and the drive decide — leg
+    // switches, cross-map orders, hunt acquisitions, separation jostles,
+    // recoil beats — the posed body yaw must evolve through the traverse
+    // cap every tick, never snap.
+    const specs: { kind: UnitKind; team: 0 | 1; x: number; z: number; rot: number }[] = [
+      { kind: "flash", team: 0, x: 0, z: 0, rot: 0 },
+      { kind: "stump", team: 0, x: 60, z: 0, rot: 0 },
+      { kind: "flash", team: 1, x: 400, z: 200, rot: Math.PI },
+      { kind: "hammer", team: 1, x: 460, z: 200, rot: Math.PI },
+    ];
+    const group = new THREE.Group();
+    group.userData.units = specs.map((s, n) => ({
+      kind: s.kind,
+      cellX: n + 1,
+      cellZ: n + 1,
+      rotation: s.rot,
+      team: s.team,
+    }));
+    for (const s of specs) {
+      const body = new THREE.Group();
+      body.rotation.y = s.rot;
+      body.position.set(s.x, 100, s.z);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const loops: RoutePoint[][] = specs.map((s) => [
+      { x: s.x, z: s.z },
+      { x: s.x, z: s.z + 400 },
+      { x: s.x + 400, z: s.z + 400 },
+      { x: s.x + 400, z: s.z },
+    ]);
+    const movement = new UnitMovement(group, loops, { groundY: () => 100 });
+    // Cross orders through each other (separation jostles guaranteed).
+    movement.orderUnit(0, { x: 800, z: 400 });
+    movement.orderUnit(2, { x: -400, z: -200 });
+    const dt = 1 / 60;
+    const prev = specs.map((s) => s.rot);
+    const worst = specs.map(() => 0);
+    for (let n = 0; n < 900; n++) {
+      if (n === 300) movement.stunUnit(1, 0.5, 60, 50);
+      movement.update(dt);
+      group.children.forEach((child, i) => {
+        const yaw = (child as THREE.Group).rotation.y;
+        const d = Math.abs(Math.atan2(Math.sin(yaw - prev[i]!), Math.cos(yaw - prev[i]!)));
+        if (d > worst[i]!) worst[i] = d;
+        prev[i] = yaw;
+      });
+    }
+    specs.forEach((s, i) => {
+      const cap = (HULL_TURN_RATE[s.kind] ?? 1.5) * dt;
+      expect(worst[i]).toBeLessThanOrEqual(cap + 1e-9);
+    });
+    // Vacuity guard: the run actually turned hulls (corners + pursuit).
+    expect(Math.max(...worst)).toBeGreaterThan(0);
     movement.dispose();
   });
 });

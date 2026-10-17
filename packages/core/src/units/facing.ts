@@ -42,6 +42,57 @@ export const HULL_TURN_RATE: Record<UnitKind, number> = {
   peewee: 2.7,
 };
 
+/**
+ * Neutral-steer pivot floor per kind: the fraction of the hull traverse cap
+ * still available at zero forward speed. Tracked hulls pivot deliberately
+ * (slow neutral-steer, never a whip); walkers shuffle-turn on their legs,
+ * infantry fastest — but nobody whips at full traverse standing still.
+ * Held-only by construction (see `TURN_AUTHORITY_BLEND`): anything rolling
+ * turns at full traverse exactly as before, so waypoint capture, beaching
+ * slides, and staging lanes keep their tuned geometry.
+ */
+export const HULL_PIVOT_FLOOR: Record<UnitKind, number> = {
+  flash: 0.35,
+  stump: 0.35,
+  hammer: 0.35,
+  commander: 0.55,
+  peewee: 0.65,
+};
+
+/**
+ * Turn-authority blend, as a fraction of top speed: authority ramps from
+ * the pivot floor at rest to full across this speed band, and holds full
+ * past it. Deliberately UNDER the alignment-grip floor (movement
+ * `GRIP_FLOOR` 0.3×): even a fully-spun hull crawls at 0.3× top speed, so
+ * every rolling recovery turns at the full traverse cap — only genuinely
+ * held hulls (stunned, pinned, spacing-held, stand-off facing) pivot at
+ * the floor. Retail note: retail TA couples the turn to the maneuver the
+ * other way (its `turnDist` test brakes the hull into the corner while the
+ * turn rate stays constant — nanolathe
+ * `04-units-orders-scripts-and-movement.md` [R-MOV-01 §4]); without
+ * persistent speed state this codebase instead disciplines only the
+ * rest pivot, leaving every rolling turn untouched.
+ */
+export const TURN_AUTHORITY_BLEND = 0.25;
+
+/**
+ * Turn authority 0..1: the fraction of a kind's hull traverse cap available
+ * at `speed` world units/s against its `topSpeed`. Full past the blend band
+ * (every rolling turn carves exactly as before), easing linearly to the
+ * neutral-steer pivot floor at rest (deliberate in-place facing, never a
+ * whip) — while the traverse cap still bounds every heading change and
+ * turrets stay faster than hulls. Corrupt input fails to the floor: a zero
+ * authority would deadlock facing, NaN would poison it.
+ */
+export function turnAuthority(kind: UnitKind, speed: number, topSpeed: number): number {
+  const floor = HULL_PIVOT_FLOOR[kind] ?? 0.35;
+  if (!Number.isFinite(speed) || !Number.isFinite(topSpeed) || !(topSpeed > 0)) return floor;
+  if (speed <= 0) return floor;
+  // Clamped: `floor + (1 - floor)` can round a hair past 1, which would let
+  // a yaw step exceed the traverse cap.
+  return Math.min(floor + (1 - floor) * Math.min(speed / (TURN_AUTHORITY_BLEND * topSpeed), 1), 1);
+}
+
 /** Turret slew rate per kind, radians per second. */
 export const TURRET_SLEW_RATE: Record<UnitKind, number> = {
   // Deliberately weighty: turrets stay faster than their hulls (fine vs

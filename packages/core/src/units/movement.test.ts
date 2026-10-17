@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
-import { HULL_TURN_RATE, yawToTarget } from "./facing.js";
+import { HULL_PIVOT_FLOOR, HULL_TURN_RATE, turnAuthority, yawToTarget } from "./facing.js";
 import { THREAT_MEMORY_DURATION } from "./retaliation.js";
 import {
   advanceMover,
@@ -10,6 +10,7 @@ import {
   BLOCKED_SKIP_AFTER,
   cellFromWorld,
   groupSpeedCap,
+  GRIP_FLOOR,
   hasOrder,
   holdMover,
   initMover,
@@ -2002,5 +2003,237 @@ describe("isMoverMoving", () => {
     const coasting: Mover = { ...parked, sep: { x: 2, z: 0 } };
     expect(isMoverMoving(coasting, true)).toBe(true);
     expect(isMoverMoving(coasting, false)).toBe(false);
+  });
+});
+
+describe("proper turns (pivot discipline)", () => {
+  const DT = 1 / 60;
+  const yawDelta = (a: number, b: number): number =>
+    Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+
+  it("pivots deliberately when held instead of whipping at full traverse", () => {
+    // Dead-astern target with spacing 0 (crowd-held, no translation): the
+    // hull neutral-steers at the pivot floor, not the traverse cap — a
+    // held flash turns 45° in ~1s, not ~0.35s.
+    for (const kind of UNIT_KINDS) {
+      const mover: Mover = { x: 0, z: 400, hull: 0, leg: 0 };
+      const route: RoutePoint[] = [
+        { x: 0, z: 400 },
+        { x: 0, z: -400 },
+      ];
+      const next = advanceMover(kind, mover, route, DT, 0);
+      const cap = HULL_TURN_RATE[kind] ?? 1.5;
+      expect(Math.abs(next.hull - mover.hull)).toBeCloseTo(
+        (HULL_PIVOT_FLOOR[kind] ?? 0.35) * cap * DT,
+        9,
+      );
+      // Strictly below the old full-traverse whip.
+      expect(Math.abs(next.hull - mover.hull)).toBeLessThan(cap * DT);
+      // Still facing travel (holding still, so the hull only yaws).
+      expect(next.x).toBe(mover.x);
+      expect(next.z).toBe(mover.z);
+    }
+  });
+
+  it("keeps full traverse carving arcs at speed", () => {
+    // Small heading correction at full speed: past the blend band authority
+    // is exactly 1, so aligned flight settles bit-identically to before
+    // (no circling regression possible — rolling turns are untouched).
+    for (const kind of UNIT_KINDS) {
+      const mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
+      const route: RoutePoint[] = [
+        { x: 0, z: 0 },
+        { x: 40, z: 400 },
+      ];
+      const next = advanceMover(kind, mover, route, DT, 1);
+      const cap = HULL_TURN_RATE[kind] ?? 1.5;
+      expect(Math.abs(next.hull - mover.hull)).toBeCloseTo(cap * DT, 12);
+    }
+  });
+
+  it("never exceeds the traverse cap on any tick, in any drive regime", () => {
+    // The continuity pin: ordered diagonals, patrol-leg switches, pursuit
+    // flips, separation jostles, stuns, and departures all evolve hull yaw
+    // through the capped turn rate — no tick may snap.
+    const map = generateMap("greenreach", 42);
+    const routes = planRoutes(map, map.units, 42);
+    const kinds = map.units.map((u) => u.kind);
+    const field = map as unknown as SeatField;
+    const worst: number[] = kinds.map(() => 0);
+    const note = (before: Mover, after: Mover, i: number): void => {
+      const d = yawDelta(before.hull, after.hull);
+      if (d > worst[i]!) worst[i] = d;
+    };
+
+    // Ordered diagonal completion across the whole roster.
+    let sim: Mover[] = map.units.map((u, i) => {
+      const m = { x: 0, z: 0, hull: u.rotation, leg: 1 } as Mover;
+      const spawn = routes[i]![0]!;
+      m.x = spawn.x;
+      m.z = spawn.z;
+      const gx = spawn.x > 0 ? -1200 : 1200;
+      const gz = spawn.z > 0 ? -1200 : 1200;
+      return orderMover(m, findWorldPath(field, { x: m.x, z: m.z }, { x: gx, z: gz }));
+    });
+    for (let t = 0; t < 2400 && sim.some((m) => m.order); t++) {
+      const prev = sim;
+      sim = advanceMovers(kinds, sim, routes, DT, field);
+      sim.forEach((m, i) => note(prev[i]!, m, i));
+    }
+
+    // Patrol-leg switches on a second map.
+    {
+      const dusty = generateMap("dustplains", 7);
+      const dustyRoutes = planRoutes(dusty, dusty.units, 7);
+      const dustyKinds = dusty.units.map((u) => u.kind);
+      const dustyField = dusty as unknown as SeatField;
+      const dustyWorst: number[] = dustyKinds.map(() => 0);
+      let patrol: Mover[] = dusty.units.map((u, i) => {
+        const spawn = dustyRoutes[i]![0]!;
+        return { x: spawn.x, z: spawn.z, hull: u.rotation, leg: 1 } as Mover;
+      });
+      for (let t = 0; t < 1200; t++) {
+        const prev = patrol;
+        patrol = advanceMovers(dustyKinds, patrol, dustyRoutes, DT, dustyField);
+        patrol.forEach((m, i) => {
+          const d = yawDelta(prev[i]!.hull, m.hull);
+          if (d > dustyWorst[i]!) dustyWorst[i] = d;
+        });
+      }
+      dustyKinds.forEach((kind, i) => {
+        const cap = (HULL_TURN_RATE[kind] ?? 1.5) * DT;
+        expect(dustyWorst[i]).toBeLessThanOrEqual(cap + 1e-9);
+      });
+    }
+
+    // Pursuit flips: a live foe teleports across the victim twice a second,
+    // whipping the desired bearing 180° — the hull must still slew capped.
+    {
+      let victim: Mover = {
+        x: 0, z: 0, hull: 0, leg: 1,
+        threat: { attacker: 1, x: 300, z: 0, ttl: THREAT_MEMORY_DURATION },
+      };
+      const lane = [
+        { x: 0, z: 0 },
+        { x: 0, z: 400 },
+      ];
+      let flipWorst = 0;
+      for (let t = 0; t < 600; t++) {
+        const side = Math.floor(t / 30) % 2 === 0 ? 1 : -1;
+        const foes = [{ x: victim.x, z: victim.z }, { x: side * 300, z: 0 }];
+        const prev = victim;
+        victim = advanceMover("flash", victim, lane, DT, 1, null, null, foes);
+        // Re-hit every flip so the memory never expires mid-probe.
+        if (t % 30 === 0 && victim.threat) victim = { ...victim, threat: { ...victim.threat, ttl: THREAT_MEMORY_DURATION } };
+        flipWorst = Math.max(flipWorst, yawDelta(prev.hull, victim.hull));
+      }
+      expect(flipWorst).toBeLessThanOrEqual((HULL_TURN_RATE.flash ?? 1.5) * DT + 1e-9);
+    }
+
+    // Separation jostle: a head-on ordered pair through each other.
+    {
+      const pairKinds = ["flash", "flash"] as const;
+      let pair: Mover[] = [
+        orderMover({ x: -100, z: 0, hull: Math.PI / 2, leg: 0 }, [{ x: 100, z: 0 }]),
+        orderMover({ x: 100, z: 0, hull: -Math.PI / 2, leg: 0 }, [{ x: -100, z: 0 }]),
+      ];
+      const pairWorst = [0, 0];
+      for (let t = 0; t < 600; t++) {
+        const prev = pair;
+        pair = advanceMovers([...pairKinds], pair, [[], []], DT, null);
+        pair.forEach((m, i) => {
+          pairWorst[i] = Math.max(pairWorst[i]!, yawDelta(prev[i]!.hull, m.hull));
+        });
+      }
+      for (const w of pairWorst) expect(w).toBeLessThanOrEqual((HULL_TURN_RATE.flash ?? 1.5) * DT + 1e-9);
+    }
+
+    // Stun beat + departure lead-in: turn-while-recoiling and the HQ exit.
+    {
+      let stunned = stunMover(
+        { x: 0, z: 0, hull: 0, leg: 1 },
+        0.5,
+        { x: 50, z: 0 },
+      );
+      const lane = [
+        { x: 0, z: 0 },
+        { x: -400, z: 0 },
+      ];
+      let stunWorst = 0;
+      for (let t = 0; t < 120 && stunned.stun !== undefined; t++) {
+        const prev = stunned;
+        stunned = advanceMover("stump", stunned, lane, DT, 1, null);
+        stunWorst = Math.max(stunWorst, yawDelta(prev.hull, stunned.hull));
+      }
+      expect(stunWorst).toBeLessThanOrEqual((HULL_TURN_RATE.stump ?? 1.5) * DT + 1e-9);
+      let exit: Mover = {
+        x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { x: 0, z: 320 },
+      };
+      const loop = [
+        { x: 160, z: 320 },
+        { x: 160, z: -320 },
+      ];
+      let exitWorst = 0;
+      for (let t = 0; t < 1200; t++) {
+        const prev = exit;
+        exit = advanceMover("hammer", exit, loop, DT, 1, null);
+        exitWorst = Math.max(exitWorst, yawDelta(prev.hull, exit.hull));
+        if (!exit.leadIn) break;
+      }
+      expect(exitWorst).toBeLessThanOrEqual((HULL_TURN_RATE.hammer ?? 1.5) * DT + 1e-9);
+    }
+
+    kinds.forEach((kind, i) => {
+      const cap = (HULL_TURN_RATE[kind] ?? 1.5) * DT;
+      expect(worst[i]).toBeLessThanOrEqual(cap + 1e-9);
+    });
+  });
+
+  it("turns every rolling recovery at full traverse (capture intact)", () => {
+    // The grip/blend coupling, pinned at the contract level: the grip floor
+    // sits above the authority blend, so even a fully-spun recovery crawl
+    // carries full authority — recovery arcs keep their tuned radii inside
+    // ARRIVE_RADIUS for every kind. A future grip/rate edit that breaks
+    // this fails here first, before staging loops start circling.
+    expect(GRIP_FLOOR).toBe(0.3);
+    for (const kind of UNIT_KINDS) {
+      const top = MOVE_SPEED[kind] ?? 32;
+      const v = GRIP_FLOOR * top;
+      expect(turnAuthority(kind, v, top)).toBe(1);
+      const omega = (HULL_TURN_RATE[kind] ?? 1.5) * turnAuthority(kind, v, top);
+      expect(v / omega).toBeLessThan(ARRIVE_RADIUS - 2);
+    }
+  });
+
+  it("keeps rolling corners at full traverse and completes (no orbiting)", () => {
+    // Rolling-full contract, end to end: a 90° ordered corner turns at the
+    // traverse cap exactly as before pivot discipline (held-only by design
+    // — slowing rolling turns circled staging loops and bullied slow hulls
+    // off their lanes), and the order completes instead of orbiting.
+    const dt = 1 / 60;
+    let m = orderMover({ x: 0, z: -400, hull: 0, leg: 0 }, [
+      { x: 0, z: 400 },
+      { x: 400, z: 400 },
+    ]);
+    const route = [{ x: 0, z: 0 }];
+    let cornerStart = -1;
+    let cornerEnd = -1;
+    let ticks = 0;
+    for (; ticks < 2000; ticks++) {
+      m = advanceMover("flash", m, route, dt, 1, null);
+      if (!m.order) break;
+      if (m.order.at === 1 && cornerStart < 0) cornerStart = ticks;
+      if (cornerStart >= 0 && cornerEnd < 0 && Math.abs(m.hull - Math.PI / 2) < (5 * Math.PI) / 180) {
+        cornerEnd = ticks;
+      }
+    }
+    expect(m.order).toBeUndefined();
+    expect(cornerStart).toBeGreaterThanOrEqual(0);
+    expect(cornerEnd).toBeGreaterThan(cornerStart);
+    // Full-traverse pace for 90° at 2.2 rad/s is ~40 ticks; the corner must
+    // hold that pace (a slower corner means rolling authority regressed).
+    const cornerTicks = cornerEnd - cornerStart;
+    expect(cornerTicks).toBeGreaterThan(35);
+    expect(cornerTicks).toBeLessThan(46);
   });
 });
