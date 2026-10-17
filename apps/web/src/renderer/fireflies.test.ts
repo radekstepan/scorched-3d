@@ -154,9 +154,10 @@ describe("fireflyDrift", () => {
   });
 
   it("drifts slightly faster than the legacy amble, on the same orbit shape", () => {
-    // Legacy wander: hardcoded 0.35 rad/s. The retune names the speed and
-    // lifts it slightly — livelier motes, same lissajous shape + radius.
-    const LEGACY_SPEED = 0.35;
+    // Legacy wander: 0.42 rad/s (itself a retune of the original hardcoded
+    // 0.35 amble). This retune lifts the named speed slightly again —
+    // livelier motes, same lissajous shape + radius.
+    const LEGACY_SPEED = 0.42;
     expect(FIREFLY_DRIFT_SPEED).toBeGreaterThan(LEGACY_SPEED);
     expect(FIREFLY_DRIFT_SPEED / LEGACY_SPEED).toBeLessThan(1.3);
     // fireflyDrift actually runs at the named speed (phase 0: x = cos(w*t)*r).

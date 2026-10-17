@@ -35,10 +35,10 @@ export const FIREFLY_MAX_LIFT = 15;
 export const FIREFLY_DRIFT_RADIUS = 9;
 /**
  * Drift angular speed in rad/s: the lissajous wander circles each anchor
- * slightly faster than the original 0.35 amble — livelier motes, same
- * orbit shape and radius.
+ * slightly faster than the 0.42 tune (itself up from the original 0.35
+ * amble) — livelier motes, same orbit shape and radius.
  */
-export const FIREFLY_DRIFT_SPEED = 0.42;
+export const FIREFLY_DRIFT_SPEED = 0.48;
 /**
  * Ground-pool falloff radius (world units, mirrored in the shaders): each
  * mote's halo pools slightly tighter than the old 38, so one firefly
