@@ -3254,7 +3254,7 @@ describe("CombatFx fire on the move", () => {
     seed: number,
     isMoving: ((index: number) => boolean) | undefined,
     ticks: number,
-  ): { fired: number; ticksTo12: number; damage: readonly number[] } {
+  ): { fired: number; ticksTo8: number; damage: readonly number[] } {
     const fx = new CombatFx(
       new THREE.Scene(),
       makeFlashDuel(400),
@@ -3266,34 +3266,35 @@ describe("CombatFx fire on the move", () => {
         : { groundY: () => 100, blastFeatures: () => {}, isMoving },
     );
     fx.setExternalHull(true);
-    let ticksTo12 = -1;
+    let ticksTo8 = -1;
     for (let n = 0; n < ticks; n++) {
       fx.update(1 / 60);
-      if (ticksTo12 < 0 && fx.totalFired >= 12) ticksTo12 = n + 1;
+      if (ticksTo8 < 0 && fx.totalFired >= 8) ticksTo8 = n + 1;
     }
-    const out = { fired: fx.totalFired, ticksTo12, damage: fx.damageList() };
+    const out = { fired: fx.totalFired, ticksTo8, damage: fx.damageList() };
     fx.dispose();
     return out;
   }
 
   it("fires at half pace while the gunner displaces", () => {
-    const still = runTwin(21, () => false, 1200);
-    const moving = runTwin(21, () => true, 1200);
-    expect(still.ticksTo12).toBeGreaterThan(0);
-    expect(moving.ticksTo12).toBeGreaterThan(0);
-    // Strictly fewer volleys — and the gap reads as the ~2x refire penalty,
+    const still = runTwin(21, () => false, 480);
+    const moving = runTwin(21, () => true, 480);
+    expect(still.ticksTo8).toBeGreaterThan(0);
+    expect(moving.ticksTo8).toBeGreaterThan(0);
+    // Compare before faster stationary guns kill their opponents and go quiet.
+    // Strictly fewer volleys — the gap reads as the ~2x refire penalty,
     // pinned as ratios with margin, never absolute counts.
     expect(moving.fired).toBeLessThan(still.fired);
     expect(moving.fired / still.fired).toBeGreaterThan(0.35);
     expect(moving.fired / still.fired).toBeLessThan(0.65);
-    expect(moving.ticksTo12 / still.ticksTo12).toBeGreaterThan(1.6);
-    expect(moving.ticksTo12 / still.ticksTo12).toBeLessThan(2.4);
+    expect(moving.ticksTo8 / still.ticksTo8).toBeGreaterThan(1.6);
+    expect(moving.ticksTo8 / still.ticksTo8).toBeLessThan(2.4);
   });
 
   it("penalizes only the volley the mover fired", () => {
-    const still = runTwin(21, () => false, 1200);
-    const half = runTwin(21, (i) => i === 0, 1200);
-    const all = runTwin(21, () => true, 1200);
+    const still = runTwin(21, () => false, 480);
+    const half = runTwin(21, (i) => i === 0, 480);
+    const all = runTwin(21, () => true, 480);
     // One gunner reporting moving lands strictly between the twins: the
     // penalty follows the volley that just left, not the whole schedule.
     expect(half.fired).toBeLessThan(still.fired);
@@ -3301,10 +3302,10 @@ describe("CombatFx fire on the move", () => {
   });
 
   it("keeps the stationary beat bit-identical with or without the hook", () => {
-    const legacy = runTwin(21, undefined, 1200);
-    const hooked = runTwin(21, () => false, 1200);
+    const legacy = runTwin(21, undefined, 480);
+    const hooked = runTwin(21, () => false, 480);
     expect(hooked.fired).toBe(legacy.fired);
-    expect(hooked.ticksTo12).toBe(legacy.ticksTo12);
+    expect(hooked.ticksTo8).toBe(legacy.ticksTo8);
     expect([...hooked.damage]).toEqual([...legacy.damage]);
   });
 });
@@ -3465,5 +3466,108 @@ describe("CombatFx gun stickiness (snap)", () => {
     expect(fx.totalFired).toBeGreaterThanOrEqual(20);
     expect(switches / Math.max(fx.totalFired, 1)).toBeLessThan(0.05);
     fx.dispose();
+  });
+});
+
+describe("CombatFx independent team weapon clocks", () => {
+  function army(count: number): THREE.Group {
+    const units = new THREE.Group();
+    units.userData.units = Array.from({ length: count + 1 }, (_, i) => ({
+      kind: "flash", team: i === count ? 1 : 0, rotation: i === count ? Math.PI : 0,
+      cellX: i, cellZ: 0,
+    }));
+    for (let i = 0; i <= count; i++) {
+      const body = new THREE.Group();
+      body.position.set(((i % 10) - 5) * 35, 100, i === count ? 650 : Math.floor(i / 10) * 25);
+      body.rotation.y = i === count ? Math.PI : 0;
+      const turret = new THREE.Group();
+      body.userData.turret = turret;
+      body.add(turret);
+      units.add(body);
+    }
+    return units;
+  }
+
+  function shooters(fx: CombatFx, frames = 150): Set<number> {
+    const seen = new Set<number>();
+    for (let frame = 0; frame < frames; frame++) {
+      fx.update(1 / 60);
+      for (const shot of (fx as unknown as { shots: { attacker: number }[] }).shots) {
+        seen.add(shot.attacker);
+      }
+    }
+    return seen;
+  }
+
+  it("lets all ten facing guns fire even when random draws always select the first entry", () => {
+    const fx = new CombatFx(new THREE.Scene(), army(10), () => 0);
+    expect(shooters(fx)).toEqual(new Set(Array.from({ length: 11 }, (_, i) => i)));
+    expect(fx.totalFired).toBeGreaterThanOrEqual(22);
+    fx.dispose();
+  });
+
+  it("keeps peers firing while another gun cannot traverse onto its target", () => {
+    const units = army(3);
+    units.children[0]!.rotation.y = Math.PI;
+    const fx = new CombatFx(new THREE.Scene(), units, () => 0);
+    fx.setExternalHull(true);
+    const seen = shooters(fx);
+    expect(seen.has(0)).toBe(false);
+    expect(seen.has(1)).toBe(true);
+    expect(seen.has(2)).toBe(true);
+    expect(seen.has(3)).toBe(true);
+    fx.dispose();
+  });
+
+  it("backpressures full projectile pools without starving the remaining guns", () => {
+    const fx = new CombatFx(new THREE.Scene(), army(140), () => 0);
+    const seen = shooters(fx, 36);
+    expect(fx.totalFired).toBe(128);
+    // Release in-flight work as a terrain re-snap does. Waiting weapons must
+    // stay ready, rather than incorrectly consume a reload when capped.
+    fx.clearTransients();
+    for (const shooter of shooters(fx, 24)) seen.add(shooter);
+    expect(seen.size).toBe(141);
+    fx.dispose();
+  });
+
+  it("initializes reinforcement clocks and never services destroyed guns", () => {
+    const units = army(2);
+    const fx = new CombatFx(new THREE.Scene(), units, () => 0);
+    fx.update(0.1);
+    (fx as unknown as { destroyed: boolean[] }).destroyed[0] = true;
+    const reinforcement = units.children[1]!.clone();
+    reinforcement.userData.turret = reinforcement.children[0];
+    units.add(reinforcement);
+    units.userData.units.push({ ...units.userData.units[1] });
+    const seen = shooters(fx);
+    expect(seen.has(0)).toBe(false);
+    expect(seen.has(3)).toBe(true);
+    fx.dispose();
+  });
+
+  it("applies the moving reload penalty to each gun independently", () => {
+    function run(moving: boolean): number[] {
+      const fx = new CombatFx(new THREE.Scene(), army(2), () => 0, {
+        groundY: () => 0,
+        blastFeatures: () => {},
+        isMoving: (i) => moving && i === 0,
+      });
+      const seen = new Set<unknown>();
+      const counts = [0, 0, 0];
+      for (let frame = 0; frame < 240; frame++) {
+        fx.update(1 / 60);
+        for (const shot of (fx as unknown as { shots: { attacker: number }[] }).shots) {
+          if (!seen.has(shot)) { seen.add(shot); counts[shot.attacker]!++; }
+        }
+      }
+      fx.dispose();
+      return counts;
+    }
+    const resting = run(false);
+    const moving = run(true);
+    expect(moving[0]).toBeLessThan(resting[0]!);
+    expect(moving[1]).toBe(resting[1]);
+    expect(moving[2]).toBe(resting[2]);
   });
 });

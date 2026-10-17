@@ -102,8 +102,8 @@ export function shotDelayFor(kind: UnitKind): { min: number; max: number } {
  * exact power of two so the moving/stationary ratio pins exactly.
  */
 export const MOVING_REFIRE_MULTIPLIER = 2;
-/** Perf caps: concurrent tracers and the flights they may spawn. */
-export const MAX_SHOTS = 6;
+/** Army-sized tracer budget; expensive explosion effects remain separately capped. */
+export const MAX_SHOTS = 128;
 export const MAX_EXPLOSIONS = 8;
 /** Longest allowed flight, seconds (safety net; range gates fire first). */
 export const FLIGHT_MAX_TIME = 3.0;

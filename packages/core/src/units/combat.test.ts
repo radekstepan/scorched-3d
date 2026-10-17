@@ -423,8 +423,11 @@ describe("weapon profiles", () => {
 
   it("keeps perf caps sane", () => {
     expect(MAX_SHOTS).toBeGreaterThan(0);
-    expect(MAX_SHOTS).toBeLessThanOrEqual(12);
-    expect(MAX_EXPLOSIONS).toBeGreaterThanOrEqual(MAX_SHOTS);
+    // Tracers must accommodate an army; expensive impact effects stay separately capped.
+    expect(MAX_SHOTS).toBeGreaterThanOrEqual(64);
+    expect(MAX_SHOTS).toBeLessThanOrEqual(128);
+    expect(MAX_EXPLOSIONS).toBeGreaterThan(0);
+    expect(MAX_EXPLOSIONS).toBeLessThanOrEqual(12);
   });
 
   it("gives every kind a positive muzzle offset", () => {

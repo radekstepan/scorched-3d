@@ -100,7 +100,8 @@ import { unitHullMaterial } from "./unitFog";
  *   the heavy-traverse overcorrect (see core `slewTurret`).
  * - The retail weapon catalog (spec 06 §2: velocity/range/reload/burst)
  *   becomes per-kind `WEAPON_PROFILES` in core (muzzle velocity/color) plus
- *   a single interval scheduler standing in for per-slot reload timers.
+ *   independent per-unit reload timers in team battles. Unteamed ambient
+ *   fixtures retain the legacy single-gun scheduler.
  *   Retail splits direct fire (`T = D / V`, spec 06 §3.2) from ballistic
  *   fire (muzzle velocity plus gravity through the §3.3 solver): bolts fly
  *   straight at muzzle velocity, shells integrate under `GRAVITY` along the
@@ -725,6 +726,10 @@ export class CombatFx {
   private units: THREE.Group;
   private rng: () => number;
   private timer: number;
+  /** Team battles service each weapon independently; blocked guns never stall peers. */
+  private weaponTimers: number[] = [];
+  /** Rotate service order so a full projectile pool cannot starve late roster entries. */
+  private weaponCursor = 0;
   private shots: Shot[] = [];
   private flashes: Flash[] = [];
   private explosions: Explosion[] = [];
@@ -1313,22 +1318,28 @@ export class CombatFx {
     // would rest inside a bole. Felled before the firing solution runs, the
     // muzzle can never start inside wood it just entered.
     this.crushBarrels();
-    this.timer -= dt;
-    if (this.timer <= 0) {
-      if (this.tryFire()) {
-        // Per-kind refire: the volley that just left sets the next beat —
-        // rapid walker guns quicken the shared cadence, tanks keep it —
-        // and a volley fired on the move reloads slower, so driving guns
-        // keep firing, just not as fast.
-        const gunnerMoving =
-          this.lastAttacker !== null && (this.env?.isMoving?.(this.lastAttacker) ?? false);
-        this.timer = this.lastKind
-          ? nextShotDelayFor(this.lastKind, this.rng, gunnerMoving)
-          : nextShotDelay(this.rng);
-      } else {
-        // Still traversing (or capped): retry soon so aimed pairs fire
-        // without waiting out a full ambient interval.
-        this.timer = 0.12 + this.rng() * 0.1;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    if (placed?.some((unit) => unit.team !== undefined)) {
+      this.updateWeapons(dt);
+    } else {
+      // Preserve the ambient scheduler for legacy, unteamed demo fixtures.
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        if (this.tryFire()) {
+          // Per-kind refire: the volley that just left sets the next beat —
+          // rapid walker guns quicken the shared cadence, tanks keep it —
+          // and a volley fired on the move reloads slower, so driving guns
+          // keep firing, just not as fast.
+          const gunnerMoving =
+            this.lastAttacker !== null && (this.env?.isMoving?.(this.lastAttacker) ?? false);
+          this.timer = this.lastKind
+            ? nextShotDelayFor(this.lastKind, this.rng, gunnerMoving)
+            : nextShotDelay(this.rng);
+        } else {
+          // Still traversing (or capped): retry soon so aimed pairs fire
+          // without waiting out a full ambient interval.
+          this.timer = 0.12 + this.rng() * 0.1;
+        }
       }
     }
     this.advanceShots(dt);
@@ -1342,6 +1353,46 @@ export class CombatFx {
     // sunk hulls and gutter out through the same decay fractions.
     const husk = this.poseHusks();
     this.damageFx.update(this.damage, this.units.children, this.elapsed, husk);
+  }
+
+  /** Independent per-gun reloads, inspired by Nanolathe's weapon-slot pipeline. */
+  private updateWeapons(dt: number): void {
+    const count = this.units.children.length;
+    const snapshot = this.rosterSnapshot();
+    const hp = this.damage.map((damage) => 1 - damage);
+    this.weaponTimers.length = count;
+    for (let i = 0; i < count; i++) {
+      // Initial delay staggers the opening salvo; roster growth gets its own clock.
+      this.weaponTimers[i] = (this.weaponTimers[i] ?? nextShotDelay(this.rng)) - dt;
+    }
+    for (let n = 0; n < count; n++) {
+      const i = (this.weaponCursor + n) % count;
+      if (this.destroyed[i] || this.weaponTimers[i]! > 0) continue;
+      const kind = this.unitKind(i);
+      if (!kind || snapshot.teams[i] === undefined) continue;
+      // Saturation is backpressure, never a successful shot or a reload.
+      if (this.shots.length >= MAX_SHOTS) continue;
+      if (this.env?.isEngaged?.(i) && this.pendingHq.delete(i)) this.releaseOvershoot(i);
+      const before = this.fired;
+      const hqPick = this.pickHqShot(i);
+      if (hqPick) {
+        const hq = this.hqTargetOf(hqPick.team);
+        if (hq) this.fireAtHq(i, hq);
+      } else if (this.pending.has(i) || this.hasAdmittedFoe(i, snapshot.positions, snapshot.teams, snapshot.liveFlags)) {
+        const target = pickStrategicTarget(i, snapshot.positions, snapshot.teams, snapshot.liveFlags, {
+          hp,
+          focusCounts: this.pending.values(),
+          sticky: this.pending.get(i) ?? -1,
+          maxDist: this.admissionFor(kind),
+        });
+        if (target >= 0) this.fireAtUnit(i, target);
+      }
+      // Only a launched round consumes reload. Aim/terrain failures retry locally.
+      this.weaponTimers[i] = this.fired > before
+        ? nextShotDelayFor(kind, this.rng, this.env?.isMoving?.(i) ?? false)
+        : 0.12 + this.rng() * 0.1;
+    }
+    if (count > 0) this.weaponCursor = (this.weaponCursor + 1) % count;
   }
 
   /**
@@ -2273,7 +2324,7 @@ export class CombatFx {
    * once the grudge clears. Consumes rng only when it proceeds, so
    * hull-duel streams replay untouched without HQs.
    */
-  private pickHqShot(): { attacker: number; team: number } | null {
+  private pickHqShot(onlyAttacker?: number): { attacker: number; team: number } | null {
     const targets = this.env?.hqTargets?.() ?? [];
     if (targets.length === 0) return null;
     const placed = this.units.userData.units as PlacedUnit[] | undefined;
@@ -2283,6 +2334,7 @@ export class CombatFx {
     const pairs: { attacker: number; team: number }[] = [];
     for (const t of targets) {
       for (let i = 0; i < this.units.children.length; i++) {
+        if (onlyAttacker !== undefined && i !== onlyAttacker) continue;
         if (this.destroyed[i]) continue;
         if (engaged?.(i)) continue;
         const side = placed[i]?.team;
