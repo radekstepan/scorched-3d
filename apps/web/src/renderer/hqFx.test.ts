@@ -153,13 +153,13 @@ describe("HqFx", () => {
       rng: mulberry32(99),
       onSpawn: (_team, kind) => releases.push({ kind, at: clock }),
     });
-    // Step 1 s at a time until the cap releases (worst case 4 × 35 s).
+    // Step 1 s at a time until the cap releases (worst case 4 × 46⅔ s).
     for (let n = 0; n < 400 && releases.length < HQ_MAX_SPAWNS; n++) {
       hq.update(1);
       clock += 1;
     }
     expect(releases).toHaveLength(HQ_MAX_SPAWNS);
-    // The spawn clock pauses while the door slides (2.6 s against ≥15 s
+    // The spawn clock pauses while the door slides (2.6 s against ≥20 s
     // build times), so the gap between two releases is the previous kind's
     // build time plus the door overhead (±1 step of 1 s granularity).
     const door = HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T;

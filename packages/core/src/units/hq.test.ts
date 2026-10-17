@@ -396,24 +396,28 @@ describe("spawnIntervalFor", () => {
   });
 });
 
-describe("faster production cadence", () => {
-  it("pins the doubled cadence in absolute seconds", () => {
-    // Reinforcements must arrive about twice as fast as the legacy 40 s /
-    // 30–70 s pacing: first release at 20 s, per-kind builds 15–35 s.
+describe("production cadence", () => {
+  it("pins the 20 s peewee cadence in absolute seconds", () => {
+    // Per-kind builds scale by 4/3 off the old 15–35 s pacing (peewee
+    // 15 → 20 s): first release still at 20 s, builds 20–46⅔ s.
     expect(HQ_SPAWN_INTERVAL).toBe(20);
-    expect(HQ_SPAWN_MIN_INTERVAL).toBe(15);
-    expect(HQ_SPAWN_MAX_INTERVAL).toBe(35);
-    expect(spawnIntervalFor("peewee")).toBe(15);
-    expect(spawnIntervalFor("hammer")).toBe(35);
+    expect(HQ_SPAWN_MIN_INTERVAL).toBe(20);
+    expect(HQ_SPAWN_MAX_INTERVAL).toBe(140 / 3);
+    expect(spawnIntervalFor("peewee")).toBe(20);
+    expect(spawnIntervalFor("hammer")).toBe(HQ_SPAWN_MAX_INTERVAL);
+    // Mid-roster builds keep their relative ratios (each exactly 4/3 ×
+    // the old ≈18.2 / ≈22.0 s interpolation).
+    expect(spawnIntervalFor("flash")).toBeCloseTo(24.3, 1);
+    expect(spawnIntervalFor("stump")).toBeCloseTo(29.3, 1);
     for (const kind of ["flash", "stump"] as const) {
-      expect(spawnIntervalFor(kind)).toBeGreaterThan(15);
-      expect(spawnIntervalFor(kind)).toBeLessThan(35);
+      expect(spawnIntervalFor(kind)).toBeGreaterThan(20);
+      expect(spawnIntervalFor(kind)).toBeLessThan(140 / 3);
     }
   });
 
-  it("fields the full cap well inside the old worst case", () => {
-    // Old pacing needed up to 40 + 3 × 70 = 250 s for all 4 releases; the
-    // doubled cadence caps at 20 + 3 × 35 = 125 s for every seed.
+  it("fields the full cap within the rescaled worst case", () => {
+    // Old pacing needed up to 20 + 3 × 35 = 125 s for all 4 releases;
+    // the rescaled cadence caps at 20 + 3 × 140/3 = 160 s for every seed.
     for (const seed of [1, 7, 42, 99, 1234]) {
       const [state] = createHqSpawns();
       const rng = mulberry32(seed);

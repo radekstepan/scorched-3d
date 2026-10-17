@@ -78,15 +78,19 @@ export function pickNextSpawnUnit(rng: () => number): UnitKind {
 }
 
 /** Build time of the weakest roster member (fast scout reinforcements). */
-export const HQ_SPAWN_MIN_INTERVAL = 15;
-/** Build time of the strongest roster member (artillery takes a while). */
-export const HQ_SPAWN_MAX_INTERVAL = 35;
+export const HQ_SPAWN_MIN_INTERVAL = 20;
+/**
+ * Build time of the strongest roster member (artillery takes a while):
+ * legacy 35 s × 4/3, the same factor as the peewee 15 → 20 s move, so
+ * every roster member keeps its relative build-time ratio.
+ */
+export const HQ_SPAWN_MAX_INTERVAL = 140 / 3;
 
 /**
  * Seconds to build one `kind`: linear in strength from the weakest roster
- * member (15 s) to the strongest (35 s), so stronger units take more time to
- * make (peewee 15, flash ≈ 18, stump ≈ 22, hammer 35 — weighted mean ≈ 17 s,
- * twice the legacy cadence so reinforcements join the fight sooner).
+ * member (20 s) to the strongest (≈ 46.7 s), so stronger units take more
+ * time to make (peewee 20, flash ≈ 24.3, stump ≈ 29.3, hammer ≈ 46.7 —
+ * weighted mean ≈ 22.8 s; each build is 4/3 × the old 15–35 s pacing).
  * Unknown kinds fall back to `HQ_SPAWN_INTERVAL`.
  */
 export function spawnIntervalFor(kind: UnitKind): number {
