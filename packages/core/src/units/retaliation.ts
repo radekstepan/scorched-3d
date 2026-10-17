@@ -107,12 +107,12 @@ export interface ThreatMemory {
    * (attacker >= 0): the pursuit drive walks to it first at any range and
    * clears it on arrival (see `SIDESTEP_ARRIVE_RADIUS`) — the step is
    * scored fresh at attach and walks in ~1 s, so the hold/close boundary
-   * never drops it mid-stride — and never carries it across a re-hit or a
-   * re-seek (fresh information wins; attachers re-evaluate when still
-   * warranted). Absent means hold facing the threat / close on it, exactly
-   * as before.
+   * never drops it mid-stride. Obstruction escapes survive hits and repeated
+   * seeks until arrival; optional orbit steps still yield to new threats.
+   * The obstruction marker allows this short escape even when outnumbered,
+   * without authorizing an advance into the enemy force.
    */
-  sidestep?: { x: number; z: number };
+  sidestep?: { x: number; z: number; obstruction?: true };
 }
 
 /**
@@ -298,6 +298,14 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
     !(anchor && !ordered && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS);
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
   if (live) {
+    // Finish a bounded escape from a blocked firing lane. Alternating hits
+    // must not erase the destination or turn the hull away mid-stride.
+    if (live.sidestep?.obstruction && live.attacker >= 0 &&
+        (attacker !== live.attacker || dist <= THREAT_DISENGAGE_RADIUS)) {
+      return attacker === live.attacker
+        ? { ...mover, threat: { ...live, x: ax, z: az, ttl: THREAT_MEMORY_DURATION } }
+        : mover;
+    }
     // An HQ assault under fire holds its push until the fire proves
     // consistent — one splash is chip damage, not a reason to turn.
     if (live.attacker === -1 && live.structure === true) {
@@ -426,6 +434,8 @@ export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; h
         z: az,
         ttl: THREAT_MEMORY_DURATION,
         ...(live.leash !== undefined ? { leash: live.leash } : {}),
+        ...(live.attacker === attacker && live.sidestep?.obstruction
+          ? { sidestep: live.sidestep } : {}),
       },
     };
   }

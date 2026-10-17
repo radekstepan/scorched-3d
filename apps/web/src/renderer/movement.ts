@@ -438,6 +438,8 @@ export class UnitMovement {
   ): Mover {
     const memory = mover.threat;
     if (!memory || memory.ttl <= 0) return mover;
+    // Retrying a blocked shot must not move the destination each frame.
+    if (memory.sidestep?.obstruction) return mover;
     const stands = this.env.treeStands?.() ?? [];
     if (stands.length === 0) return mover;
     if (!Number.isFinite(mover.x) || !Number.isFinite(mover.z)) return mover;
@@ -486,7 +488,7 @@ export class UnitMovement {
       ...(target >= 0 ? { targetIndex: target } : {}),
     });
     if (!spot) return mover;
-    return { ...mover, threat: { ...memory, sidestep: spot } };
+    return { ...mover, threat: { ...memory, sidestep: { ...spot, obstruction: true } } };
   }
 
   /**

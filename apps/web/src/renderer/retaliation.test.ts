@@ -1662,6 +1662,43 @@ describe("UnitMovement firing footwork", () => {
     movement.dispose();
   });
 
+  it("finishes a forest escape and returns fire while outnumbered under alternating threats", () => {
+    const trees = [{ x: 100, z: 0, groundY: 86, standing: true }];
+    const { movement, units } = makeDuelMovement(
+      [{ x: 0, z: 0 }, { x: 200, z: 0 }, { x: 200, z: 100 }],
+      [0, 1, 1], ["flash", "hammer", "hammer"], () => trees,
+    );
+    // Stationary attackers keep the obstruction/odds geometry reproducible.
+    const movers = (movement as unknown as { movers: Mover[] }).movers;
+    for (const i of [1, 2]) movers[i] = { ...movers[i]!, hold: true };
+    const fx = new CombatFx(new THREE.Scene(), units, () => 0, {
+      groundY: () => 100, blastFeatures: () => {}, treeStands: () => trees,
+    });
+    fx.setExternalHull(true);
+    fx.onObstructedShot = (self, target, x, z) => movement.seekEngage(self, target, x, z);
+    fx.trackThreat(0, 1);
+    movement.threatenUnit(0, 1, 200, 0);
+    const internals = fx as unknown as { shots: { attacker: number }[] };
+    let returnedFire = false;
+    for (let tick = 0; tick < 480; tick++) {
+      if (tick % 6 === 0) {
+        const enemy = tick % 12 === 0 ? 1 : 2;
+        movement.threatenUnit(0, enemy, 200, enemy === 1 ? 0 : 100);
+        fx.trackThreat(0, enemy);
+      }
+      movement.update(1 / 60);
+      fx.update(1 / 60);
+      if (internals.shots.some((shot) => shot.attacker === 0)) {
+        returnedFire = true;
+        break;
+      }
+    }
+    expect(Math.abs(movement.moverState(0)!.z)).toBeGreaterThan(20);
+    expect(returnedFire).toBe(true);
+    fx.dispose();
+    movement.dispose();
+  });
+
   it("steps laterally when a fort assault lane crosses wood", () => {
     // Same cure for structure seeks: the shell lane to the fort clips the
     // crown, so the assault carries a lateral step off the blocked lane.
@@ -1678,7 +1715,7 @@ describe("UnitMovement firing footwork", () => {
     const memory = movement.moverState(0)?.threat;
     expect(memory?.attacker).toBe(-1);
     expect(memory?.structure).toBe(true);
-    expect(memory?.sidestep).toEqual({ x: 0, z: 48 });
+    expect(memory?.sidestep).toEqual({ x: 0, z: 48, obstruction: true });
     movement.dispose();
   });
 

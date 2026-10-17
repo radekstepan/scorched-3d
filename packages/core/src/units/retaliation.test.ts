@@ -856,3 +856,35 @@ describe("HQ defense (assault under fire)", () => {
     expect(Math.hypot(next.x - 400, next.z - 100)).toBeLessThan(before);
   });
 });
+
+
+describe("obstructed firing-seat memory", () => {
+  function escaping(): Mover {
+    const mover = threatened(1, 200, 0);
+    return { ...mover, threat: { ...mover.threat!, sidestep: { x: 0, z: 48, obstruction: true } } };
+  }
+
+  it("keeps a fixed escape point through same-target hits and obstruction retries", () => {
+    const mover = escaping();
+    const hit = notifyThreat(mover, mover, 1, 210, 0);
+    expect(hit.threat?.sidestep).toEqual(mover.threat?.sidestep);
+    expect(hit.threat?.x).toBe(210);
+    const retry = seekEngage(hit, hit, 1, 210, 0);
+    expect(retry.threat?.sidestep).toEqual(mover.threat?.sidestep);
+  });
+
+  it("does not let alternating attackers cancel the escape, but releases it on retarget", () => {
+    const mover = escaping();
+    expect(notifyThreat(mover, mover, 2, 200, 100)).toBe(mover);
+    expect(seekEngage(mover, mover, 2, 200, 100).threat?.sidestep).toBeUndefined();
+    expect(notifyThreat(mover, mover, 1, THREAT_DISENGAGE_RADIUS + 1, 0).threat).toBeUndefined();
+  });
+
+  it("still lets hits replace ordinary orbit steps", () => {
+    const mover = escaping();
+    mover.threat!.sidestep = { x: 0, z: 48 };
+    const next = notifyThreat(mover, mover, 2, 200, 100);
+    expect(next.threat?.attacker).toBe(2);
+    expect(next.threat?.sidestep).toBeUndefined();
+  });
+});

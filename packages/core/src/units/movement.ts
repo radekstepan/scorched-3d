@@ -1078,6 +1078,8 @@ function pursueStep(
     ...(threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
   };
   const want = yawToTarget(mover, { x: tx, z: tz });
+  // A proven, bounded firing-lane escape may finish even under bad odds.
+  // Ordinary orbit steps and forward pursuit still wait for backup.
   // Outnumbered: hold facing the threat and wait for backup instead of
   // driving alone into the stronger force. Allies count around me (who can
   // reach me), enemies around the threat (what I would drive into). The
@@ -1085,7 +1087,7 @@ function pursueStep(
   // and the usual expiry/disengage/leash gates still release it if the
   // fight moves on without it.
   if (
-    tactics && foes &&
+    !memory.sidestep?.obstruction && tactics && foes &&
     outnumbered(
       tactics.self, mover, { x: tx, z: tz },
       foes, tactics.teams, tactics.alive, tactics.hp,
