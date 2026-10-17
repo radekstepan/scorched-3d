@@ -3,20 +3,23 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { UNIT_DEFS, UNIT_KINDS, type UnitKind } from "@scorched-3d/core";
 import { buildPreviewTerrain, PreviewAnimation } from "./preview";
+import { buildLegacyStumpy } from "./legacy";
+import { DEFAULT_INSPECTION, InspectionModel, applyStudyLighting, type Livery } from "./settings";
 import { getUnitIconDataUrl } from "../renderer/selectionIcons";
 import { buildStudioBody, disposeStudioObject, frameStudioBody, STUDY_VIEWS, type StudyView } from "./studio";
 
 export default function UnitFolio() {
   const [kind, setKind] = useState<UnitKind>("stump");
-  const [view, setView] = useState<StudyView>("perspective");
+  const [view, setView] = useState<StudyView>("rts");
+  const [inspection, setInspection] = useState({ ...DEFAULT_INSPECTION });
   const [turntable, setTurntable] = useState(false);
   const [wireframe, setWireframe] = useState(false);
   const [terrain, setTerrain] = useState(true);
   const [motion, setMotion] = useState(false);
   const [shooting, setShooting] = useState(false);
   const [selection, setSelection] = useState(false);
-  const preview = useRef({ terrain, motion, shooting, selection });
-  preview.current = { terrain, motion, shooting, selection };
+  const preview = useRef({ terrain, motion, shooting, selection, inspection, wireframe });
+  preview.current = { terrain, motion, shooting, selection, inspection, wireframe };
   const [error, setError] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const actions = useRef<{ frame(view: StudyView): void; wireframe(on: boolean): void } | null>(null);
@@ -49,13 +52,18 @@ export default function UnitFolio() {
     scene.add(body);
     body.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
     const animation = new PreviewAnimation(body, kind);
+    const model = new InspectionModel(body);
+    const legacy = buildLegacyStumpy();
+    const legacyModel = new InspectionModel(legacy);
+    scene.add(legacy);
     scene.add(animation.effects);
     const field = buildPreviewTerrain();
     scene.add(field);
     const size = new THREE.Box3().setFromObject(body).getSize(new THREE.Vector3()).length();
     const grid = new THREE.GridHelper(size * 2.8, 24, 0x7d8c5e, 0x39432f);
     grid.position.y = -0.1;
-    scene.add(grid, new THREE.HemisphereLight(0xe7f1d7, 0x373227, 1.6));
+    const hemi = new THREE.HemisphereLight(0xdbe7cf, 0x34372c, 0.85);
+    scene.add(grid, hemi);
     const sun = new THREE.DirectionalLight(0xffedcd, 2.6);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -93,6 +101,9 @@ export default function UnitFolio() {
     resize();
     frame(view);
     setWire(wireframe);
+    let lastSettings: typeof inspection | undefined;
+    let lastWire: boolean | undefined;
+    let lastTerrain: boolean | undefined;
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
@@ -100,7 +111,19 @@ export default function UnitFolio() {
       last = now;
       field.visible = preview.current.terrain;
       grid.visible = !preview.current.terrain;
-      animation.update(dt, preview.current.motion, preview.current.shooting, preview.current.selection);
+      const current = preview.current;
+      const comparing = kind === "stump" && current.inspection.legacy;
+      body.visible = !comparing;
+      legacy.visible = comparing;
+      // Update finishes only when controls change, not on every animation frame.
+      if (lastSettings !== current.inspection || lastWire !== current.wireframe || lastTerrain !== current.terrain) {
+        model.update(current.inspection, current.wireframe);
+        legacyModel.update(current.inspection, current.wireframe);
+        renderer.toneMappingExposure = applyStudyLighting(scene, sun, hemi, rim, current.terrain, current.inspection.night);
+        lastSettings = current.inspection; lastWire = current.wireframe; lastTerrain = current.terrain;
+      }
+      const live = !current.inspection.wreck && !comparing;
+      animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck);
       controls.autoRotate = rotating.current;
       controls.update(dt);
       renderer.render(scene, camera);
@@ -137,19 +160,27 @@ export default function UnitFolio() {
     <div className="folio-stage">
       <div ref={host} className="folio-canvas" role="img" aria-label={`Interactive 3D model of ${def.name}`} />
       {error && <p className="folio-error" role="alert">3D preview unavailable. WebGL is required to inspect this model.</p>}
-      <div className="folio-stage-heading"><span>MODEL STUDY / {def.unitName}</span><span>1:1 BATTLEFIELD GEOMETRY</span></div>
+      <div className="folio-stage-heading"><span>MODEL STUDY / {def.unitName}</span><span>{kind === "stump" && inspection.legacy ? "ORIGINAL MODEL / COMPARISON" : "1:1 BATTLEFIELD GEOMETRY"}</span></div>
       <div className="folio-caption"><p className="folio-eyebrow">ARMORY / {String(UNIT_KINDS.indexOf(kind) + 1).padStart(2, "0")}</p><h2>{def.name}</h2><p>{def.blurb}</p></div>
-      <div className="folio-study-controls" aria-label="Study angle">{STUDY_VIEWS.map((study) => <button key={study} aria-pressed={view === study} onClick={() => { setView(study); actions.current?.frame(study); }}>{study === "perspective" ? "3/4" : study}</button>)}</div>
+      <div className="folio-study-controls" aria-label="Study angle">{STUDY_VIEWS.map((study) => <button key={study} aria-pressed={view === study} onClick={() => { setView(study); actions.current?.frame(study); }}>{study === "perspective" ? "3/4" : study === "rts" ? "Gameplay" : study}</button>)}</div>
     </div>
     <aside className="folio-inspector"><p className="folio-eyebrow">INSPECTION TOOLS</p><h2>Look closer.</h2><p>Drag to orbit.<br />Scroll or pinch to zoom.</p>
       <button aria-pressed={terrain} onClick={() => setTerrain(!terrain)}>Terrain <span>{terrain ? "ON" : "OFF"}</span></button>
-      <button aria-pressed={motion} onClick={() => setMotion(!motion)}>Motion <span>{motion ? "ON" : "OFF"}</span></button>
-      <button aria-pressed={shooting} onClick={() => setShooting(!shooting)}>Shooting <span>{shooting ? "ON" : "OFF"}</span></button>
+      <button disabled={inspection.wreck || (kind === "stump" && inspection.legacy)} aria-pressed={motion} onClick={() => setMotion(!motion)}>Motion <span>{motion ? "ON" : "OFF"}</span></button>
+      <button disabled={inspection.wreck || (kind === "stump" && inspection.legacy)} aria-pressed={shooting} onClick={() => setShooting(!shooting)}>Shooting <span>{shooting ? "ON" : "OFF"}</span></button>
       <button aria-pressed={selection} onClick={() => setSelection(!selection)}>Selection ring <span>{selection ? "ON" : "OFF"}</span></button>
       <button aria-pressed={turntable} onClick={() => setTurntable(!turntable)}>Turntable <span>{turntable ? "ON" : "OFF"}</span></button>
       <button aria-pressed={wireframe} onClick={() => setWireframe(!wireframe)}>Wireframe <span>{wireframe ? "ON" : "OFF"}</span></button>
+      <button aria-pressed={inspection.night} onClick={() => setInspection({ ...inspection, night: !inspection.night })}>Night lighting <span>{inspection.night ? "ON" : "OFF"}</span></button>
+      <label className="folio-setting">Livery<select value={inspection.livery} onChange={(e) => setInspection({ ...inspection, livery: e.target.value as Livery })}><option value="olive">Field olive</option><option value="sand">Desert sand</option><option value="arctic">Arctic ash</option></select></label>
+      <label className="folio-setting">Turret traverse <output>{inspection.turret}°</output><input type="range" min="-75" max="75" value={inspection.turret} onChange={(e) => setInspection({ ...inspection, turret: +e.target.value })} /></label>
+      <label className="folio-setting">Barrel elevation <output>{inspection.elevation}°</output><input type="range" min="-8" max="83" disabled={kind === "commander" || (kind === "stump" && inspection.legacy)} value={inspection.elevation} onChange={(e) => setInspection({ ...inspection, elevation: +e.target.value })} /></label>
+      <label className="folio-setting">Battle damage <output>{inspection.damage}%</output><input type="range" min="0" max="100" value={inspection.damage} onChange={(e) => setInspection({ ...inspection, damage: +e.target.value })} /></label>
+      <button aria-pressed={inspection.wreck} onClick={() => setInspection({ ...inspection, wreck: !inspection.wreck })}>Destroyed / wreck pose <span>{inspection.wreck ? "ON" : "OFF"}</span></button>
+      <button disabled={kind !== "stump"} title="Original Stumpy model from Unit Workshop" aria-pressed={kind === "stump" && inspection.legacy} onClick={() => setInspection({ ...inspection, legacy: !inspection.legacy })}>Original model comparison <span>{kind === "stump" && inspection.legacy ? "ON" : "OFF"}</span></button>
+      <button onClick={() => { setInspection({ ...DEFAULT_INSPECTION }); setTerrain(true); setView("rts"); setMotion(false); setShooting(false); setSelection(false); setTurntable(false); setWireframe(false); actions.current?.frame("rts"); }}>Restore study defaults <span>↺</span></button>
       <button onClick={() => actions.current?.frame(view)}>Reset camera <span>↺</span></button>
-      <div className="folio-spec"><small>CATALOG ID</small><strong>{def.unitName}</strong><small>MODEL SOURCE</small><strong>Live battlefield asset</strong><small>STUDY</small><strong>Terrain & animation</strong></div>
+      <div className="folio-spec"><small>CATALOG ID</small><strong>{def.unitName}</strong><small>MODEL SOURCE</small><strong>{kind === "stump" && inspection.legacy ? "Original Stumpy comparison" : "Live battlefield asset"}</strong><small>STUDY</small><strong>Terrain & animation</strong></div>
     </aside>
   </section>;
 }

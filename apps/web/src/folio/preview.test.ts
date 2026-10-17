@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { UNIT_KINDS } from "@scorched-3d/core";
 import { muzzleWorld, getBarrel, getLegs, getMuzzleTip, getTurret, getWheels } from "../renderer/units";
@@ -6,6 +6,11 @@ import { buildStudioBody, disposeStudioObject } from "./studio";
 import { buildPreviewTerrain, PreviewAnimation } from "./preview";
 
 describe("terrain study", () => {
+  // Only the browser's byte container is stubbed; use the real terrain/albedo pipeline.
+  beforeAll(() => vi.stubGlobal("ImageData", class {
+    constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+  }));
+  afterAll(() => vi.unstubAllGlobals());
   it("builds a deterministic rolling field with a level pad below the unit", () => {
     const field = buildPreviewTerrain(), other = buildPreviewTerrain();
     const positions = field.geometry.getAttribute("position");
@@ -13,12 +18,25 @@ describe("terrain study", () => {
     const heights = [];
     for (let i = 0; i < positions.count; i++) {
       const radius = Math.hypot(positions.getX(i), positions.getZ(i));
-      if (radius < 40) expect(positions.getY(i)).toBeCloseTo(-0.1);
+      if (radius < 25) expect(positions.getY(i)).toBeCloseTo(-0.06);
       heights.push(positions.getY(i));
     }
     expect(Math.max(...heights) - Math.min(...heights)).toBeGreaterThan(5);
     expect(field.geometry.getAttribute("normal").count).toBe(positions.count);
+    const material = field.material as THREE.MeshStandardMaterial;
+    expect(material.map).toBeInstanceOf(THREE.DataTexture);
+    expect(material.map!.colorSpace).toBe(THREE.SRGBColorSpace);
+    expect(material.map!.flipY).toBe(true);
+    expect(field.children).toHaveLength(28);
+    for (const child of field.children) {
+      expect(Math.hypot(child.position.x, child.position.z)).toBeGreaterThanOrEqual(47.99);
+      expect(child.castShadow).toBe(true);
+    }
+    const textureDispose = vi.spyOn(material.map!, "dispose");
+    const rockDispose = vi.spyOn((field.children[0] as THREE.Mesh).geometry, "dispose");
     const group = new THREE.Group(); group.add(field, other); disposeStudioObject(group);
+    expect(textureDispose).toHaveBeenCalledOnce();
+    expect(rockDispose).toHaveBeenCalledOnce();
   });
 });
 

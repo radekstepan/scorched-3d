@@ -1,28 +1,80 @@
 import * as THREE from "three";
-import { sampleHeightField, sampleHeightBilinear, worldHeight, type UnitKind } from "@scorched-3d/core";
+import { generateMap, composeAlbedo, sampleHeightBilinear, worldHeight, type UnitKind } from "@scorched-3d/core";
 import { advanceLocomotion, buildTeamRing, getBarrel, getMuzzleTip } from "../renderer/units";
 
-/** A compact Greenreach study field. Level the inspection pad under every hull. */
+/** Textured Greenreach field and rock scatter from the Unit Workshop reference. */
 export function buildPreviewTerrain(): THREE.Mesh {
-  const field = sampleHeightField("greenreach", 24);
-  const height = (x: number, z: number) => worldHeight(sampleHeightBilinear(field, x, z), 0.38);
-  const origin = height(0, 0);
-  const geometry = new THREE.PlaneGeometry(1200, 1200, 96, 96);
-  geometry.rotateX(-Math.PI / 2);
-  const positions = geometry.getAttribute("position");
-  const colors: number[] = [];
-  const grass = new THREE.Color(0x66734b), rock = new THREE.Color(0x8a8870);
-  for (let i = 0; i < positions.count; i++) {
-    const x = positions.getX(i), z = positions.getZ(i);
-    const y = (height(x, z) - origin) * THREE.MathUtils.smoothstep(Math.hypot(x, z), 40, 120);
-    positions.setY(i, y - 0.1);
-    const color = grass.clone().lerp(rock, THREE.MathUtils.clamp(Math.abs(y) / 45, 0, 1));
-    colors.push(color.r, color.g, color.b);
+  const map = generateMap("greenreach", 24);
+  const albedo = composeAlbedo(map);
+  const tex = new THREE.DataTexture(
+    albedo.data,
+    albedo.width,
+    albedo.height,
+    THREE.RGBAFormat,
+  );
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = true;
+  tex.needsUpdate = true;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  // Real Greenreach albedo and heights; the inspection pad is leveled under the hull.
+  const cx = map.width * 0.48,
+    cz = map.height * 0.48;
+  const height = (x: number, z: number) =>
+    worldHeight(
+      sampleHeightBilinear(
+        map,
+        (cx - (map.width - 1) / 2) * 16 + x,
+        (cz - (map.height - 1) / 2) * 16 + z,
+      ),
+      0.38,
+    );
+  const groundY = height(0, 0);
+  const geo = new THREE.PlaneGeometry(1400, 1400, 112, 112);
+  geo.rotateX(-Math.PI / 2);
+  const p = geo.getAttribute("position"),
+    uv = geo.getAttribute("uv");
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i),
+      z = p.getZ(i);
+    const dist = Math.hypot(x, z);
+    const level = THREE.MathUtils.smoothstep(dist, 25, 100);
+    p.setY(i, (height(x, z) - groundY) * level - 0.06);
+    uv.setXY(
+      i,
+      (cx + x / 16) / (map.width - 1),
+      1 - (cz + z / 16) / (map.height - 1),
+    );
   }
-  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
-  const terrain = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1 }));
+  geo.computeVertexNormals();
+  const terrain = new THREE.Mesh(
+    geo,
+    new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 }),
+  );
   terrain.receiveShadow = true;
+  terrain.name = "greenreach-study";
+  const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+  const rockMat = new THREE.MeshStandardMaterial({
+    color: 0x737867,
+    roughness: 1,
+    flatShading: true,
+  });
+  for (let i = 0; i < 28; i++) {
+    const a = i * 2.39996,
+      r = 48 + (i % 7) * 12;
+    const x = Math.cos(a) * r,
+      z = Math.sin(a) * r;
+    const rock = new THREE.Mesh(rockGeo, rockMat);
+    rock.position.set(
+      x,
+      (height(x, z) - groundY) * THREE.MathUtils.smoothstep(r, 25, 100),
+      z,
+    );
+    rock.scale.set(1.8 + (i % 3), 1.4 + (i % 4), 2.5 + (i % 3));
+    rock.rotation.set(i * 0.4, i * 0.7, i * 0.2);
+    rock.castShadow = true;
+    terrain.add(rock);
+  }
   return terrain;
 }
 

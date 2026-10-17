@@ -22,10 +22,17 @@ describe("folio / battlefield integration contracts", () => {
   });
   it("connects independent preview controls without rebuilding the paused battlefield", () => {
     for (const name of ["Terrain", "Motion", "Shooting", "Selection ring"]) expect(folio).toContain(`>${name} <span>`);
-    expect(folio).toContain('animation.update(dt, preview.current.motion, preview.current.shooting, preview.current.selection)');
+    expect(folio).toContain('animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck)');
     expect(folio).toContain('field.visible = preview.current.terrain');
     expect(folio).toContain('grid.visible = !preview.current.terrain');
     expect(folio).toContain('sun.shadow.dispose()');
+  });
+  it("exposes all reference workshop settings with explicit unsupported states", () => {
+    for (const label of ["Night lighting", "Livery", "Turret traverse", "Barrel elevation", "Battle damage", "Destroyed / wreck pose", "Original model comparison", "Restore study defaults", "Turntable", "Wireframe"]) expect(folio).toContain(label);
+    expect(folio).toContain('disabled={kind !== "stump"}');
+    expect(folio).toContain('disabled={kind === "commander" || (kind === "stump" && inspection.legacy)}');
+    expect(folio).toContain('const live = !current.inspection.wreck && !comparing');
+    expect(folio).toContain('study === "rts" ? "Gameplay"');
   });
   it("cancels the studio loop and removes observer, controls, models and context on roster change or exit", () => {
     for (const action of ['cancelAnimationFrame(raf)', 'observer.disconnect()', 'controls.dispose()', 'disposeStudioObject(scene)', 'renderer.dispose()', 'renderer.forceContextLoss()', 'renderer.domElement.remove()']) expect(folio).toContain(action);

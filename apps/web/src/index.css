@@ -113,7 +113,7 @@ input[type="range"] { height: 4px; background: transparent; }
 @media (max-width: 1000px) {
   .unit-folio { grid-row: 2 / 4; grid-template-columns: 190px minmax(0, 1fr); }
   .folio-inspector { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 8px 16px; overflow-x: auto; border-top: 1px solid var(--chrome-line); }
-  .unit-folio { grid-template-rows: minmax(0,1fr) 48px; }
+  .unit-folio { grid-template-rows: minmax(0,1fr) 76px; }
   .folio-inspector > p, .folio-inspector h2, .folio-spec { display: none; }
   .folio-inspector > button { flex-shrink: 0; width: auto; gap: 14px; border: 0; padding: 8px 0; }
   .folio-stage-heading span:last-child { display: none; }
@@ -126,7 +126,7 @@ input[type="range"] { height: 4px; background: transparent; }
   .brand-3d { font-size: 10px; padding: 1px 2px; margin-left: 4px; transform: translateY(-1px); }
   .command-nav { gap: 10px; }
   .command-nav > * { font-size: 7px; letter-spacing: .3px; }
-  .unit-folio { grid-template: 76px minmax(0,1fr) 44px / minmax(0,1fr); }
+  .unit-folio { grid-template: 76px minmax(0,1fr) 76px / minmax(0,1fr); }
   .folio-roster { padding: 8px; border-bottom: 1px solid var(--chrome-line); overflow-x: auto; overflow-y: hidden; }
   .folio-roster > p, .folio-roster h1, .folio-number, .folio-unit-list small, .folio-unit-list button > span:last-child { display: none; }
   .folio-unit-list { flex-direction: row; width: max-content; gap: 6px; }
@@ -141,3 +141,11 @@ input[type="range"] { height: 4px; background: transparent; }
   .folio-stage-heading { left: 16px; top: 14px; }
   .folio-study-controls { left: 16px; bottom: 16px; }
 }
+
+/* Workshop controls remain reachable in the folio's horizontally scrolling mobile rail. */
+.folio-setting { display: block; font-size: 9px; padding: 14px 0; border-bottom: 1px solid var(--chrome-line); }
+.folio-setting output { float: right; color: var(--chrome-accent); }
+.folio-setting input, .folio-setting select { display: block; width: 100%; margin-top: 10px; accent-color: var(--chrome-accent); }
+.folio-setting select { background: #20271c; color: #dce5ce; padding: 6px; border: 1px solid var(--chrome-line); }
+.folio-inspector button:disabled, .folio-setting input:disabled { opacity: 0.4; cursor: not-allowed; }
+@media (max-width: 1000px) { .folio-setting { flex: 0 0 150px; padding: 0; border: 0; } .folio-setting input, .folio-setting select { margin-top: 3px; } }

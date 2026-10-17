@@ -2,8 +2,8 @@ import * as THREE from "three";
 import type { UnitKind } from "@scorched-3d/core";
 import { buildUnitIconBody } from "../renderer/units";
 
-export type StudyView = "perspective" | "front" | "rear" | "top";
-export const STUDY_VIEWS: StudyView[] = ["perspective", "front", "rear", "top"];
+export type StudyView = "perspective" | "front" | "rear" | "top" | "rts";
+export const STUDY_VIEWS: StudyView[] = ["perspective", "front", "rear", "top", "rts"];
 
 /** Own copies of textures: the battlefield's cached camouflage must survive studio teardown. */
 export function buildStudioBody(kind: UnitKind): THREE.Group {
@@ -47,8 +47,8 @@ export function frameStudioBody(body: THREE.Group, camera: THREE.PerspectiveCame
   const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 1);
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   const angle = Math.min(halfFov, Math.atan(Math.tan(halfFov) * camera.aspect));
-  const distance = radius / Math.sin(angle) * 1.12;
-  const direction = view === "front" ? [0, 0.12, 1] : view === "rear" ? [-0.5, 0.25, -1] : view === "top" ? [0, 1, 0.001] : [1, 0.65, 1.3];
+  const distance = radius / Math.sin(angle) * (view === "rts" ? 2.7 : 1.12);
+  const direction = view === "front" ? [0, 0.12, 1] : view === "rear" ? [-0.5, 0.25, -1] : view === "top" ? [0, 1, 0.001] : view === "rts" ? [116, 165, 146] : [1, 0.65, 1.3];
   camera.position.copy(new THREE.Vector3(...direction).normalize().multiplyScalar(distance).add(target));
   camera.near = 0.1;
   camera.far = Math.max(distance * 20, 2000);

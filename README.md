@@ -63,12 +63,22 @@ serves from `https://<owner>.github.io/<repo>/` after each push.
 Open **02 / Unit folio** in the command bar to browse Commander, Stumpy,
 Flash, Hammer and Peewee. The studio renders the actual battlefield models
 at inspection scale. Drag to orbit, scroll/pinch to zoom, choose 3/4, front,
-rear or top studies, toggle a turntable or wireframe, and reset the camera.
-The default Greenreach terrain study has a level inspection pad; switch Terrain
-off for the studio grid. Independent Motion and Shooting toggles preview wheels
+rear, top or Gameplay studies, toggle a turntable or wireframe, and reset the camera.
+The default Gameplay view looks over the Unit Workshop reference’s textured,
+seeded Greenreach terrain, with rolling heights, a level inspection pad, rock
+scatter and distance fog; switch Terrain off for the studio grid. Independent
+Motion and Shooting toggles preview wheels
 and walker strides in place, barrel recoil, muzzle flashes and short tracers.
 Selection ring previews the battlefield team marker. These are visual studies
 using production model articulation, with no battle orders or damage.
+The inspector also offers night lighting, field olive/desert sand/arctic ash
+liveries, turret traverse, barrel elevation, battle-damage tint and a destroyed
+pose. Wrecks suppress motion, firing and selection; turning wreck off restores
+the chosen paint and damage. Commander has no elevating barrel, so that slider
+is disabled. Original model comparison shows the reference’s original Stumpy
+geometry; it is disabled for other units, and its static model disables motion,
+firing and barrel elevation. Restore study defaults returns all controls and
+the camera to the initial terrain study.
 The roster and controls adapt to narrow screens.
 
 Opening the folio freezes battle simulation, effects, camera input and orders.
@@ -78,10 +88,10 @@ elapsed wall time. The battlefield's **Pause / Resume** button is independent:
 a battle paused before opening the folio stays paused when you return.
 
 The studio owns its WebGL context, controls, shadow map and model resources.
-`folio/preview.ts` builds a compact seeded terrain mesh from the shared heightfield
-pipeline and owns the preview animation, using the live locomotion and muzzle
-helpers. It avoids generating a full battle or a full-map albedo texture. Each roster
-change or exit cancels its animation loop, disconnects its resize observer and
+`folio/preview.ts` builds the terrain with the shared map/albedo pipeline and
+owns the preview animation, using the live locomotion and muzzle helpers.
+`folio/settings.ts` applies reversible paint, damage, articulation and lighting
+without mutating battlefield models. Each roster change or exit cancels its animation loop, disconnects its resize observer and
 releases geometry, materials, copied textures and the context. Camouflage
 textures are copied from the shared battlefield cache so inspecting a unit
 cannot dispose textures still used by the battle.
