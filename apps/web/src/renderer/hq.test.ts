@@ -562,6 +562,51 @@ describe("hq warning beacon", () => {
     expect(at(LEGACY_DISTANCE)).toBeLessThan(at(near));
   });
 
+  it("spreads wider cones that travel further and melt gently outward and sideways", () => {
+    // Legacy beam shape (pre-dispersal): narrower, shorter, harder fades.
+    const LEGACY_LEN = 60;
+    const LEGACY_RADIUS = 6;
+    const LEGACY_FADE = 0.35;
+    const LEGACY_EDGE = 1.5;
+    // Wider cones that travel further: longer beams with a wider opening
+    // half-angle, not just a scaled copy of the old cone.
+    expect(HQ_BEACON_BEAM_LEN).toBeGreaterThan(LEGACY_LEN);
+    expect(HQ_BEACON_BEAM_RADIUS).toBeGreaterThan(LEGACY_RADIUS);
+    const halfAngle = Math.atan(HQ_BEACON_BEAM_RADIUS / HQ_BEACON_BEAM_LEN);
+    expect(halfAngle).toBeGreaterThan(Math.atan(LEGACY_RADIUS / LEGACY_LEN));
+    // Gentler distance fade: the axial ramp spans more of the beam, so
+    // where the legacy curve already burned full the new one is still
+    // ramping up — a longer melt instead of a quicker step to full.
+    expect(HQ_BEACON_BEAM_FADE).toBeGreaterThan(LEGACY_FADE);
+    expect(hqBeaconBeamAxial(LEGACY_FADE)).toBeLessThan(1);
+    // Gentler side fade: the flanks hold more of the core glow at grazing
+    // view angles (a lower exponent lifts every partial facing toward
+    // full), so the cones melt away onto the sides instead of edging off.
+    expect(HQ_BEACON_BEAM_EDGE).toBeLessThan(LEGACY_EDGE);
+    for (const facing of [0.25, 0.5, 0.75]) {
+      expect(Math.pow(facing, HQ_BEACON_BEAM_EDGE)).toBeGreaterThan(
+        Math.pow(facing, LEGACY_EDGE),
+      );
+    }
+    // Still a melt, not a flood: peak opacity untouched, rims still gone.
+    expect(HQ_BEACON_BEAM_OPACITY).toBe(0.22);
+    expect(hqBeaconBeamAxial(0)).toBe(0);
+    // Built geometry follows the retune: apex at the core, rim at range.
+    const group = buildHq(0);
+    const beams = getHqBeaconBeams(group);
+    expect(beams).toHaveLength(2);
+    for (const beam of beams) {
+      const geo = beam.geometry as THREE.ConeGeometry;
+      expect(geo.parameters.radius).toBeCloseTo(HQ_BEACON_BEAM_RADIUS, 9);
+      expect(geo.parameters.height).toBeCloseTo(HQ_BEACON_BEAM_LEN, 9);
+      // The shader bakes the same fade constants the mirror pins above —
+      // a stale literal would silently render the legacy look.
+      const beamMat = beam.material as THREE.ShaderMaterial;
+      expect(beamMat.fragmentShader).toContain(HQ_BEACON_BEAM_FADE.toFixed(2));
+      expect(beamMat.fragmentShader).toContain(HQ_BEACON_BEAM_EDGE.toFixed(2));
+    }
+  });
+
   it("kills the beacon with the wreck and never re-lights", () => {
     const group = buildHq(0);
     poseHqWreck(group);

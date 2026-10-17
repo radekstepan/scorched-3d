@@ -73,27 +73,34 @@ export const HQ_BEACON_DECAY = 1.5;
 /** Beacon dome radius (a bare hemisphere, no mast or platform). */
 export const HQ_BEACON_RADIUS = 2;
 /**
- * Light-tower beam length, world units: apex at the hot core, far end past
- * the works over the surroundings, fading out before the rim.
+ * Light-tower beam length, world units: apex at the hot core, far end well
+ * past the works over the surroundings, fading out before the rim. Long
+ * enough to read at range without reaching the PointLight wash edge.
  */
-export const HQ_BEACON_BEAM_LEN = 60;
-/** Light-tower beam cone base radius, world units (a wide diffused cone). */
-export const HQ_BEACON_BEAM_RADIUS = 6;
+export const HQ_BEACON_BEAM_LEN = 90;
+/**
+ * Light-tower beam cone base radius, world units: a wide diffused cone
+ * (half-angle ~7.6 deg, up from ~5.7) whose far disc covers the hall mouth
+ * apron as it sweeps.
+ */
+export const HQ_BEACON_BEAM_RADIUS = 12;
 /** Light-tower beam peak alpha at full level (additive, per the glow convention). */
 export const HQ_BEACON_BEAM_OPACITY = 0.22;
 /**
  * Beam axial fade span in cone-UV units (apex v=1, far rim v=0): alpha
  * ramps 0 → 1 over [0, HQ_BEACON_BEAM_FADE], so the far rim melts away with
- * no hard edge. Shared by the beam GLSL and the pure `hqBeaconBeamAxial`
- * mirror.
+ * no hard edge. Spans half the beam for a long gentle melt into the
+ * distance rather than a quicker step to full. Shared by the beam GLSL and
+ * the pure `hqBeaconBeamAxial` mirror.
  */
-export const HQ_BEACON_BEAM_FADE = 0.35;
+export const HQ_BEACON_BEAM_FADE = 0.5;
 /**
  * Beam silhouette-fade exponent: alpha scales with |dot(N, V)| ^ EDGE, so
  * the cone flanks melt away at grazing view angles instead of drawing a
- * hard border. Shared by the beam GLSL below.
+ * hard border. Kept just above linear so the sides hold glow longer and
+ * ease off softly. Shared by the beam GLSL below.
  */
-export const HQ_BEACON_BEAM_EDGE = 1.5;
+export const HQ_BEACON_BEAM_EDGE = 1.2;
 /**
  * Diffused halo sprite width/height, world units: a borderless radial glow
  * centered on the hot core, reaching well past the glass.
