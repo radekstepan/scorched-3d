@@ -107,10 +107,10 @@ input[type="range"] { height: 4px; background: transparent; }
 .folio-error { position: absolute; top: 35%; left: 10%; right: 10%; padding: 20px; border: 1px solid var(--chrome-line); background: #141812; font-size: 12px; }
 @media (max-width: 1000px) {
   .unit-folio { grid-row: 2 / 4; grid-template-columns: 190px minmax(0, 1fr); }
-  .folio-inspector { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-top: 1px solid var(--chrome-line); }
+  .folio-inspector { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; padding: 8px 16px; overflow-x: auto; border-top: 1px solid var(--chrome-line); }
   .unit-folio { grid-template-rows: minmax(0,1fr) 48px; }
   .folio-inspector > p, .folio-inspector h2, .folio-spec { display: none; }
-  .folio-inspector > button { width: auto; gap: 14px; border: 0; padding: 8px 0; }
+  .folio-inspector > button { flex-shrink: 0; width: auto; gap: 14px; border: 0; padding: 8px 0; }
   .folio-stage-heading span:last-child { display: none; }
 }
 @media (max-width: 600px) {

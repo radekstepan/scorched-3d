@@ -20,6 +20,13 @@ describe("folio / battlefield integration contracts", () => {
     }
     expect(terrain).toContain('controls.enabled = !suspendedRef.current;');
   });
+  it("connects independent preview controls without rebuilding the paused battlefield", () => {
+    for (const name of ["Terrain", "Motion", "Shooting", "Selection ring"]) expect(folio).toContain(`>${name} <span>`);
+    expect(folio).toContain('animation.update(dt, preview.current.motion, preview.current.shooting, preview.current.selection)');
+    expect(folio).toContain('field.visible = preview.current.terrain');
+    expect(folio).toContain('grid.visible = !preview.current.terrain');
+    expect(folio).toContain('sun.shadow.dispose()');
+  });
   it("cancels the studio loop and removes observer, controls, models and context on roster change or exit", () => {
     for (const action of ['cancelAnimationFrame(raf)', 'observer.disconnect()', 'controls.dispose()', 'disposeStudioObject(scene)', 'renderer.dispose()', 'renderer.forceContextLoss()', 'renderer.domElement.remove()']) expect(folio).toContain(action);
     expect(folio).toContain('}, [kind])');

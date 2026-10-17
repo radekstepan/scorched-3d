@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { UNIT_DEFS, UNIT_KINDS, type UnitKind } from "@scorched-3d/core";
+import { buildPreviewTerrain, PreviewAnimation } from "./preview";
 import { getUnitIconDataUrl } from "../renderer/selectionIcons";
 import { buildStudioBody, disposeStudioObject, frameStudioBody, STUDY_VIEWS, type StudyView } from "./studio";
 
@@ -10,6 +11,12 @@ export default function UnitFolio() {
   const [view, setView] = useState<StudyView>("perspective");
   const [turntable, setTurntable] = useState(false);
   const [wireframe, setWireframe] = useState(false);
+  const [terrain, setTerrain] = useState(true);
+  const [motion, setMotion] = useState(false);
+  const [shooting, setShooting] = useState(false);
+  const [selection, setSelection] = useState(false);
+  const preview = useRef({ terrain, motion, shooting, selection });
+  preview.current = { terrain, motion, shooting, selection };
   const [error, setError] = useState(false);
   const host = useRef<HTMLDivElement>(null);
   const actions = useRef<{ frame(view: StudyView): void; wireframe(on: boolean): void } | null>(null);
@@ -25,6 +32,8 @@ export default function UnitFolio() {
     try { renderer = new THREE.WebGLRenderer({ antialias: true }); }
     catch { setError(true); return; }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.15;
     element.appendChild(renderer.domElement);
@@ -38,11 +47,20 @@ export default function UnitFolio() {
     controls.autoRotateSpeed = 1;
     const body = buildStudioBody(kind);
     scene.add(body);
+    body.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
+    const animation = new PreviewAnimation(body, kind);
+    scene.add(animation.effects);
+    const field = buildPreviewTerrain();
+    scene.add(field);
     const size = new THREE.Box3().setFromObject(body).getSize(new THREE.Vector3()).length();
     const grid = new THREE.GridHelper(size * 2.8, 24, 0x7d8c5e, 0x39432f);
     grid.position.y = -0.1;
     scene.add(grid, new THREE.HemisphereLight(0xe7f1d7, 0x373227, 1.6));
     const sun = new THREE.DirectionalLight(0xffedcd, 2.6);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, far: 250 });
+    sun.shadow.normalBias = 0.15;
     sun.position.set(-50, 90, 60);
     const rim = new THREE.DirectionalLight(0xb9d8ff, 1.3);
     rim.position.set(50, 30, -50);
@@ -80,6 +98,9 @@ export default function UnitFolio() {
     const tick = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
+      field.visible = preview.current.terrain;
+      grid.visible = !preview.current.terrain;
+      animation.update(dt, preview.current.motion, preview.current.shooting, preview.current.selection);
       controls.autoRotate = rotating.current;
       controls.update(dt);
       renderer.render(scene, camera);
@@ -92,6 +113,7 @@ export default function UnitFolio() {
       controls.dispose();
       actions.current = null;
       disposeStudioObject(scene);
+      sun.shadow.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
@@ -120,10 +142,14 @@ export default function UnitFolio() {
       <div className="folio-study-controls" aria-label="Study angle">{STUDY_VIEWS.map((study) => <button key={study} aria-pressed={view === study} onClick={() => { setView(study); actions.current?.frame(study); }}>{study === "perspective" ? "3/4" : study}</button>)}</div>
     </div>
     <aside className="folio-inspector"><p className="folio-eyebrow">INSPECTION TOOLS</p><h2>Look closer.</h2><p>Drag to orbit.<br />Scroll or pinch to zoom.</p>
+      <button aria-pressed={terrain} onClick={() => setTerrain(!terrain)}>Terrain <span>{terrain ? "ON" : "OFF"}</span></button>
+      <button aria-pressed={motion} onClick={() => setMotion(!motion)}>Motion <span>{motion ? "ON" : "OFF"}</span></button>
+      <button aria-pressed={shooting} onClick={() => setShooting(!shooting)}>Shooting <span>{shooting ? "ON" : "OFF"}</span></button>
+      <button aria-pressed={selection} onClick={() => setSelection(!selection)}>Selection ring <span>{selection ? "ON" : "OFF"}</span></button>
       <button aria-pressed={turntable} onClick={() => setTurntable(!turntable)}>Turntable <span>{turntable ? "ON" : "OFF"}</span></button>
       <button aria-pressed={wireframe} onClick={() => setWireframe(!wireframe)}>Wireframe <span>{wireframe ? "ON" : "OFF"}</span></button>
       <button onClick={() => actions.current?.frame(view)}>Reset camera <span>↺</span></button>
-      <div className="folio-spec"><small>CATALOG ID</small><strong>{def.unitName}</strong><small>MODEL SOURCE</small><strong>Live battlefield asset</strong><small>STUDY</small><strong>Geometry & silhouette</strong></div>
+      <div className="folio-spec"><small>CATALOG ID</small><strong>{def.unitName}</strong><small>MODEL SOURCE</small><strong>Live battlefield asset</strong><small>STUDY</small><strong>Terrain & animation</strong></div>
     </aside>
   </section>;
 }
