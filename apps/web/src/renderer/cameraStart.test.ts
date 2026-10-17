@@ -1,6 +1,20 @@
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
 import { worldHeight } from "@scorched-3d/core";
 import {
+  MAX_ZOOM_DISTANCE,
+  MIN_ZOOM_DISTANCE,
+  clampCameraAboveSurface,
+  clampCameraToWorld,
+  clampCameraToWorldWithTarget,
+  clampPanTargetWithCamera,
+  clampTargetAboveSurface,
+  isRigidPan,
+} from "./cameraPan";
+import {
+  RTS_ELEVATION,
+  RTS_VIEW_OFFSET,
   START_BEYOND_EDGE,
   commanderCameraPose,
   pickStartUnit,
@@ -184,6 +198,155 @@ describe("start view matches the minimap (task 139)", () => {
       expect(right.x).toBeCloseTo(1, 9);
       expect(right.y).toBeCloseTo(0, 9);
       expect(right.z).toBeCloseTo(0, 9);
+    });
+  }
+});
+
+describe("RTS opening elevation (sibling redesign-stumpy-tank-model)", () => {
+  // Source: POSES.rts in the sibling viewer's src/viewer.ts — the
+  // "Battlefield scale / GAMEPLAY READABILITY" study:
+  //   rts: { position: [116, 165, 146], target: [0, 0, 0] }
+  // Only the elevation transfers (the viewer's southeast yaw is a
+  // single-model 3/4 framing; the game keeps its due-south minimap yaw).
+  /** Elevation above the horizon of a pose (radians). */
+  function elevationOf(pose: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } }) {
+    return Math.atan2(
+      pose.position.y - pose.target.y,
+      Math.hypot(pose.position.x - pose.target.x, pose.position.z - pose.target.z),
+    );
+  }
+
+  it("quotes the sibling RTS offset verbatim", () => {
+    expect(RTS_VIEW_OFFSET).toEqual({ x: 116, y: 165, z: 146 });
+  });
+
+  it("derives the elevation from the sibling offset (~41.5°)", () => {
+    expect(RTS_ELEVATION).toBeCloseTo(Math.atan2(165, Math.hypot(116, 146)), 12);
+    expect((RTS_ELEVATION * 180) / Math.PI).toBeCloseTo(41.5, 2);
+  });
+
+  const spots = {
+    north: { kind: "commander", cellX: 80, cellZ: 10 },
+    south: { kind: "commander", cellX: 80, cellZ: 117 },
+    east: { kind: "commander", cellX: 150, cellZ: 64 },
+    west: { kind: "commander", cellX: 9, cellZ: 64 },
+    corner: { kind: "commander", cellX: 150, cellZ: 10 },
+  } as const;
+
+  for (const [name, commander] of Object.entries(spots)) {
+    it(`opens at the RTS elevation for a ${name}-spawned commander`, () => {
+      const f = field({ units: [{ ...commander }] });
+      const pose = commanderCameraPose(f, 1);
+      expect(elevationOf(pose)).toBeCloseTo(RTS_ELEVATION, 9);
+    });
+  }
+
+  it("opens at the RTS elevation with no units (map center fallback)", () => {
+    const f = field({ units: [] });
+    expect(elevationOf(commanderCameraPose(f, 2))).toBeCloseTo(RTS_ELEVATION, 9);
+  });
+});
+
+describe("opening frame survives the tick chain (no first-frame snap)", () => {
+  // Headless tick-chain through REAL OrbitControls with the canvas settings
+  // (damping, polar clamp, zoom limits, zoom-to-cursor), mirroring the
+  // TerrainCanvas post-update order: snapshot → update → rigid-pan branch
+  // → XZ clamps → eye/focus surface floors. A quiet opening (no input)
+  // must leave the start pose untouched for every spawn side.
+  function makeStartRig(pose: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number } }) {
+    const doc = { addEventListener() {}, removeEventListener() {} };
+    const el = {
+      style: {},
+      clientWidth: 1200,
+      clientHeight: 800,
+      ownerDocument: doc,
+      getRootNode: () => doc,
+      addEventListener() {},
+      removeEventListener() {},
+      setPointerCapture() {},
+      releasePointerCapture() {},
+      hasPointerCapture: () => false,
+    };
+    const camera = new THREE.PerspectiveCamera(48, 16 / 9, 2, 14000);
+    camera.position.set(pose.position.x, pose.position.y, pose.position.z);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.zoomToCursor = true;
+    controls.target.set(pose.target.x, pose.target.y, pose.target.z);
+    return { camera, controls };
+  }
+
+  function quietTick(
+    camera: THREE.PerspectiveCamera,
+    controls: OrbitControls,
+    worldW: number,
+    worldD: number,
+    groundY: number,
+  ): void {
+    camera.updateMatrixWorld();
+    const preTargetX = controls.target.x;
+    const preTargetZ = controls.target.z;
+    const prePosX = camera.position.x;
+    const prePosZ = camera.position.z;
+    controls.update();
+    const rigid = isRigidPan(
+      controls.target.x - preTargetX,
+      controls.target.z - preTargetZ,
+      camera.position.x - prePosX,
+      camera.position.z - prePosZ,
+    );
+    clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
+    if (rigid) clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
+    else clampCameraToWorld(camera.position, worldW, worldD);
+    clampCameraAboveSurface(camera.position, groundY);
+    clampTargetAboveSurface(controls.target, groundY);
+  }
+
+  // Real game size: generateMap always builds 320x256 (core MAP_WIDTH /
+  // MAP_HEIGHT), and the 350-unit beyond-edge stand-off only fits inside
+  // the tick clamp rectangle (25% margin) at that scale — smaller test
+  // fields snap even the old pose, which is unreachable in-game.
+  function gameField(commander: { kind: string; cellX: number; cellZ: number }): StartField {
+    const width = 320;
+    const height = 256;
+    return {
+      width,
+      height,
+      heights: new Uint8Array(width * height).fill(100),
+      seaLevel: 75,
+      units: [{ ...commander }],
+    };
+  }
+
+  const spots = {
+    center: { kind: "commander", cellX: 160, cellZ: 128 },
+    north: { kind: "commander", cellX: 160, cellZ: 20 },
+    south: { kind: "commander", cellX: 160, cellZ: 235 },
+    east: { kind: "commander", cellX: 300, cellZ: 128 },
+    west: { kind: "commander", cellX: 19, cellZ: 128 },
+  } as const;
+
+  for (const [name, commander] of Object.entries(spots)) {
+    it(`holds the ${name}-spawn start pose steady through quiet ticks`, () => {
+      const f = gameField(commander);
+      const pose = commanderCameraPose(f, 1);
+      const { camera, controls } = makeStartRig(pose);
+      const worldW = (f.width - 1) * CELL;
+      const worldD = (f.height - 1) * CELL;
+      const groundY = worldHeight(100, 1);
+      for (let tick = 0; tick < 5; tick++) {
+        quietTick(camera, controls, worldW, worldD, groundY);
+        expect(camera.position.x).toBeCloseTo(pose.position.x, 6);
+        expect(camera.position.y).toBeCloseTo(pose.position.y, 6);
+        expect(camera.position.z).toBeCloseTo(pose.position.z, 6);
+        expect(controls.target.x).toBeCloseTo(pose.target.x, 6);
+        expect(controls.target.y).toBeCloseTo(pose.target.y, 6);
+        expect(controls.target.z).toBeCloseTo(pose.target.z, 6);
+      }
     });
   }
 });

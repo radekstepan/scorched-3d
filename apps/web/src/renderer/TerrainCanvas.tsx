@@ -176,7 +176,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // Created up front so the terrain material can bind the texture.
     const territory = new TerritoryFx(worldW, worldD);
     // Opening frame: due south of a command unit, outside the map looking
-    // north in (fixed yaw matches the minimap orientation).
+    // north in at the sibling RTS elevation (fixed yaw matches the minimap
+    // orientation).
     const startPose = commanderCameraPose(map, options.exaggeration);
     const startUnit = pickStartUnit(map.units);
     camera.position.set(startPose.position.x, startPose.position.y, startPose.position.z);
