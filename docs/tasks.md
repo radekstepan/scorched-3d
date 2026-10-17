@@ -16,20 +16,9 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-For unit folio show the unit on terrain with toggles for motion shotting etc. This from `redesign-stumpy-tank-model` sibling directory.
+Sometimes a tank in a forest being attacked seems to just "take it" pointing at one or the other unit attacking instead of firing. This is still an issue. Maybe the defending unit is deciding who to shoot at and ends up shooting at nobody?
 
-Use the logo from `redesign-stumpy-tank-model` sibling directory for the game
+Some units get stuck behind a rock and keep walking backwards and forwards and sideway instead of smoothly walking around.
 
-The tab for Battlefield is too far left. Should be aligned with the actual UI.
+The Unit Folio needs to show terrain just like Unit Workshop in Terrain mode with all the toggles from sibling `redesign-stumpy-tank-model` directory.
 
-I don't like the faint border inside the game.
-
-Last bunch of commits fucked up pan speed and max zoom when zoomed in close. Panning is too slow in some cases, I couldn't even zoom in up close, but now it seems to work. Is it unit count causing this? When zooming in don't zoom in so close and keep the angle!
-
-Peewee shooting grenades too high, should be more ballistic. And while walking should have a gun pointing forward not up by default.
-
-Tweak the commander model to have a weapon in one of the claw. Right now it seems to shoot from the body?
-
-In top right corner show actual latest version number of the game.
-
-Sometimes a tank in a forest being attacked seems to just "take it" pointing at one or the other unit attacking instead of firing.
