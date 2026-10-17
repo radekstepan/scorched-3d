@@ -53,7 +53,7 @@ import {
   TURRET_RECOIL_KICK,
   wreckPopVelocity,
 } from "./combatFx";
-import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation, setUnitAim } from "./units";
+import { barrelElevation, buildSpawnedUnit, muzzleWorld, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation, setUnitAim } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
 import { NIGHT_LIGHT_BOOST } from "./night";
 import { UNIT_FOG_CACHE_KEY } from "./unitFog";
@@ -412,7 +412,7 @@ describe("CombatFx", () => {
 
   it("lobs grenades at close range, bolts past it", () => {
     // Knife-fight duel at 150 (inside the 220 grenade range): every volley
-    // leaves as a high-arc lob, never a flat bolt.
+    // leaves as a shallow ballistic grenade, never a flat bolt.
     const scene = new THREE.Scene();
     const duel = makePeeweeDuel(150);
     const fx = new CombatFx(scene, duel, mulberry32(21));
@@ -425,6 +425,34 @@ describe("CombatFx", () => {
     expect(fired).toBe(true);
     expect(fx.grenadeCount).toBeGreaterThan(0);
     expect(fx.grenadeCount).toBe(fx.totalFired);
+    fx.dispose();
+  });
+
+  it("fires a shallow grenade from the real scout muzzle and lowers the gun after disengaging", () => {
+    const scene = new THREE.Scene();
+    const duel = makePeeweeDuel(180);
+    const a = buildSpawnedUnit("peewee", 0, 0, 0, 0, () => 100);
+    const b = buildSpawnedUnit("peewee", 1, 0, 180, Math.PI, () => 100);
+    duel.clear(); duel.add(a, b); scene.add(duel);
+    const fx = new CombatFx(scene, duel, mulberry32(21));
+    fx.setExternalHull(true);
+    for (let n = 0; n < 600 && fx.totalFired === 0; n++) fx.update(1 / 60);
+    expect(fx.grenadeCount).toBeGreaterThan(0);
+    const velocity = fx.shotVelocityAt(0)!;
+    expect(Math.atan2(velocity.y, Math.hypot(velocity.x, velocity.z))).toBeLessThan(Math.PI / 6);
+    expect(Math.hypot(velocity.x, velocity.z)).toBeGreaterThan(250);
+    for (const body of [a, b]) expect(barrelElevation(body)).toBeLessThan(Math.PI / 6);
+    const firedPitch = Math.max(barrelElevation(a), barrelElevation(b));
+    expect(firedPitch).toBeGreaterThan(0.02);
+    b.position.z = 4000;
+    fx.update(1 / 60);
+    // Restoration is rate-limited instead of snapping the raised gun down.
+    expect(Math.max(barrelElevation(a), barrelElevation(b))).toBeLessThan(firedPitch);
+    for (let n = 0; n < 120; n++) fx.update(1 / 60);
+    for (const body of [a, b]) {
+      expect(barrelElevation(body)).toBeCloseTo(0, 8);
+      expect(muzzleWorld(body)!.direction.y).toBeCloseTo(0, 8);
+    }
     fx.dispose();
   });
 
@@ -503,7 +531,7 @@ describe("CombatFx", () => {
   });
 
   it("splashes landed grenades onto hulls", () => {
-    // Close duel runs long enough for ~4 s lob flights to land: the hulls
+    // Close duel runs long enough for grenade flights to land: the hulls
     // must carry damage from the grenade splashes.
     const scene = new THREE.Scene();
     const duel = makePeeweeDuel(150);
@@ -1576,23 +1604,31 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     fx.dispose();
   });
 
-  it("permits peewee grenade arcs that clear a crown on the direct sight line", () => {
-    const scene = new THREE.Scene();
-    const units = makeWoodlandPair("peewee", "peewee");
-    units.children[1]!.position.x = 200;
-    const fx = new CombatFx(scene, units, () => 0, {
-      groundY: () => 100,
-      blastFeatures: () => {},
-      treeStands: () => [{ x: 100, z: 0, groundY: 86, standing: true }],
-    });
-    const obstructed: unknown[] = [];
-    fx.onObstructedShot = (...args) => obstructed.push(args);
-    for (let n = 0; n < 600; n++) fx.update(1 / 60);
-    expect(fx.totalFired).toBeGreaterThan(0);
-    expect(fx.stuckCount).toBe(0);
-    expect(obstructed).toEqual([]);
-    fx.dispose();
-  });
+  it.each([{ ground: 60, clear: true }, { ground: 86, clear: false }])(
+    "admits shallow grenade throws only when the crown clears ($ground)", ({ ground, clear }) => {
+      const scene = new THREE.Scene();
+      const units = makeWoodlandPair("peewee", "peewee");
+      units.children[1]!.position.x = 200;
+      const fx = new CombatFx(scene, units, () => 0, {
+        groundY: () => 100,
+        blastFeatures: () => {},
+        treeStands: () => [{ x: 100, z: 0, groundY: ground, standing: true }],
+      });
+      const obstructed: unknown[] = [];
+      fx.onObstructedShot = (...args) => obstructed.push(args);
+      for (let n = 0; n < 600; n++) fx.update(1 / 60);
+      if (clear) {
+        expect(fx.totalFired).toBeGreaterThan(0);
+        expect(obstructed).toEqual([]);
+      } else {
+        // Never regain the unwanted mortar pose just to clear a tall crown.
+        expect(fx.totalFired).toBe(0);
+        expect(obstructed.length).toBeGreaterThan(0);
+      }
+      expect(fx.stuckCount).toBe(0);
+      fx.dispose();
+    },
+  );
 
   it("still intercepts wood that enters a lane after a bolt launches", () => {
     const scene = new THREE.Scene();

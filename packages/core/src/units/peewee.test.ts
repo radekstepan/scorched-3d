@@ -216,24 +216,33 @@ describe("peewee infantry kind", () => {
     expect(isPeeweeGrenadeRange(10)).toBe(false);
   });
 
-  it("solves the grenade as a slow high-arc lob, not a cannon flat", () => {
+  it.each([40, 100, 180, PEEWEE_GRENADE_RANGE])("throws a shallow ballistic grenade over %s units", (distance) => {
     const from = { x: 0, y: 9, z: 0 };
-    const to = { x: 200, y: 9, z: 0 };
+    const to = { x: distance, y: 9, z: 0 };
     const lob = solvePeeweeGrenade(from, to)!;
     expect(lob).not.toBeNull();
-    // Slow lob: much longer hang than any bolt over the same ground.
-    expect(lob.duration).toBeGreaterThan(200 / WEAPON_PROFILES.peewee.speed + 1);
-    expect(lob.duration).toBeLessThanOrEqual(8);
-    // High root: steeper than the cannon's flat low root at full speed.
-    const flat = solveBallistic(from, to, WEAPON_PROFILES.hammer.speed, GRAVITY)!;
-    expect(lob.elevation).toBeGreaterThan(flat.elevation);
-    expect(lob.elevation).toBeGreaterThan(Math.PI / 4);
-    expect(PEEWEE_GRENADE_SPEED).toBeLessThan(WEAPON_PROFILES.hammer.speed);
-    // Lands on the mark by construction.
+    expect(lob.duration).toBeGreaterThan(distance / WEAPON_PROFILES.peewee.speed);
+    expect(lob.duration).toBeLessThan(1);
+    expect(lob.elevation).toBeGreaterThan(0);
+    expect(lob.elevation).toBeLessThan(Math.PI / 6);
+    expect(lob).toEqual(solveBallistic(from, to, PEEWEE_GRENADE_SPEED, GRAVITY));
+    const middle = ballisticPosition(from, lob.velocity, lob.duration / 2, GRAVITY);
+    expect(middle.y).toBeGreaterThan(from.y);
+    expect(middle.y - from.y).toBeLessThan(12);
     const landed = ballisticPosition(from, lob.velocity, lob.duration, GRAVITY);
     expect(landed.x).toBeCloseTo(to.x, 6);
     expect(landed.y).toBeCloseTo(to.y, 6);
     expect(landed.z).toBeCloseTo(to.z, 6);
+  });
+
+  it.each([-30, 30])("lands a shallow grenade on a target at relative height %s", (height) => {
+    const from = { x: 0, y: 9, z: 0 }, to = { x: 180, y: 9 + height, z: 0 };
+    const shot = solvePeeweeGrenade(from, to)!;
+    expect(shot.duration).toBeLessThan(1);
+    const landed = ballisticPosition(from, shot.velocity, shot.duration, GRAVITY);
+    expect(landed.x).toBeCloseTo(to.x, 6);
+    expect(landed.y).toBeCloseTo(to.y, 6);
+    expect(solvePeeweeGrenade(from, { x: 180, y: 1000, z: 0 })).toBeNull();
   });
 
   it("splashes grenades harder than bolts but lighter than artillery", () => {

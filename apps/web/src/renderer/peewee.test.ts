@@ -55,7 +55,7 @@ describe("peewee infantry body", () => {
     expect(getBarrel(body)).not.toBeNull();
     expect(getMuzzleTip(body)).not.toBeNull();
     expect(barrelElevation(body)).toBeCloseTo(restBarrelElevation("peewee"), 12);
-    expect(restBarrelElevation("peewee")).toBeCloseTo(0.04);
+    expect(restBarrelElevation("peewee")).toBeCloseTo(0);
     // Two legs stride it, no road wheels roll it.
     expect(getLegs(body).length).toBe(2);
     expect(getWheels(body).length).toBe(0);

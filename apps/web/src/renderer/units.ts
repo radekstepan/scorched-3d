@@ -45,7 +45,7 @@ export function restBarrelElevation(kind: UnitKind): number {
     case "commander":
       return 0;
     case "peewee":
-      return 0.04;
+      return 0;
   }
 }
 

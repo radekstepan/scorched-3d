@@ -71,7 +71,7 @@ import {
   type TreeStand,
   type UnitKind,
 } from "@scorched-3d/core";
-import { muzzleWorld, getBarrel, getTurret, barrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
+import { muzzleWorld, getBarrel, getTurret, barrelElevation, restBarrelElevation, setBarrelElevation, setUnitAim, hideUnitCircles } from "./units";
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 import { nightLightScale } from "./night";
@@ -1430,6 +1430,7 @@ export class CombatFx {
     }
     this.nudges.clear();
     this.pending.clear();
+    this.elevGoal.clear();
     this.pendingHq.clear();
     this.forestSticks.clear();
     for (const pose of this.aim) pose.overshoot = 0;
@@ -1958,6 +1959,26 @@ export class CombatFx {
    * (see `slewBarrel`), so the tube visibly lays before the round leaves.
    */
   private slewPending(dt: number): void {
+    // A scout carries its rifle level between engagements. Pending aims can
+    // outlive a retreating target, so validate the live range before allowing
+    // an old firing elevation to keep the weapon raised during a walk.
+    for (let i = 0; i < this.units.children.length; i++) {
+      if (this.destroyed[i] || this.unitKind(i) !== "peewee") continue;
+      const body = this.units.children[i] as THREE.Group;
+      const target = this.pending.get(i);
+      const foe = target === undefined || this.destroyed[target]
+        ? undefined : this.units.children[target];
+      const hqTeam = this.pendingHq.get(i);
+      const hq = hqTeam === undefined ? null : this.hqTargetOf(hqTeam);
+      const near = (point: { x: number; z: number }) =>
+        Math.hypot(point.x - body.position.x, point.z - body.position.z) <= this.admissionFor("peewee");
+      if ((foe && near(foe.position)) || (hq && near(hq))) continue;
+      this.pending.delete(i);
+      this.pendingHq.delete(i);
+      this.elevGoal.delete(i);
+      this.releaseOvershoot(i);
+      setBarrelElevation(body, stepElevation(barrelElevation(body), restBarrelElevation("peewee"), ELEVATION_SLEW_RATE.peewee * dt));
+    }
     for (const [attacker, target] of this.pending) {
       if (this.destroyed[attacker] || this.destroyed[target]) {
         this.pending.delete(attacker);
@@ -2440,7 +2461,7 @@ export class CombatFx {
     // or ballistically unreachable — keep traversing, retry on a new pair.
     if (!inRange(kind, approxDist)) return false;
     // Peewee secondary: inside grenade range the hand-cannon lobs a slow
-    // high-arc grenade instead of firing its peashooter bolt (see core
+    // ballistic grenade instead of firing its peashooter bolt (see core
     // `peeweeAttackFor` — lobs start where the knife-fight stand-off ends).
     const lobGrenade = kind === "peewee" && isPeeweeGrenadeRange(approxDist);
     const attack: AttackMode = lobGrenade ? "grenade" : "round";
@@ -2450,7 +2471,7 @@ export class CombatFx {
     const roundGravity = roundShell ? GRAVITY : 0;
     // Prefer an admissible canopy-clearing arc before laying the barrel.
     // The final live-muzzle flight gate below rejects any fallback that
-    // still crosses wood. Grenades always use their steep mortar arc.
+    // still crosses wood. Grenades keep their shallow ballistic throw.
     const stands = this.env?.treeStands?.() ?? [];
     const seedClearing = solveShotClearing(
       kind,

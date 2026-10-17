@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { UNIT_KINDS } from "@scorched-3d/core";
-import { getBarrel, getLegs, getMuzzleTip, getWheels } from "../renderer/units";
+import { muzzleWorld, getBarrel, getLegs, getMuzzleTip, getWheels } from "../renderer/units";
 import { buildStudioBody, disposeStudioObject } from "./studio";
 import { buildPreviewTerrain, PreviewAnimation } from "./preview";
 
@@ -50,6 +50,17 @@ describe("visual-only folio animation", () => {
     const flashDispose = vi.spyOn(animation.flash.geometry, "dispose");
     disposeStudioObject(scene);
     expect(flashDispose).toHaveBeenCalledOnce();
+  });
+
+  it("carries the scout rifle horizontally while walking and shooting in the folio", () => {
+    const body = buildStudioBody("peewee");
+    const animation = new PreviewAnimation(body, "peewee");
+    const scene = new THREE.Group(); scene.add(body, animation.effects);
+    for (const shooting of [false, true, false]) {
+      for (let i = 0; i < 60; i++) animation.update(1 / 60, true, shooting, false);
+      expect(muzzleWorld(body)!.direction.y).toBeCloseTo(0, 8);
+    }
+    disposeStudioObject(scene);
   });
 
   it("repeats shooting and restarts immediately after toggling it back on", () => {

@@ -911,12 +911,9 @@ export interface CanopySolution {
  * inside the 550 bolt reach, so scouts shoot bolts on approach and switch to
  * lobs once they close.
  *
- * Ballistics are deliberately distinct from the hammer's cannon: the gun
- * fires a slow (300 u/s vs the cannon's 520) HIGH-angle root — a mortar lob
- * hanging ~4 s over 200 units — where the cannon prefers the flat low root.
- * Same gravity, same solver family, opposite root: the arc reads as a tossed
- * grenade, never as artillery fire. Tint is infantry green, not cannon
- * orange, for the same reason.
+ * Use the low ballistic root at 300 u/s: a short, gravity-driven toss,
+ * rather than a near-vertical mortar launch. Range, damage and cadence stay
+ * unchanged; infantry-green tint distinguishes it from the cannon.
  */
 
 /** Muzzle-to-impact distance inside which peewees lob grenades, world units. */
@@ -939,11 +936,9 @@ export function isPeeweeGrenadeRange(distance: number): boolean {
 }
 
 /**
- * High-angle grenade solution under `GRAVITY`: same impact, same muzzle
- * speed as a cannon root would give, but the steep mortar arc instead of
- * the flat cannon trajectory. Null under the same conditions as
- * `solveBallisticHigh` (out of lobbing range reads as no solution, and the
- * caller keeps the bolt).
+ * Low-angle grenade solution under `GRAVITY`. Preserve the analytic flight
+ * and unreachable-target rejection shared with cannon ballistics, while
+ * keeping close-range throws shallow and quick.
  */
 export function solvePeeweeGrenade(
   from: CombatVec3,
@@ -951,7 +946,7 @@ export function solvePeeweeGrenade(
   speed: number = PEEWEE_GRENADE_SPEED,
   gravity: number = GRAVITY,
 ): ShotSolution | null {
-  return solveBallisticHigh(from, to, speed, gravity);
+  return solveBallistic(from, to, speed, gravity);
 }
 
 /**
@@ -976,13 +971,13 @@ export function solveShotClearing(
 ): CanopySolution | null {
   const profile = WEAPON_PROFILES[kind];
   if (!profile) return null;
-  // Peewee grenades always lob the steep mortar arc (the high root is the
-  // whole point of the secondary): no flat root exists to prefer. The
-  // caller admits or rejects the lob from the final live muzzle.
+  // Grenades keep their shallow throw even near trees. Do not substitute a
+  // near-vertical mortar arc to clear wood; the final live-muzzle gate
+  // admits the trajectory only when the lane is actually clear.
   if (attack === "grenade" && kind === "peewee") {
     const lob = solvePeeweeGrenade(from, to, PEEWEE_GRENADE_SPEED, GRAVITY);
     if (!lob) return null;
-    return { solution: lob, elevated: true };
+    return { solution: lob, elevated: false };
   }
   if (profile.shot === "shell") {
     const mountMax = ELEVATION_MAX[kind] ?? 1.45;

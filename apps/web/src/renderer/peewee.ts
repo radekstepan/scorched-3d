@@ -122,7 +122,7 @@ export function buildPeewee(parent: THREE.Group, turret: THREE.Group, livery?: T
     }
   };
   attach(turret, source.torso, "peewee-torso");
-  const pivot = new THREE.Group(); pivot.name = "barrel"; pivot.position.set(0, 8, 2); pivot.rotation.x = -0.04;
+  const pivot = new THREE.Group(); pivot.name = "barrel"; pivot.position.set(0, 8, 2); pivot.rotation.x = 0;
   attach(pivot, source.gun, "peewee-gun");
   const tip = new THREE.Object3D(); tip.name = "tip"; tip.position.z = 10; pivot.add(tip); turret.add(pivot);
   for (const x of [-2.5, 2.5]) {

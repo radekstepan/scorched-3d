@@ -21,7 +21,7 @@ describe("Peewee asset contract", () => {
     expect(getWheels(body)).toHaveLength(0);
     expect(getBarrel(body)!.position.toArray()).toEqual([0, 8, 2]);
     expect(getMuzzleTip(body)!.position.toArray()).toEqual([0, 0, 10]);
-    expect(barrelElevation(body)).toBeCloseTo(0.04);
+    expect(barrelElevation(body)).toBeCloseTo(0);
     setUnitAim(body, 0.7, -0.2); setBarrelElevation(body, 0.3);
     expect(getTurret(body)!.rotation.y).toBeCloseTo(-0.2);
     const muzzle = muzzleWorld(body)!;
