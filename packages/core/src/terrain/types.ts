@@ -123,6 +123,8 @@ export interface ViewOptions {
   showWaypoints: boolean;
   /** Overhead health bars above each live unit. */
   showHealth: boolean;
+  /** Territory overlay: each team's recent ground on the map + minimap. */
+  showTerritory: boolean;
   /** Keyboard + right-drag pan multiplier (1 = default). */
   panSpeed: number;
   /** Scroll-wheel zoom multiplier (1 = default). */

@@ -432,6 +432,32 @@ describe("daytime valley fog", () => {
   });
 });
 
+describe("territory overlay", () => {
+  it("terrain shader mixes the influence texture after the fog, guarded by the toggle", () => {
+    expect(terrainFragment).toContain("uniform sampler2D influenceTex;");
+    expect(terrainFragment).toContain("uniform float showTerritory;");
+    expect(terrainFragment).toContain("if (showTerritory > 0.5) {");
+    expect(terrainFragment).toContain("texture2D(influenceTex, vUv)");
+    expect(terrainFragment).toContain("mix(color, terr.rgb, terr.a)");
+    // After the fog mix so the overlay reads at any distance …
+    const fogMix = terrainFragment.indexOf("mix(color, fogColor, fog)");
+    const terrMix = terrainFragment.indexOf("mix(color, terr.rgb, terr.a)");
+    expect(fogMix).toBeGreaterThanOrEqual(0);
+    expect(terrMix).toBeGreaterThan(fogMix);
+    // … and terrain-only: the water sheet carries no territory term.
+    expect(waterFragment).not.toContain("influenceTex");
+    expect(waterFragment).not.toContain("showTerritory");
+  });
+
+  it("canvas seeds and drives the territory uniforms from the View toggle", () => {
+    expect(canvasSource).toContain("influenceTex: { value: territory.texture }");
+    expect(canvasSource).toContain("showTerritory: { value: 0 }");
+    expect(canvasSource).toContain(
+      "terrainMat.uniforms.showTerritory!.value = opt.showTerritory ? 1 : 0;",
+    );
+  });
+});
+
 describe("gated calm water", () => {
   it("terrain underwater tint + caustics render only with water on", () => {
     expect(terrainFragment).toContain("uniform float showWater;");

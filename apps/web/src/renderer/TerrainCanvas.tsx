@@ -29,6 +29,7 @@ import {
   type BlastSlope,
   type Crater,
   type HoverInfo,
+  type InfluenceUnit,
   type PlacedUnit,
   type TNTMap,
   type TreeStand,
@@ -63,6 +64,7 @@ import { UnitMovement } from "./movement";
 import { TrackTrails } from "./tracks";
 import { HealthBars } from "./healthBars";
 import { WaypointFx } from "./waypoints";
+import { TerritoryFx, type TerritoryMinimap } from "./territory";
 import {
   applyPan,
   clampCameraAboveSurface,
@@ -126,6 +128,12 @@ interface Props {
   /** Live HQ status broadcast (~4 Hz) for minimap markers. */
   onHq?: (hqs: HqStatus[]) => void;
   /**
+   * Territory paint broadcast (~4 Hz while the overlay is on, null while
+   * off) for the minimap canvas. The 3D terrain reads the same paint
+   * straight off the shared texture — no React round-trip.
+   */
+  onTerritory?: (shot: TerritoryMinimap | null) => void;
+  /**
    * Minimap click-to-move request (world X/Z + sequence). Consumed in the
    * render tick: the orbit target translates there with the camera offset
    * preserved, so yaw/pitch/zoom never reset.
@@ -133,7 +141,7 @@ interface Props {
   jumpTo?: { x: number; z: number; seq: number } | null;
 }
 
-export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, jumpTo }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, onTerritory, jumpTo }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fpsRef = useRef<HTMLDivElement>(null);
   const optsRef = useRef(options);
@@ -141,12 +149,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
   const selectionRef = useRef(onSelection);
   const positionsRef = useRef(onPositions);
   const hqRef = useRef(onHq);
+  const territoryRef = useRef(onTerritory);
   const jumpRef = useRef(jumpTo);
   optsRef.current = options;
   hoverRef.current = onHover;
   selectionRef.current = onSelection;
   positionsRef.current = onPositions;
   hqRef.current = onHq;
+  territoryRef.current = onTerritory;
   jumpRef.current = jumpTo;
 
   useEffect(() => {
@@ -158,6 +168,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     const camera = new THREE.PerspectiveCamera(48, 1, 2, 14000);
     const { worldW, worldD } = worldSize(map);
+    // Territory overlay (View menu): one shared influence field + texture —
+    // the terrain shader samples it by UV, the minimap gets RGBA copies.
+    // Created up front so the terrain material can bind the texture.
+    const territory = new TerritoryFx(worldW, worldD);
     // Opening frame: due south of a command unit, outside the map looking
     // north in (fixed yaw matches the minimap orientation).
     const startPose = commanderCameraPose(map, options.exaggeration);
@@ -218,6 +232,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         fogNear: { value: fogNear },
         fogFar: { value: fogFar },
         valleyFog: { value: fogPreset.valleyFog },
+        influenceTex: { value: territory.texture },
+        showTerritory: { value: 0 },
         fireflyPools: { value: Array.from({ length: FIREFLY_COUNT }, () => new THREE.Vector3()) },
         fireflyGlows: { value: new Array<number>(FIREFLY_COUNT).fill(0) },
       },
@@ -1018,6 +1034,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
 
       terrainMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
+      terrainMat.uniforms.showTerritory!.value = opt.showTerritory ? 1 : 0;
       terrainMat.uniforms.showContours!.value = opt.showContours ? 1 : 0;
       terrainMat.uniforms.showWater!.value = opt.showWater && map.seaLevel > 0 ? 1 : 0;
       terrainMat.uniforms.time!.value = t;
@@ -1157,6 +1174,26 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       );
 
       movement.update(dt);
+      // Territory stamps: every live hull plus every live fort, every tick
+      // (cheap discs — the field stays warm even while the overlay hides, so
+      // toggling on shows live ground). The repaint + upload run at 4 Hz
+      // inside, only while visible. UV-mapped, so no resnap on exaggeration
+      // change. Wrecks keep their fading history (they simply stop stamping).
+      territory.setVisible(opt.showTerritory, t);
+      {
+        const placed = units.userData.units as PlacedUnit[];
+        const spots = movement.positions();
+        const roster: InfluenceUnit[] = spots.map((p, i) => ({
+          x: p.x,
+          z: p.z,
+          team: placed[i]?.team ?? 0,
+          alive: !combat.isDestroyedAt(i),
+        }));
+        for (const s of hq?.status() ?? []) {
+          roster.push({ x: s.x, z: s.z, team: s.team, alive: s.alive });
+        }
+        territory.update(roster, t, opt.showTerritory);
+      }
       tracks.update(movement, dt);
       waypoints.setVisible(opt.showWaypoints);
       waypoints.update(movement, units.children.length, t);
@@ -1229,6 +1266,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           movement.positions().map((p, i) => ({ ...p, alive: !combat.isDestroyedAt(i) })),
         );
         hqRef.current?.(hq?.status() ?? []);
+        // Territory paint for the minimap overlay (null while hidden clears
+        // the canvas so stale ground never flashes on the next toggle-on).
+        territoryRef.current?.(opt.showTerritory ? territory.minimap() : null);
       }
 
       // Hover probe: at most one math pick per tick, and only when the
@@ -1276,6 +1316,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       ro.disconnect();
       movement.dispose();
       hq?.dispose();
+      territory.dispose();
       tracks.dispose();
       waypoints.dispose();
       health.dispose();
@@ -1288,6 +1329,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       selectionRef.current?.([]);
       positionsRef.current?.([]);
       hqRef.current?.([]);
+      territoryRef.current?.(null);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

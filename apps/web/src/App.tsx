@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   APP_NAME,
   CELL_PIXELS,
@@ -31,6 +31,7 @@ import {
 import { cn } from "./utils/cn";
 import { countLiveUnitsByKind } from "./utils/liveCounts";
 import { minimapPointToWorld } from "./renderer/minimap";
+import type { TerritoryMinimap } from "./renderer/territory";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
@@ -41,6 +42,10 @@ export default function App() {
   const [selected, setSelected] = useState<number[]>([]);
   const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean }[]>([]);
   const [hqs, setHqs] = useState<HqStatus[]>([]);
+  // Territory paint for the minimap overlay (~4 Hz while the toggle is on,
+  // null while off). Drawn into the overlay canvas by the effect below.
+  const [territory, setTerritory] = useState<TerritoryMinimap | null>(null);
+  const territoryCanvasRef = useRef<HTMLCanvasElement>(null);
   // Minimap click-to-move: world point + sequence so repeated clicks on the
   // same spot still retarget the camera. TerrainCanvas consumes it and
   // preserves yaw/pitch/zoom (only the orbit target translates).
@@ -54,6 +59,7 @@ export default function App() {
     pixelFilter: true,
     showWaypoints: false,
     showHealth: true,
+    showTerritory: false,
     panSpeed: 1,
     zoomSpeed: 1,
     nightMode: false,
@@ -65,6 +71,26 @@ export default function App() {
   useEffect(() => {
     scheduleUnitIconPreload();
   }, []);
+
+  // Territory overlay canvas: each broadcast paints the coarse RGBA field
+  // 1:1 and CSS upscales it over the minimap box (smoothing on, so the
+  // cells read as soft blobs like the 3D texture). Cleared whenever the
+  // toggle is off or no paint has arrived yet.
+  useEffect(() => {
+    const canvas = territoryCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    if (!territory || !options.showTerritory) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    if (canvas.width !== territory.cols || canvas.height !== territory.rows) {
+      canvas.width = territory.cols;
+      canvas.height = territory.rows;
+    }
+    ctx.putImageData(new ImageData(territory.data, territory.cols, territory.rows), 0, 0);
+  }, [territory, options.showTerritory]);
 
   const map = useMemo(() => generateMap(preset, seed), [preset, seed]);
   // Minimap bakes terrain only: unit markers are a live overlay from the
@@ -189,6 +215,7 @@ export default function App() {
         onSelection={setSelected}
         onPositions={setLiveUnits}
         onHq={setHqs}
+        onTerritory={setTerritory}
         jumpTo={jump}
       />
 
@@ -270,6 +297,15 @@ export default function App() {
               className="block aspect-square w-full rounded-sm ring-1 ring-white/10"
               draggable={false}
             />
+            {/* Territory tint under the dots/HQs: absolutely positioned, so
+            it adds no layout box and clicks keep measuring against the image
+            content box (same rule as the ring frame above). */}
+            <canvas
+              ref={territoryCanvasRef}
+              className="absolute inset-0 h-full w-full"
+              style={{ imageRendering: "auto" }}
+              hidden={!options.showTerritory}
+            />
             {minimapDots}
             {minimapHoverChip}
             {minimapHq}
@@ -314,6 +350,7 @@ export default function App() {
           <Toggle label="Contours" on={options.showContours} onClick={() => patch({ showContours: !options.showContours })} />
           <Toggle label="Waypoints" on={options.showWaypoints} onClick={() => patch({ showWaypoints: !options.showWaypoints })} />
           <Toggle label="Health" on={options.showHealth} onClick={() => patch({ showHealth: !options.showHealth })} />
+          <Toggle label="Territory" on={options.showTerritory} onClick={() => patch({ showTerritory: !options.showTerritory })} />
           <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
         </div>
 

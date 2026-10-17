@@ -39,6 +39,8 @@ export const terrainFragment = /* glsl */ `
   uniform float fogNear;
   uniform float fogFar;
   uniform float valleyFog;
+  uniform sampler2D influenceTex;
+  uniform float showTerritory;
   uniform vec3 fireflyPools[90];
   uniform float fireflyGlows[90];
 
@@ -139,6 +141,15 @@ export const terrainFragment = /* glsl */ `
     float valley = 1.0 - smoothstep(waterY, valleyTop, vWorld.y);
     fog = clamp(fog + (1.0 - fog) * valley * valleyFog, 0.0, 1.0);
     color = mix(color, fogColor, fog);
+    // Territory overlay (View menu): each team's recent ground in its
+    // faction color — contested cells blend both, stale cells fade out (see
+    // core influence.ts, which paints the texture). Mixed after the fog so
+    // the overlay reads at any distance; the guard skips the fetch entirely
+    // while hidden.
+    if (showTerritory > 0.5) {
+      vec4 terr = texture2D(influenceTex, vUv);
+      color = mix(color, terr.rgb, terr.a);
+    }
     gl_FragColor = vec4(color, 1.0);
   }
 `;
