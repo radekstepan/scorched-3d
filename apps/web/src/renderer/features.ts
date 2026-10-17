@@ -116,6 +116,28 @@ export function buildTrees(
   return group;
 }
 
+/**
+ * Deterministic per-instance rock bulk, in the sibling viewer's non-uniform
+ * style (`scale.set(1.8 + (i % 3), 1.4 + (i % 4), 2.5 + (i % 3))` on a
+ * detail-0 dodecahedron): each axis varies on its own small cycle around the
+ * shared base size, so neighbouring instances read as different stones
+ * instead of resized copies. Shared by `buildRocks` and `writeRockPose` so
+ * the intact pose can never disagree; `shrink` is the damage-level factor.
+ */
+export function rockAxisScale(i: number, shrink = 1): { x: number; y: number; z: number } {
+  const s = 0.7 + (i % 5) * 0.18;
+  return {
+    x: s * (0.85 + (i % 3) * 0.15) * shrink,
+    y: s * (0.7 + (i % 4) * 0.12) * shrink,
+    z: s * (0.9 + ((i + 1) % 3) * 0.15) * shrink,
+  };
+}
+
+/** Deterministic per-instance rock tumble; shared for the same reason. */
+export function rockRotation(i: number): { x: number; y: number; z: number } {
+  return { x: i * 0.7, y: i * 1.1, z: i * 0.3 };
+}
+
 export function buildRocks(map: TNTMap, exaggeration: number): THREE.InstancedMesh {
   const geo = new THREE.DodecahedronGeometry(9, 0);
   const mat = new THREE.MeshLambertMaterial({ color: 0x6a5e50 });
@@ -131,8 +153,10 @@ export function buildRocks(map: TNTMap, exaggeration: number): THREE.InstancedMe
   const dummy = new THREE.Object3D();
   pts.forEach((p, i) => {
     dummy.position.copy(p).add(new THREE.Vector3(0, 2, 0));
-    dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-    dummy.scale.setScalar(0.7 + (i % 5) * 0.18);
+    const rot = rockRotation(i);
+    dummy.rotation.set(rot.x, rot.y, rot.z);
+    const s = rockAxisScale(i);
+    dummy.scale.set(s.x, s.y, s.z);
     dummy.updateMatrix();
     mesh.setMatrixAt(i, dummy.matrix);
     tint(mesh, i, 1, 1, 1);
@@ -427,38 +451,33 @@ export function writeRockPose(
 ): void {
   const pts = rockPositions(rocks);
   const p = pts[i]!;
-  const s = 0.7 + (i % 5) * 0.18;
+  const rot = rockRotation(i);
+  const pose = (shrink: number): void => {
+    const s = rockAxisScale(i, shrink);
+    dummy.rotation.set(rot.x, rot.y, rot.z);
+    dummy.scale.set(s.x, s.y, s.z);
+    dummy.updateMatrix();
+    rocks.setMatrixAt(i, dummy.matrix);
+  };
   switch (damage) {
     case 0:
       dummy.position.set(p.x, y + 2, p.z);
-      dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-      dummy.scale.setScalar(s);
-      dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
+      pose(1);
       tint(rocks, i, 1, 1, 1);
       break;
     case 1:
       dummy.position.set(p.x + 3, y + 1, p.z);
-      dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-      dummy.scale.setScalar(s * 0.85);
-      dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
+      pose(0.85);
       tint(rocks, i, 0.85, 0.8, 0.75);
       break;
     case 2:
       dummy.position.set(p.x - 5, y + 0.5, p.z);
-      dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-      dummy.scale.setScalar(s * 0.6);
-      dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
+      pose(0.6);
       tint(rocks, i, 0.5, 0.42, 0.35);
       break;
     case 3:
       dummy.position.set(p.x, y - 1, p.z);
-      dummy.rotation.set(i * 0.7, i * 1.1, i * 0.3);
-      dummy.scale.setScalar(s * 0.35);
-      dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
+      pose(0.35);
       tint(rocks, i, 0.35, 0.28, 0.22);
       break;
   }

@@ -14,6 +14,7 @@ import {
   buildTrees,
   decaySink,
   placeFeatures,
+  rockAxisScale,
   writeRockPose,
   writeTreePose,
 } from "./features";
@@ -135,6 +136,32 @@ describe("feature damage posing", () => {
     const c = new THREE.Color();
     rocks.getColorAt(0, c);
     expect(c.r).toBeLessThan(0.6);
+  });
+
+  it("poses rocks with deterministic non-uniform bulk shared by build and re-seat", () => {
+    // Sibling-viewer style: each axis varies on its own cycle, so
+    // neighbours read as different stones, not resized copies.
+    const first = rockAxisScale(1);
+    expect(first.x).not.toBeCloseTo(first.y, 5);
+    expect(first.y).not.toBeCloseTo(first.z, 5);
+    const map = makeMap();
+    const rocks = buildRocks(map, 1);
+    const readMatrix = (i: number): number[] => {
+      const m = new THREE.Matrix4();
+      rocks.getMatrixAt(i, m);
+      return [...m.elements];
+    };
+    const built = readMatrix(1);
+    // Damage then re-seat at the intact level: the shared helper must
+    // reproduce the build pose exactly (no resurrection drift).
+    const dummy = new THREE.Object3D();
+    writeRockPose(rocks, dummy, 1, 100, 2);
+    expect(readMatrix(1)).not.toEqual(built);
+    const pts = rocks.userData.positions as THREE.Vector3[];
+    const groundY = 100 * 2 * 1;
+    expect(pts[1]!.y).toBeCloseTo(groundY, 9);
+    writeRockPose(rocks, dummy, 1, groundY, 0);
+    for (let e = 0; e < 16; e++) expect(readMatrix(1)[e]).toBeCloseTo(built[e]!, 9);
   });
 });
 

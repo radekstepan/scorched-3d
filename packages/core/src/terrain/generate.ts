@@ -342,6 +342,17 @@ function stampFeatures(
         features[i] = which;
       } else if (slope > 16 && hash2(x, z, seed + 73) > 0.82) {
         features[i] = 3 + (hash2(x, z, seed + 74) > 0.5 ? 1 : 0);
+      } else if (
+        slope < 9 &&
+        hash2(x, z, seed + 75) > 0.94 &&
+        fbm(x * 0.03, z * 0.03, seed + 78, 3) > 0.58
+      ) {
+        // Scattered boulder fields on open, dry, gentle ground: the cheap
+        // hash gates first so the rockiness fbm only runs on candidates.
+        // Rocks never block hulls (walkability ignores features; they only
+        // add traverse cost), so open-ground scatter is gameplay-safe; HQ
+        // pads/roads are cleared after stamping and spawns avoid features.
+        features[i] = 3 + (hash2(x, z, seed + 76) > 0.5 ? 1 : 0);
       }
     }
   }
