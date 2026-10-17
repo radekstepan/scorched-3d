@@ -31,8 +31,8 @@ describe('armored HQ architecture', () => {
       triangles += (o.geometry.index?.count ?? o.geometry.attributes.position.count) / 3; draws++;
     }});
     expect(triangles).toBeLessThan(4000);
-    // 38 base draws + 3 for the team-flag mast (pole, cloth, finial).
-    expect(draws).toBeLessThan(43);
+    // 38 base draws + 4 for the mast (pole, cloth, sewn outline, finial).
+    expect(draws).toBeLessThan(44);
     poseHqWreck(a);
     expect((mb.material as THREE.MeshLambertMaterial).color.getHex()).not.toBe(0x14100b);
   });

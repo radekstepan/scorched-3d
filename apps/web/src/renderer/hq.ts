@@ -133,6 +133,10 @@ export const HQ_FLAG_H = 11;
 export const HQ_FLAG_DROP = 1.5;
 /** Flagpole + finial steel (the cloth carries the team color). */
 export const HQ_FLAG_STEEL = 0x485654;
+/** Pale sewn edging keeps either team readable against blue water and dark terrain. */
+export const HQ_FLAG_OUTLINE = 0xeee7cc;
+export const HQ_FLAG_OUTLINE_W = 0.85;
+const HQ_FLAG_SEGMENTS = 12;
 /**
  * Default footing depth under the slab/hall (world units, straight down
  * from the slab underside at local y=0). `HqFx` re-sizes both footings per
@@ -422,7 +426,7 @@ export function buildHq(team: TeamId): THREE.Group {
   tag(pole);
   mast.add(pole);
   const cloth = new THREE.Mesh(
-    new THREE.PlaneGeometry(HQ_FLAG_W, HQ_FLAG_H),
+    new THREE.PlaneGeometry(HQ_FLAG_W, HQ_FLAG_H, HQ_FLAG_SEGMENTS, 2),
     new THREE.MeshLambertMaterial({ color: teamColor, side: THREE.DoubleSide }),
   );
   cloth.name = "hq-flag";
@@ -433,6 +437,46 @@ export function buildHq(team: TeamId): THREE.Group {
   );
   tag(cloth);
   mast.add(cloth);
+  // A real ribbon around the cloth (rather than a WebGL line) keeps its
+  // thickness from either face and follows exactly the same wind deformation.
+  const borderGeometry = new THREE.BufferGeometry();
+  const borderPositions: number[] = [];
+  const borderIndices: number[] = [];
+  const halfW = HQ_FLAG_W / 2, halfH = HQ_FLAG_H / 2;
+  const corners = [[halfW, halfH], [-halfW, halfH], [-halfW, -halfH], [halfW, -halfH]];
+  const outer = [[halfW, halfH + HQ_FLAG_OUTLINE_W], [-halfW - HQ_FLAG_OUTLINE_W, halfH + HQ_FLAG_OUTLINE_W],
+    [-halfW - HQ_FLAG_OUTLINE_W, -halfH - HQ_FLAG_OUTLINE_W], [halfW, -halfH - HQ_FLAG_OUTLINE_W]];
+  // The fourth edge is sewn to the steel pole and needs no ribbon.
+  for (let edge = 0; edge < 3; edge++) {
+    const next = (edge + 1) % 4;
+    const segments = edge === 1 ? 2 : HQ_FLAG_SEGMENTS;
+    for (let step = 0; step < segments; step++) {
+      const start = borderPositions.length / 3;
+      for (const t of [step / segments, (step + 1) / segments]) {
+        for (const ring of [corners, outer]) {
+          const a = ring[edge]!, b = ring[next]!;
+          borderPositions.push(a[0]! + (b[0]! - a[0]!) * t, a[1]! + (b[1]! - a[1]!) * t, 0);
+        }
+      }
+      borderIndices.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
+    }
+  }
+  borderGeometry.setAttribute("position", new THREE.Float32BufferAttribute(borderPositions, 3));
+  borderGeometry.setIndex(borderIndices);
+  const border = new THREE.Mesh(borderGeometry,
+    new THREE.MeshLambertMaterial({ color: HQ_FLAG_OUTLINE, side: THREE.DoubleSide }));
+  border.name = "hq-flag-outline";
+  border.position.copy(cloth.position);
+  tag(border);
+  mast.add(border);
+  for (const mesh of [cloth, border]) {
+    // Save immutable local coordinates so animation never accumulates drift.
+    mesh.geometry.setAttribute("restPosition", mesh.geometry.getAttribute("position").clone());
+    (mesh.geometry.getAttribute("position") as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
+    mesh.geometry.computeBoundingSphere();
+    mesh.geometry.boundingSphere!.radius += 3;
+  }
+  setHqFlagTime(group, 0);
   const finial = new THREE.Mesh(
     new THREE.SphereGeometry(HQ_FLAG_POLE_R * 1.6, 12, 10),
     new THREE.MeshLambertMaterial({ color: HQ_FLAG_STEEL }),
@@ -532,6 +576,28 @@ export function getHqBeaconGlow(group: THREE.Group): THREE.Sprite | null {
 /** Team-flag cloth of an HQ group, or null (plain test groups). */
 export function getHqFlag(group: THREE.Group): THREE.Mesh | null {
   return (group.getObjectByName("hq-flag") as THREE.Mesh | undefined) ?? null;
+}
+
+/** Wind ripples travel toward the free edge; the pole-side seam stays fixed. */
+export function setHqFlagTime(group: THREE.Group, timeS: number): void {
+  if (group.userData.hqWrecked === true) return;
+  const t = Number.isFinite(timeS) ? Math.max(0, timeS) : 0;
+  for (const name of ["hq-flag", "hq-flag-outline"]) {
+    const mesh = group.getObjectByName(name) as THREE.Mesh | undefined;
+    if (!mesh) continue;
+    const rest = mesh.geometry.getAttribute("restPosition");
+    const position = mesh.geometry.getAttribute("position");
+    for (let i = 0; i < position.count; i++) {
+      const x = rest.getX(i), y = rest.getY(i);
+      const free = Math.max(0, Math.min(1, 0.5 - x / HQ_FLAG_W));
+      const ripple = Math.sin(t * 7 - free * 7 + y * 0.12);
+      const flutter = Math.sin(t * 12 - free * 13 + y * 0.2);
+      position.setXYZ(i, x, y + free * 0.35 * ripple,
+        free * (1.8 * ripple + 0.45 * flutter));
+    }
+    position.needsUpdate = true;
+    mesh.geometry.computeVertexNormals();
+  }
 }
 
 /** Team-flag mast of an HQ group, or null (plain test groups). */

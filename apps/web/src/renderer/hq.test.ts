@@ -30,6 +30,8 @@ import {
   setHqBeaconAngle,
   setHqBeaconLevel,
   setHqFoundation,
+  setHqFlagTime,
+  HQ_FLAG_OUTLINE,
   HQ_BASE_D,
   HQ_BASE_W,
   HQ_BEACON_BEAM_EDGE,
@@ -230,6 +232,52 @@ describe("hq team flag", () => {
       const tipWorldY = HQ_FLAG_BASE_Y + HQ_FLAG_POLE_H;
       expect(tipWorldY).toBeGreaterThan(HQ_WALL_H);
     }
+  });
+
+  it("flutters the cloth and contrasting outline together with a fixed pole seam", () => {
+    for (const team of [0, 1] as const) {
+      const group = buildHq(team);
+      const cloth = getHqFlag(group)!;
+      const border = group.getObjectByName("hq-flag-outline") as THREE.Mesh;
+      expect((border.material as THREE.MeshLambertMaterial).color.getHex()).toBe(HQ_FLAG_OUTLINE);
+      expect((border.material as THREE.MeshLambertMaterial).side).toBe(THREE.DoubleSide);
+      expect(border.position.equals(cloth.position)).toBe(true);
+      const before = Array.from(cloth.geometry.getAttribute("position").array);
+      setHqFlagTime(group, 0.37);
+      const positions = cloth.geometry.getAttribute("position");
+      expect(Array.from(positions.array)).not.toEqual(before);
+      for (let i = 0; i < positions.count; i++) {
+        if (positions.getX(i) === HQ_FLAG_W / 2) {
+          expect(positions.getZ(i)).toBeCloseTo(0, 9);
+          expect(positions.getY(i)).toBeCloseTo(cloth.geometry.getAttribute("restPosition").getY(i), 9);
+        }
+      }
+      // The inner outline edge meets the cloth without seams as it waves.
+      const borderRest = border.geometry.getAttribute("restPosition");
+      const borderPos = border.geometry.getAttribute("position");
+      const rest = cloth.geometry.getAttribute("restPosition");
+      let matched = 0;
+      for (let i = 0; i < borderRest.count; i++) {
+        for (let j = 0; j < rest.count; j++) {
+          if (Math.abs(borderRest.getX(i) - rest.getX(j)) < 1e-5 &&
+              Math.abs(borderRest.getY(i) - rest.getY(j)) < 1e-5) {
+            expect(borderPos.getY(i)).toBeCloseTo(positions.getY(j), 5);
+            expect(borderPos.getZ(i)).toBeCloseTo(positions.getZ(j), 5);
+            matched++;
+          }
+        }
+      }
+      expect(matched).toBeGreaterThan(40);
+      const pose = Array.from(positions.array);
+      setHqFlagTime(group, 100);
+      setHqFlagTime(group, 0.37);
+      expect(Array.from(positions.array)).toEqual(pose);
+      poseHqWreck(group);
+      setHqFlagTime(group, 5);
+      expect(Array.from(positions.array)).toEqual(pose);
+      expect((border.material as THREE.MeshLambertMaterial).color.getHex()).toBe(0x14100b);
+    }
+    expect(() => setHqFlagTime(new THREE.Group(), 1)).not.toThrow();
   });
 
   it("returns null flag accessors on plain test groups", () => {

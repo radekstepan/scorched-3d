@@ -14,6 +14,7 @@ import { NIGHT_LIGHT_BOOST } from "./night";
 import { HealthBars } from "./healthBars";
 import {
   foundationDepthOf,
+  getHqFlag,
   getHqBeaconBeams,
   hqBeaconAngleAt,
   hqBeaconAngleOf,
@@ -256,6 +257,23 @@ describe("HqFx", () => {
     expect(bars.isHqShown(0)).toBe(false);
     expect(bars.isHqShown(1)).toBe(true);
     bars.dispose();
+    hq.dispose();
+  });
+
+  it("ticks flag wind on live forts and freezes it after destruction or a paused tick", () => {
+    const hq = new HqFx(new THREE.Scene(), anchors(), { groundY: () => 40 });
+    const flag = getHqFlag(hq.groupAt(0)!)!;
+    const positions = () => Array.from(flag.geometry.getAttribute("position").array);
+    const initial = positions();
+    hq.update(0.25);
+    expect(positions()).not.toEqual(initial);
+    const moving = positions();
+    hq.update(0);
+    expect(positions()).toEqual(moving);
+    for (let n = 0; n < 40; n++) hq.splash(-1000, 0, "hammer", null);
+    expect(hq.groupAt(0)!.userData.hqWrecked).toBe(true);
+    hq.update(0.25);
+    expect(positions()).toEqual(moving);
     hq.dispose();
   });
 

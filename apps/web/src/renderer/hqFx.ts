@@ -22,6 +22,7 @@ import {
   setHqBeaconAngle,
   setHqBeaconLevel,
   setHqFoundation,
+  setHqFlagTime,
   HQ_BEACON_PEAK,
   HQ_BEACON_PERIOD,
   HQ_DOOR_TRAVEL,
@@ -286,6 +287,7 @@ export class HqFx {
       // halos hold the same glow while their rotors circle — odd forts
       // lead by half a turn, so the two sweeps never march in lockstep.
       // Wrecks are skipped above, so a dead rotor freezes where it died.
+      setHqFlagTime(group, this.beaconT + i * 0.7);
       setHqBeaconLevel(group, 1, HQ_BEACON_PEAK * nightLightScale(this.night));
       setHqBeaconAngle(group, hqBeaconAngleAt(this.beaconT + (i % 2) * HQ_BEACON_PERIOD * 0.5));
       if (this.anim[i]! < 0) {
