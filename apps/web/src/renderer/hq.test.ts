@@ -382,10 +382,16 @@ describe("hq warning beacon", () => {
       expect(a).toBeGreaterThanOrEqual(prev);
       prev = a;
     }
-    // Sane diffusion constants: a real fade span and a real edge falloff.
+    // Sane diffusion constants: a real fade span and a sublinear edge
+    // falloff — above 1 the glow concentrates at facing-center and leaves
+    // a dark fringe outlining the cone (the visible "line"); below 1 the
+    // flanks hold glow and the cone reads as one soft wash, while alpha
+    // still hits exactly 0 at the silhouette (0 ^ EDGE = 0), so no clip.
     expect(HQ_BEACON_BEAM_FADE).toBeGreaterThan(0);
     expect(HQ_BEACON_BEAM_FADE).toBeLessThan(1);
-    expect(HQ_BEACON_BEAM_EDGE).toBeGreaterThan(1);
+    expect(HQ_BEACON_BEAM_EDGE).toBeGreaterThan(0);
+    expect(HQ_BEACON_BEAM_EDGE).toBeLessThan(1);
+    expect(Math.pow(0, HQ_BEACON_BEAM_EDGE)).toBe(0);
     expect(HQ_BEACON_BEAM_OPACITY).toBeGreaterThan(0);
     expect(HQ_BEACON_BEAM_OPACITY).toBeLessThan(0.5);
   });
@@ -563,27 +569,30 @@ describe("hq warning beacon", () => {
     expect(at(LEGACY_DISTANCE)).toBeLessThan(at(near));
   });
 
-  it("spreads wider cones that travel further and melt gently outward and sideways", () => {
-    // Legacy beam shape (pre-dispersal): narrower, shorter, harder fades.
-    const LEGACY_LEN = 60;
-    const LEGACY_RADIUS = 6;
-    const LEGACY_FADE = 0.35;
-    const LEGACY_EDGE = 1.5;
-    // Wider cones that travel further: longer beams with a wider opening
-    // half-angle, not just a scaled copy of the old cone.
-    expect(HQ_BEACON_BEAM_LEN).toBeGreaterThan(LEGACY_LEN);
-    expect(HQ_BEACON_BEAM_RADIUS).toBeGreaterThan(LEGACY_RADIUS);
+  it("spreads 45-degree cones that melt gently outward and sideways", () => {
+    // Legacy beam shape (pre-widening): narrow cones, shorter ramps, a
+    // superlinear edge falloff that fringed the silhouette.
+    const LEGACY_LEN = 90;
+    const LEGACY_RADIUS = 12;
+    const LEGACY_FADE = 0.5;
+    const LEGACY_EDGE = 1.2;
+    // 45-degree cones: radius equals length, so each cone opens to a
+    // ~45-degree half-angle — far wider than the legacy ~7.6 degrees.
+    expect(HQ_BEACON_BEAM_LEN).toBe(LEGACY_LEN);
+    expect(HQ_BEACON_BEAM_RADIUS).toBe(HQ_BEACON_BEAM_LEN);
     const halfAngle = Math.atan(HQ_BEACON_BEAM_RADIUS / HQ_BEACON_BEAM_LEN);
+    expect(halfAngle).toBeCloseTo(Math.PI / 4, 9);
     expect(halfAngle).toBeGreaterThan(Math.atan(LEGACY_RADIUS / LEGACY_LEN));
     // Gentler distance fade: the axial ramp spans more of the beam, so
     // where the legacy curve already burned full the new one is still
     // ramping up — a longer melt instead of a quicker step to full.
     expect(HQ_BEACON_BEAM_FADE).toBeGreaterThan(LEGACY_FADE);
     expect(hqBeaconBeamAxial(LEGACY_FADE)).toBeLessThan(1);
-    // Gentler side fade: the flanks hold more of the core glow at grazing
-    // view angles (a lower exponent lifts every partial facing toward
-    // full), so the cones melt away onto the sides instead of edging off.
+    // Gentler side fade: the exponent crosses below linear, lifting every
+    // partial facing toward full so the flanks hold glow and the dark
+    // fringe outlining the cone (the visible "line") is gone.
     expect(HQ_BEACON_BEAM_EDGE).toBeLessThan(LEGACY_EDGE);
+    expect(HQ_BEACON_BEAM_EDGE).toBeLessThan(1);
     for (const facing of [0.25, 0.5, 0.75]) {
       expect(Math.pow(facing, HQ_BEACON_BEAM_EDGE)).toBeGreaterThan(
         Math.pow(facing, LEGACY_EDGE),

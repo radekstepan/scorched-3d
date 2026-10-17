@@ -79,28 +79,33 @@ export const HQ_BEACON_RADIUS = 2;
  */
 export const HQ_BEACON_BEAM_LEN = 90;
 /**
- * Light-tower beam cone base radius, world units: a wide diffused cone
- * (half-angle ~7.6 deg, up from ~5.7) whose far disc covers the hall mouth
- * apron as it sweeps.
+ * Light-tower beam cone base radius, world units: equals the beam length,
+ * so each cone opens to a 45-degree half-angle (up from ~7.6) — a broad
+ * wash of red rather than a narrow laser line, its far disc spanning the
+ * works and surroundings as it sweeps.
  */
-export const HQ_BEACON_BEAM_RADIUS = 12;
+export const HQ_BEACON_BEAM_RADIUS = 90;
 /** Light-tower beam peak alpha at full level (additive, per the glow convention). */
 export const HQ_BEACON_BEAM_OPACITY = 0.22;
 /**
  * Beam axial fade span in cone-UV units (apex v=1, far rim v=0): alpha
  * ramps 0 → 1 over [0, HQ_BEACON_BEAM_FADE], so the far rim melts away with
- * no hard edge. Spans half the beam for a long gentle melt into the
+ * no hard edge. Spans most of the beam for a long gentle melt into the
  * distance rather than a quicker step to full. Shared by the beam GLSL and
  * the pure `hqBeaconBeamAxial` mirror.
  */
-export const HQ_BEACON_BEAM_FADE = 0.5;
+export const HQ_BEACON_BEAM_FADE = 0.8;
 /**
  * Beam silhouette-fade exponent: alpha scales with |dot(N, V)| ^ EDGE, so
  * the cone flanks melt away at grazing view angles instead of drawing a
- * hard border. Kept just above linear so the sides hold glow longer and
- * ease off softly. Shared by the beam GLSL below.
+ * hard border. Deliberately sublinear: exponents above 1 concentrate the
+ * glow at facing-center and leave a dark fringe that outlines the cone —
+ * the visible "line" of the angle. Below 1 the flanks hold glow and the
+ * whole cone reads as one soft wash; alpha still reaches exactly 0 at the
+ * silhouette (0 ^ EDGE = 0), so there is no hard clip, just no fringe.
+ * Shared by the beam GLSL below.
  */
-export const HQ_BEACON_BEAM_EDGE = 1.2;
+export const HQ_BEACON_BEAM_EDGE = 0.7;
 /**
  * Diffused halo sprite width/height, world units: a borderless radial glow
  * centered on the hot core, reaching well past the glass.
