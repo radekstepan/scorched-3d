@@ -27,7 +27,6 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .command-status i, .command-footer i { display: inline-block; width: 5px; height: 5px; background: var(--chrome-accent); border-radius: 50%; }
 .battlefield { grid-column: 2; grid-row: 2; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: #171d17; }
 .viewport-heading { position: absolute; top: 16px; left: 18px; right: 18px; display: flex; justify-content: space-between; gap: 16px; pointer-events: none; color: #e8eadf; font-size: 8px; letter-spacing: 1px; text-shadow: 0 1px 4px #000; }
-.viewport-reticle { position: absolute; inset: 10px; border: 1px solid #d4e99118; pointer-events: none; }
 .command-rail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #65744d transparent; background: var(--chrome); padding: 12px; }
 .worlds-rail { grid-column: 1; grid-row: 2; border-right: 1px solid var(--chrome-line); display: flex; flex-direction: column; gap: 12px; }
 .worlds-rail > * { flex-shrink: 0; }

@@ -239,7 +239,6 @@ export default function App() {
         />
         <div className="viewport-heading"><span>TACTICAL VIEW / {map.name.toUpperCase()}</span><span>BLUE / ORANGE</span></div>
         <button className="battle-pause" aria-pressed={battlePaused} onClick={() => setBattlePaused((p) => !p)}>{battlePaused ? "▶ RESUME" : "Ⅱ PAUSE"}</button>
-        <div className="viewport-reticle" aria-hidden="true" />
 
         {selectedGroups.length > 0 && (
           <div className="selection-tray" role="region" aria-label="Selected units">

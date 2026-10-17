@@ -10,6 +10,16 @@ const source = readFileSync(join(here, "App.tsx"), "utf8");
 const css = readFileSync(join(here, "index.css"), "utf8");
 
 describe("RTS command shell", () => {
+  it("leaves the battlefield unobstructed by a decorative inset frame", () => {
+    expect(source).not.toContain("viewport-reticle");
+    expect(css).not.toContain(".viewport-reticle");
+    const battlefield = css.match(/\.battlefield\s*\{([^}]*)\}/)?.[1];
+    expect(battlefield).toBeDefined();
+    expect(battlefield).not.toMatch(/(?:border|outline|box-shadow)\s*:/);
+    expect(source).toContain('className="viewport-heading"');
+    expect(source).toContain('className="battle-pause"');
+  });
+
   it("reserves independent grid tracks for rails and battlefield", () => {
     expect(css).toContain("grid-template: 68px minmax(0, 1fr) 30px / 244px minmax(0, 1fr) 244px");
     expect(css).toMatch(/\.battlefield\s*\{[^}]*grid-column: 2;[^}]*grid-row: 2/);
