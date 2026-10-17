@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { describe, expect, it } from "vitest";
-import { CAMERA_SURFACE_CLEARANCE, DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, clampCameraAboveSurface, clampCameraToWorld, clampPanTargetWithCamera, clampTargetAboveSurface, effectiveZoomSpeed } from "./cameraPan";
+import { CAMERA_SURFACE_CLEARANCE, DEFAULT_ZOOM_SPEED, MAX_ZOOM_DISTANCE, MIN_ZOOM_DISTANCE, ZOOM_BASE_SPEED, liftCameraRigAboveSurface, clampCameraAboveSurface, clampCameraToWorld, clampPanTargetWithCamera, effectiveZoomSpeed } from "./cameraPan";
 
 // Cursor-anchored scroll zoom: rolling the wheel must dolly toward the ground
 // point under the cursor (that point stays pixel-pinned), not toward the
@@ -276,7 +276,8 @@ describe("surface collision on zoom", () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
     controls.maxPolarAngle = Math.PI * 0.49;
-    controls.minDistance = MIN_ZOOM_DISTANCE;
+    // Reproduce the historical eye-only collision bug at its original floor.
+    controls.minDistance = 15;
     controls.maxDistance = MAX_ZOOM_DISTANCE;
     controls.zoomToCursor = true;
     controls.target.set(0, 0, 0);
@@ -340,7 +341,7 @@ describe("surface collision on zoom", () => {
     // Tens of units inside the hill — min/max distance never saw it.
     expect(minClearance).toBeLessThan(-10);
     expect(distanceOf(rig.camera, rig.controls.target)).toBeGreaterThanOrEqual(
-      MIN_ZOOM_DISTANCE - 1e-6,
+      rig.controls.minDistance - 1e-6,
     );
   });
 
@@ -374,7 +375,8 @@ describe("surface collision on zoom", () => {
     camera.position.set(0, 2, 30);
     const controls = new OrbitControls(camera, el as unknown as HTMLElement);
     controls.maxPolarAngle = Math.PI * 0.49;
-    controls.minDistance = MIN_ZOOM_DISTANCE;
+    // Reproduce the historical eye-only collision bug at its original floor.
+    controls.minDistance = 15;
     controls.maxDistance = MAX_ZOOM_DISTANCE;
     controls.target.set(0, 0, 0);
     controls.update();
@@ -415,21 +417,15 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     // final camera column above the local surface: ground, or the water
     // sheet when it's shown and higher — with no jump exemption, since an
     // underground eye is never a valid request.
-    expect(canvasSource).toContain("clampCameraAboveSurface(camera.position, surfaceY)");
+    expect(canvasSource).toMatch(/liftCameraRigAboveSurface\(\s*camera\.position, controls\.target, surfaceY/);
     expect(canvasSource).toMatch(
       /Math\.max\(groundY\(camera\.position\.x, camera\.position\.z\), water\.position\.y\)/,
     );
   });
 
   it("backs the close-up floor off to frame a single hull", () => {
-    // 30-unit floor: ~27 units tall at the 48° fov, about one ~26-unit
-    // tank hull — the 15-unit floor showed half a hull and felt too
-    // close. High enough that a typical close-up pitch clears the 6-unit
-    // surface floor (30·cos(74°) ≈ 8.3), so zooming in keeps the angle
-    // instead of steepening onto the floor — while staying well outside
-    // the longest hull half-length (14) and the 2-unit near plane, so
-    // hulls never clip.
-    expect(MIN_ZOOM_DISTANCE).toBe(30);
+    // 60 units leaves room for a complete hull and surrounding terrain.
+    expect(MIN_ZOOM_DISTANCE).toBe(60);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     expect(canvasSource).toMatch(/controls\.minDistance\s*=\s*MIN_ZOOM_DISTANCE/);
@@ -442,22 +438,14 @@ describe("cursor-anchored zoom wiring in TerrainCanvas", () => {
     // stretches past the zoom floor and the view pitches fully vertical.
     // The tick must floor the target's final column on the terrain (like
     // minimap jumps: dirt, not the water sheet) right after the eye floor.
-    expect(canvasSource).toMatch(/clampTargetAboveSurface\(\s*controls\.target,/);
+    expect(canvasSource).toContain("liftCameraRigAboveSurface(");
     expect(canvasSource).toMatch(/groundY\(controls\.target\.x, controls\.target\.z\)/);
   });
 });
 
-describe("close-up keeps its angle (target floor)", () => {
-  // Cursor-anchored zoom re-seats the orbit target along the camera's
-  // downward forward ray every wheel tick. The eye floor holds only the
-  // camera up, so without a floor of its own the target dives hundreds of
-  // units underground at max zoom: the camera→target offset stretches far
-  // past the zoom floor and the view pitches fully vertical. The tick
-  // answers with clampTargetAboveSurface on the target's final terrain
-  // column. These tests drive a real control instance through the wheel
-  // path in canvas tick order (XZ clamps, then the surface floors) on
-  // flat ground, first without the floor (the vertical snap) and then
-  // with it applied per tick exactly like the canvas does.
+describe("close-up keeps its angle (rigid surface lift)", () => {
+  // Real controls followed by the canvas clamps: independent eye/focus
+  // floors change pitch; translating the complete rig preserves its offset.
   const worldW = 5104;
   const worldD = 4080;
 
@@ -476,8 +464,8 @@ describe("close-up keeps its angle (target floor)", () => {
       // in alone; both surface floors read their final XZ column.
       clampPanTargetWithCamera(rig.controls.target, rig.camera.position, worldW, worldD);
       clampCameraToWorld(rig.camera.position, worldW, worldD);
-      if (floored) clampTargetAboveSurface(rig.controls.target, 0);
-      clampCameraAboveSurface(rig.camera.position, 0);
+      if (floored) liftCameraRigAboveSurface(rig.camera.position, rig.controls.target, 0, 0);
+      else clampCameraAboveSurface(rig.camera.position, 0);
     }
     return rig;
   }
@@ -513,19 +501,38 @@ describe("close-up keeps its angle (target floor)", () => {
     const start = makeRig(true);
     const startPhi = polarOf(start.camera, start.controls.target);
     const rig = zoomFlight(true, clientX, clientY);
-    // Parked at the zoom floor, focus on the dirt, eye above it — and the
-    // pitch within a few degrees of the opening ~74° (center zoom holds
-    // it exactly; low-cursor zoom leans a touch shallower onto the eye
-    // floor instead of snapping vertical).
+    // Every cursor position reaches the same floor at exactly its chosen pitch.
     expect(distanceOf(rig.camera, rig.controls.target)).toBeGreaterThanOrEqual(
       MIN_ZOOM_DISTANCE - 1e-6,
     );
     expect(distanceOf(rig.camera, rig.controls.target)).toBeLessThan(MIN_ZOOM_DISTANCE + 1);
     expect(rig.controls.target.y).toBeGreaterThanOrEqual(-1e-9);
     expect(rig.camera.position.y).toBeGreaterThanOrEqual(CAMERA_SURFACE_CLEARANCE - 1e-9);
-    expect(Math.abs(polarOf(rig.camera, rig.controls.target) - startPhi)).toBeLessThan(
-      (8 * Math.PI) / 180,
-    );
+    expect(polarOf(rig.camera, rig.controls.target)).toBeCloseTo(startPhi, 10);
     expectFinitePose(rig);
+  });
+});
+
+describe("rigid terrain collision keeps the chosen zoom angle", () => {
+  it.each([
+    [400, 300, 0, 0],
+    [400, 550, 25, 0],
+    [250, 450, 4, -20],
+    [600, 500, 90, 50],
+  ])("preserves pitch/yaw through repeated cursor zoom over eye/focus surfaces %i,%i,%i,%i", (x, y, eyeY, focusY) => {
+    const rig = makeRig(true);
+    const direction = rig.camera.position.clone().sub(rig.controls.target).normalize();
+    for (let i = 0; i < 120; i++) {
+      rig.fireWheel(x, y, -120);
+      rig.controls.update();
+      const distance = distanceOf(rig.camera, rig.controls.target);
+      liftCameraRigAboveSurface(rig.camera.position, rig.controls.target, eyeY, focusY);
+      expect(distanceOf(rig.camera, rig.controls.target)).toBeCloseTo(distance, 8);
+      expect(rig.camera.position.y).toBeGreaterThanOrEqual(eyeY + CAMERA_SURFACE_CLEARANCE - 1e-9);
+      expect(rig.controls.target.y).toBeGreaterThanOrEqual(focusY - 1e-9);
+      expect(rig.camera.position.clone().sub(rig.controls.target).normalize().distanceTo(direction)).toBeLessThan(1e-9);
+    }
+    expect(distanceOf(rig.camera, rig.controls.target)).toBeCloseTo(MIN_ZOOM_DISTANCE, 8);
+    rig.controls.dispose();
   });
 });

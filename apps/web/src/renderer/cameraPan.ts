@@ -40,18 +40,36 @@ export const PAN_SPEED_MAX = 3;
 export const ZOOM_SPEED_MIN = 0.2;
 export const ZOOM_SPEED_MAX = 3;
 
-/**
- * Closest the wheel/pinch may dolly toward the orbit target (world units).
- * 30 frames a single ~26-unit tank hull as the close-up (2·30·tan(24°) ≈
- * 27 world units tall at the 48° fov), backed off from a 15-unit floor
- * that showed half a hull and felt too close. It also keeps a typical
- * close-up pitch above the 6-unit surface floor (30·cos(74°) ≈ 8.3), so
- * cursor-anchored zoom preserves the view angle exactly instead of
- * steepening onto the floor — while staying well outside the longest
- * hull half-length (14) and 15x past the 2-unit near plane, so hulls
- * never clip and no near-plane change was needed.
- */
-export const MIN_ZOOM_DISTANCE = 30;
+/** Closest close-up: ~53 world units tall at 48° FOV, enough for a
+ * complete tank and surrounding ground rather than half a hull. */
+export const MIN_ZOOM_DISTANCE = 60;
+/** Keep close-up navigation useful while retaining proportional wide-view speed. */
+export const MIN_PAN_DISTANCE = 150;
+
+/** Camera input uses wall time independently of the simulation's 50ms cap.
+ * Discard long stalls/tab returns, but preserve speed down to 4 FPS. */
+export function cameraFrameDelta(delta: number): number {
+  return Number.isFinite(delta) ? Math.max(0, Math.min(delta, 0.25)) : 0;
+}
+
+/** Drag uses the same distance floor as keyboard movement. */
+export function effectiveDragPanSpeed(value: number, distance: number): number {
+  return effectivePanSpeed(value) * (distance > 0 ? Math.max(distance, MIN_PAN_DISTANCE) / distance : 1);
+}
+
+/** Resolve terrain/water collision as one rigid translation. Independently
+ * lifting the eye or focus changes pitch and can stall subsequent dollies.
+ * A focus may float above terrain when necessary to clear a nearby ridge. */
+export function liftCameraRigAboveSurface(
+  position: Vec3, target: Vec3, eyeSurfaceY: number, targetSurfaceY: number,
+): void {
+  const eyeLift = Number.isFinite(eyeSurfaceY) ? eyeSurfaceY + CAMERA_SURFACE_CLEARANCE - position.y : 0;
+  const targetLift = Number.isFinite(targetSurfaceY) ? targetSurfaceY - target.y : 0;
+  const lift = Math.max(0, eyeLift, targetLift);
+  position.y += lift;
+  target.y += lift;
+}
+
 /**
  * Farthest the wheel/pinch may dolly out (world units). 320x256 cells is
  * ~5104 world units wide, so twice the classic 4200 keeps the whole
@@ -62,7 +80,7 @@ export const MAX_ZOOM_DISTANCE = 8400;
  * Minimum eye height above the local terrain/water surface (world units).
  * 6 clears the 2-unit near plane with room to spare, rides above the ~2
  * units of water swell crests, and absorbs the bilinear-vs-mesh height
- * mismatch — while staying well under the 30-unit zoom floor, so typical
+ * mismatch — while staying well under the 60-unit zoom floor, so typical
  * close-ups of a surface-seated target never touch it. Only grazing
  * descents (zooming into a slope, orbiting low over a rise) land here.
  */
@@ -385,10 +403,10 @@ export function effectiveZoomSpeed(value: number): number {
 }
 
 /**
- * Frame step for keyboard panning: zoom-proportional, frame-rate
+ * Frame step for keyboard panning: proportional above the close-up floor, frame-rate
  * independent, and scaled by the View-menu pan-speed slider through
  * effectivePanSpeed (1x = the old 0.3x feel).
  */
 export function panStepDistance(distance: number, dt: number, speed: number): number {
-  return distance * PAN_SPEED_FACTOR * effectivePanSpeed(speed) * dt;
+  return distance > 0 ? Math.max(distance, MIN_PAN_DISTANCE) * PAN_SPEED_FACTOR * effectivePanSpeed(speed) * dt : 0;
 }

@@ -68,11 +68,12 @@ import { WaypointFx } from "./waypoints";
 import { TerritoryFx, type TerritoryMinimap } from "./territory";
 import {
   applyPan,
-  clampCameraAboveSurface,
+  cameraFrameDelta,
+  effectiveDragPanSpeed,
+  liftCameraRigAboveSurface,
   clampCameraToWorld,
   clampCameraToWorldWithTarget,
   clampPanTargetWithCamera,
-  clampTargetAboveSurface,
   effectivePanSpeed,
   effectiveZoomSpeed,
   isCameraOutsideWorld,
@@ -1030,9 +1031,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const tick = () => {
       raf = requestAnimationFrame(tick);
       // Drain real time while suspended so returning never catches up the battle.
-      const frame = battleClock.sample(clock.getDelta(), suspendedRef.current);
+      const wallDelta = clock.getDelta();
+      const frame = battleClock.sample(wallDelta, suspendedRef.current);
       if (!frame) return;
       const { dt, t } = frame;
+      const cameraDt = cameraFrameDelta(wallDelta);
       controls.enabled = !boxing;
       const fps = fpsSampler.frame(performance.now());
       if (fps !== null && fpsEl) fpsEl.textContent = formatFps(fps);
@@ -1116,7 +1119,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         const input = panInputFromCodes(pressed);
         if (input.right !== 0 || input.forward !== 0) {
           const dist = camera.position.distanceTo(controls.target);
-          const offset = panOffset(camera.position, controls.target, input, panStepDistance(dist, dt, opt.panSpeed));
+          const offset = panOffset(camera.position, controls.target, input, panStepDistance(dist, cameraDt, opt.panSpeed));
           applyPan(camera.position, controls.target, offset);
           // Carry the camera with the clamped target delta so hitting an
           // edge stops forward motion instead of flipping the view (the
@@ -1135,9 +1138,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
       // View-menu sliders: OrbitControls reads panSpeed/zoomSpeed live, so
       // re-sync every tick (options arrive via ref, not effect re-runs).
-      if (controls.panSpeed !== effectivePanSpeed(opt.panSpeed)) {
-        controls.panSpeed = effectivePanSpeed(opt.panSpeed);
-      }
+      controls.panSpeed = effectiveDragPanSpeed(opt.panSpeed, camera.position.distanceTo(controls.target));
       if (controls.zoomSpeed !== effectiveZoomSpeed(opt.zoomSpeed)) {
         controls.zoomSpeed = effectiveZoomSpeed(opt.zoomSpeed);
       }
@@ -1188,31 +1189,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         if (rigidPan) clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
         else clampCameraToWorld(camera.position, worldW, worldD);
       }
-      // Terrain collision: the eye must never sink into the dirt or slip
-      // under the water sheet. Cursor-anchored zoom flies the camera down
-      // the pointer ray toward the surface, and low orbits skim the target
-      // plane — OrbitControls' guardrails are target-relative and know
-      // nothing about the terrain, so hold the final XZ column above the
-      // local surface (ground, or water when it's shown and higher). No
-      // jump exemption: an underground eye is never a valid request, and a
-      // legitimate pose never touches this floor. The 6-unit clearance
-      // rides above the ~2-unit swell crests on top of the water level.
+      // Lift eye and focus together: terrain/water safety must preserve the
+      // selected orbit angle and distance, including on slopes at close zoom.
       const surfaceY =
         opt.showWater && map.seaLevel > 0
           ? Math.max(groundY(camera.position.x, camera.position.z), water.position.y)
           : groundY(camera.position.x, camera.position.z);
-      clampCameraAboveSurface(camera.position, surfaceY);
-      // Focus collision: cursor-anchored zoom re-seats the orbit target
-      // along the camera's downward forward ray every tick, so without a
-      // floor of its own the target sinks hundreds of units underground
-      // while the eye rides the clamp above — the offset stretches far
-      // past the zoom floor and the view pitches fully vertical. Pin the
-      // target's final column to the terrain (like minimap jumps, which
-      // seat on the dirt rather than the water sheet) so the pair stays
-      // rigid and close-ups keep their angle. No jump exemption, like
-      // the eye floor: an underground focus is never a valid request.
-      clampTargetAboveSurface(
-        controls.target,
+      liftCameraRigAboveSurface(
+        camera.position, controls.target, surfaceY,
         groundY(controls.target.x, controls.target.z),
       );
 

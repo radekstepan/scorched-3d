@@ -16,6 +16,8 @@ Firing lines keep their seats when nearby units leave no room for routine circli
 
 The battlefield sits inside an RTS command shell inspired by the sibling Stumpy model viewer: olive instrument panels, lime accents, fine dividers and condensed headings. The header holds the game-view navigation and version; the left rail holds the operation, world presets and live radar; the right rail holds view controls, the probe, live unit counts and expandable terrain diagnostics. Both rails scroll independently, leaving the central canvas and its selection tray unobstructed on desktop.
 
+Camera navigation uses wall time independently of the simulation's slow-frame cap, so keyboard pan keeps its speed down to 4 FPS; longer stalls are capped at 250 ms to avoid a large jump on return. Keyboard and right-drag pan retain a minimum world speed at close range, then scale with distance in wider views. Wheel/pinch zoom stops 60 world units from the focus, framing a complete tank with surrounding terrain. Terrain and water collision lift the camera and focus together, preserving the chosen angle and distance; the focus may float above the surface to clear a nearby ridge.
+
 At widths up to 1000px, Worlds / radar and Inspector buttons open one drawer at a time over the full-width battlefield. Press the active button again to close it. The selection tray scrolls horizontally when many groups are selected. View toggles and world buttons expose their selected state to assistive technology, and every interactive control has a visible keyboard focus outline.
 
 ## Maps

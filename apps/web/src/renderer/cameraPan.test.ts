@@ -5,6 +5,9 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
+  cameraFrameDelta,
+  effectiveDragPanSpeed,
+  MIN_PAN_DISTANCE,
   CAMERA_SURFACE_CLEARANCE,
   DEFAULT_PAN_SPEED,
   DEFAULT_ZOOM_SPEED,
@@ -612,12 +615,8 @@ describe("camera speed sliders", () => {
   });
 
   it("bounds the wheel-zoom range from close-up to whole-map", () => {
-    // Close-up floor: frames a single ~26-unit hull (~27 units tall at the
-    // 48° fov), backed off from a 15-unit floor that showed half a hull —
-    // far outside the 2-unit near plane and the longest hull half-length
-    // (14), and high enough that a typical close-up pitch clears the
-    // 6-unit surface floor (30·cos(74°) ≈ 8.3) instead of riding it.
-    expect(MIN_ZOOM_DISTANCE).toBe(30);
+    // Full hull plus surrounding ground at the 48° field of view.
+    expect(MIN_ZOOM_DISTANCE).toBe(60);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(14);
     expect(MIN_ZOOM_DISTANCE).toBeGreaterThan(2 * 5);
     // Whole-map ceiling for the doubled 320x256 field.
@@ -842,5 +841,37 @@ describe("clampTargetAboveSurface", () => {
       clampTargetAboveSurface(target, surfaceY);
       expect(target).toEqual({ x: 1, y: 2, z: 3 });
     }
+  });
+});
+
+
+describe("camera wall-time and close-up navigation", () => {
+  it.each([4, 10, 20, 60, 144])("pans the same distance per real second at %i FPS", fps => {
+    let travelled = 0;
+    for (let i = 0; i < fps; i++) travelled += panStepDistance(1000, cameraFrameDelta(1 / fps), 1);
+    expect(travelled).toBeCloseTo(panStepDistance(1000, 1, 1), 8);
+  });
+
+  it("discards long stalls and invalid time", () => {
+    expect(cameraFrameDelta(10)).toBe(0.25);
+    expect(cameraFrameDelta(NaN)).toBe(0);
+    expect(cameraFrameDelta(-1)).toBe(0);
+  });
+
+  it("keeps keyboard and drag speed useful at close zoom without changing wide views", () => {
+    for (const distance of [MIN_ZOOM_DISTANCE, 100, MIN_PAN_DISTANCE, 1000]) {
+      expect(panStepDistance(distance, 1, 1)).toBeCloseTo(
+        distance * PAN_SPEED_FACTOR * effectiveDragPanSpeed(1, distance), 10,
+      );
+    }
+    expect(panStepDistance(MIN_ZOOM_DISTANCE, 1, 1)).toBeGreaterThan(200);
+    expect(effectiveDragPanSpeed(1, 1000)).toBe(effectivePanSpeed(1));
+  });
+
+  it("wires keyboard motion to wall time rather than the battle's capped dt", () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "TerrainCanvas.tsx"), "utf8");
+    expect(source).toContain("cameraFrameDelta(wallDelta)");
+    expect(source).toContain("panStepDistance(dist, cameraDt, opt.panSpeed)");
+    expect(source).toContain("effectiveDragPanSpeed(opt.panSpeed, camera.position.distanceTo(controls.target))");
   });
 });
