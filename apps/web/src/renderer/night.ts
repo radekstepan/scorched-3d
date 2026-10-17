@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { unitFogUniforms } from "./unitFog";
 
 /**
  * Day/night lighting presets. Night is moonlit, not pitch black: a cool
@@ -128,6 +129,9 @@ export function applyDayNight(targets: DayNightTargets, night: boolean): void {
   if (targets.terrainMat.uniforms.fogNear) targets.terrainMat.uniforms.fogNear.value = p.fogNear;
   if (targets.terrainMat.uniforms.fogFar) targets.terrainMat.uniforms.fogFar.value = p.fogFar;
   if (targets.terrainMat.uniforms.valleyFog) targets.terrainMat.uniforms.valleyFog.value = p.valleyFog;
+  // Unit hulls haze with the same strength (their band/waterline ride the
+  // canvas's per-tick writes; the shared fog color retints via the alias).
+  unitFogUniforms.valley.value = p.valleyFog;
   if (targets.waterMat.uniforms.fogNear) targets.waterMat.uniforms.fogNear.value = p.fogNear;
   if (targets.waterMat.uniforms.fogFar) targets.waterMat.uniforms.fogFar.value = p.fogFar;
   targets.hemi.color.set(p.hemiSky);

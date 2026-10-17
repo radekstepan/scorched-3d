@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { applyCamo } from "./camo";
+import { unitHullMaterial } from "./unitFog";
 import {
   advanceGait,
   GAIT_SETTLE_RATE,
@@ -38,10 +39,7 @@ function box(
   z: number,
   color: number,
 ): void {
-  const mesh = new THREE.Mesh(
-    new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshLambertMaterial({ color }),
-  );
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), unitHullMaterial(color));
   mesh.position.set(x, y, z);
   parent.add(mesh);
 }
@@ -66,7 +64,7 @@ function barrel(
   pivot.rotation.x = -elevation;
   const mesh = new THREE.Mesh(
     new THREE.CylinderGeometry(radius, radius * 1.25, length, 8),
-    new THREE.MeshLambertMaterial({ color }),
+    unitHullMaterial(color),
   );
   // CylinderGeometry runs along +Y; rotate to lie along +Z.
   mesh.rotation.x = Math.PI / 2;
@@ -98,10 +96,7 @@ function addWheels(
     for (const x of [-halfTrack, halfTrack]) {
       const geo = new THREE.CylinderGeometry(radius, radius, width, 10);
       geo.rotateZ(Math.PI / 2);
-      const wheel = new THREE.Mesh(
-        geo,
-        new THREE.MeshLambertMaterial({ color: 0x3a3a40 }),
-      );
+      const wheel = new THREE.Mesh(geo, unitHullMaterial(0x3a3a40));
       wheel.name = "wheel";
       wheel.position.set(x, axleY, z);
       parent.add(wheel);
@@ -161,7 +156,7 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     for (const x of [-2.5, 2.5]) {
       const geo = new THREE.BoxGeometry(3, 5, 4);
       geo.translate(0, -2.5, 0);
-      const leg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: def.accent }));
+      const leg = new THREE.Mesh(geo, unitHullMaterial(def.accent));
       leg.name = "leg";
       leg.position.set(x, 5, 0);
       leg.userData.baseY = 5;
@@ -179,7 +174,7 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     for (const x of [-4, 4]) {
       const geo = new THREE.BoxGeometry(5, 14, 6);
       geo.translate(0, -7, 0);
-      const leg = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: def.color }));
+      const leg = new THREE.Mesh(geo, unitHullMaterial(def.color));
       leg.name = "leg";
       leg.position.set(x, 14, 0);
       leg.userData.baseY = 14;
@@ -191,7 +186,7 @@ function buildBody(kind: UnitKind, parent: THREE.Group): void {
     box(turret, 2, 3, 2, 0, 32, 4, def.accent);
     const antenna = new THREE.Mesh(
       new THREE.CylinderGeometry(0.6, 0.6, 14, 6),
-      new THREE.MeshLambertMaterial({ color: def.accent }),
+      unitHullMaterial(def.accent),
     );
     antenna.position.set(3, 40, -2);
     turret.add(antenna);

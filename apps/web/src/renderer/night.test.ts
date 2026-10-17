@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { skyFragment } from "./shaders";
+import { unitFogUniforms } from "./unitFog";
 import {
   applyDayNight,
   DAY_LIGHTING,
@@ -172,6 +173,18 @@ describe("applyDayNight", () => {
     expect(targets.terrainMat.uniforms.valleyFog!.value).toBe(NIGHT_LIGHTING.valleyFog);
     applyDayNight(targets, false);
     expect(targets.terrainMat.uniforms.valleyFog!.value).toBe(DAY_LIGHTING.valleyFog);
+  });
+
+  it("writes the same valley-fog strength to the shared unit field", () => {
+    const targets = buildTargets();
+    try {
+      applyDayNight(targets, true);
+      expect(unitFogUniforms.valley.value).toBe(NIGHT_LIGHTING.valleyFog);
+      applyDayNight(targets, false);
+      expect(unitFogUniforms.valley.value).toBe(DAY_LIGHTING.valleyFog);
+    } finally {
+      unitFogUniforms.valley.value = DAY_LIGHTING.valleyFog;
+    }
   });
 
   it("writes the terrain/water shader triples and toggles back to day", () => {

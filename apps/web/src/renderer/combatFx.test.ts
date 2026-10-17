@@ -56,6 +56,7 @@ import {
 import { barrelElevation, buildTeamRing, buildUnits, getBarrel, getTurret, restBarrelElevation, setUnitAim } from "./units";
 import { wreckCharredColor } from "./unitDamageFx";
 import { NIGHT_LIGHT_BOOST } from "./night";
+import { UNIT_FOG_CACHE_KEY } from "./unitFog";
 
 function makeUnits(): THREE.Group {
   const group = new THREE.Group();
@@ -1908,6 +1909,13 @@ describe("CombatFx barrel crush (tubes knock down what they touch)", () => {
 });
 
 describe("CombatFx exploded husks", () => {
+  it("hazes the shared wreck collar with the hull valley term", () => {
+    const fx = new CombatFx(new THREE.Scene(), makeUnits(), mulberry32(21));
+    const collar = (fx as unknown as { wreckCollarMat: THREE.Material }).wreckCollarMat;
+    expect(collar.customProgramCacheKey()).toBe(UNIT_FOG_CACHE_KEY);
+    fx.dispose();
+  });
+
   function primeDamage(fx: CombatFx, index: number, value: number): void {
     (fx as unknown as { damage: number[] }).damage[index] = value;
   }

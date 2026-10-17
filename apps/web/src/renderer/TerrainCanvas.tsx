@@ -116,6 +116,7 @@ import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
 import { applyDayNight, dayNightLighting } from "./night";
 import { FIREFLY_COUNT, FireflyFx, placeFireflies } from "./fireflies";
 import { DAY_FOG_COUNT, DAY_FOG_SEED_XOR, DayFogFx, placeDayFog } from "./dayFog";
+import { setUnitFog, unitFogUniforms } from "./unitFog";
 
 const SUN = new THREE.Vector3(-0.8, 1.0, 0.25).normalize();
 
@@ -297,6 +298,15 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // the tick — object identities never change, no shader recompiles.
     const dayNightTargets = { scene, fogColor, hemi, sun, terrainMat, waterMat, skyMat };
     applyDayNight(dayNightTargets, options.nightMode);
+    // Unit hulls haze with the terrain's valley term (see unitFog.ts): bind
+    // the shared field once — color aliases this fog color, so day/night
+    // retints propagate; strength re-applies via applyDayNight on toggle.
+    setUnitFog({
+      color: fogColor,
+      valley: fogPreset.valleyFog,
+      waterY: worldHeight(map.seaLevel, options.exaggeration),
+      exaggeration: effectiveExaggeration(options.exaggeration),
+    });
 
     // The tree materials alias the terrain's firefly-field uniforms, so
     // the single per-tick mirror below reflects every mote on both.
@@ -1040,6 +1050,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       terrainMat.uniforms.time!.value = t;
       waterMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       waterMat.uniforms.time!.value = t;
+      // Hull valley band tracks the height slider with the terrain shaders.
+      unitFogUniforms.waterY.value = worldHeight(map.seaLevel, opt.exaggeration);
+      unitFogUniforms.exaggeration.value = effectiveExaggeration(opt.exaggeration);
       water.visible = opt.showWater && map.seaLevel > 0;
       trees.visible = opt.showFeatures;
       rocks.visible = opt.showFeatures;

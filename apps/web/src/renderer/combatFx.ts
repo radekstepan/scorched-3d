@@ -75,6 +75,7 @@ import { muzzleWorld, getBarrel, getTurret, barrelElevation, setBarrelElevation,
 import { applyUnitDamageTint, applyWreckChar, UnitDamageFx } from "./unitDamageFx";
 import { disposeScorchTexture, getScorchTexture } from "./craters";
 import { nightLightScale } from "./night";
+import { unitHullMaterial } from "./unitFog";
 
 /**
  * Ambient-skirmish combat FX: units randomly fire tracers/shells at each
@@ -788,7 +789,7 @@ export class CombatFx {
    * it; wreck bodies are reverted (collars removed) on dispose.
    */
   private wreckCollarGeo = new THREE.CylinderGeometry(1, 1.15, 0.5, 12);
-  private wreckCollarMat = new THREE.MeshLambertMaterial({ color: 0x14100b });
+  private wreckCollarMat = unitHullMaterial(0x14100b);
   /** Per-unit accumulated damage 0..1 (core state; char/smoke are views). */
   private damage: number[] = [];
   /**
