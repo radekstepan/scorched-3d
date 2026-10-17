@@ -75,11 +75,13 @@ export function legSwing(phase: number, legIndex: number, amplitude = 1): number
 
 /**
  * Step lift of one leg at `phase`, world units above rest. The leg lifts
- * while it swings forward (positive-cosine half) and plants through the
- * back half, so feet alternate instead of dragging.
+ * while it swings forward (negative-cosine half) and plants through the
+ * backward half. Legs extend below the hip and the model faces +Z, so a
+ * positive X rotation moves the foot backward: lifting on positive cosine
+ * made both walkers visibly backpedal despite forward hull travel.
  */
 export function legLift(phase: number, legIndex: number, amplitude = 1): number {
-  return Math.max(0, Math.cos(phase + legIndex * Math.PI)) * LEG_LIFT * amplitude;
+  return Math.max(0, -Math.cos(phase + legIndex * Math.PI)) * LEG_LIFT * amplitude;
 }
 
 /**

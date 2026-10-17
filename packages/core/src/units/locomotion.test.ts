@@ -71,10 +71,10 @@ describe("walker gait", () => {
     expect(legSwing(0, 1)).toBeCloseTo(0);
     expect(legSwing(Math.PI / 2, 0)).toBeCloseTo(LEG_SWING);
     expect(legSwing(Math.PI / 2, 1)).toBeCloseTo(-LEG_SWING);
-    expect(legLift(0, 0)).toBeCloseTo(LEG_LIFT);
-    expect(legLift(0, 1)).toBeCloseTo(0);
-    expect(legLift(Math.PI, 0)).toBeCloseTo(0);
-    expect(legLift(Math.PI, 1)).toBeCloseTo(LEG_LIFT);
+    expect(legLift(0, 0)).toBeCloseTo(0);
+    expect(legLift(0, 1)).toBeCloseTo(LEG_LIFT);
+    expect(legLift(Math.PI, 0)).toBeCloseTo(LEG_LIFT);
+    expect(legLift(Math.PI, 1)).toBeCloseTo(0);
   });
 
   it("scales the stride with amplitude and only walkers stride", () => {

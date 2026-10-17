@@ -34,8 +34,8 @@ describe("Peewee asset contract", () => {
     advanceLocomotion(body, "peewee", 1.25, 0.3);
     expect(legs[0]!.rotation.x).toBeGreaterThan(0.2);
     expect(legs[0]!.rotation.x).toBeCloseTo(-legs[1]!.rotation.x);
-    expect(legs[0]!.position.y).toBeGreaterThan(5);
-    expect(legs[1]!.position.y).toBeCloseTo(5);
+    expect(legs[0]!.position.y).toBeCloseTo(5);
+    expect(legs[1]!.position.y).toBeGreaterThan(5);
     legs.forEach(leg => { expect(leg.parent).toBe(body); expect(leg.children.length).toBeGreaterThan(0); });
     for (let i = 0; i < 60; i++) advanceLocomotion(body, "peewee", 0, 1 / 60);
     legs.forEach(leg => { expect(leg.rotation.x).toBeCloseTo(0); expect(leg.position.y).toBeCloseTo(5); });
