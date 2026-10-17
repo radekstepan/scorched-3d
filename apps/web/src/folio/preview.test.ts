@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { UNIT_KINDS } from "@scorched-3d/core";
 import { muzzleWorld, getBarrel, getLegs, getMuzzleTip, getTurret, getWheels } from "../renderer/units";
 import { buildStudioBody, disposeStudioObject } from "./studio";
-import { buildPreviewTerrain, PreviewAnimation } from "./preview";
+import { buildPreviewTerrain, clearPreviewTerrainCache, previewAlbedoWindow, PreviewAnimation } from "./preview";
 
 describe("terrain study", () => {
   // Only the browser's byte container is stubbed; use the real terrain/albedo pipeline.
@@ -37,6 +37,52 @@ describe("terrain study", () => {
     const group = new THREE.Group(); group.add(field, other); disposeStudioObject(group);
     expect(textureDispose).toHaveBeenCalledOnce();
     expect(rockDispose).toHaveBeenCalledOnce();
+  });
+  it("composes only the sampled tile window and maps every plane UV inside it", () => {
+    clearPreviewTerrainCache();
+    const field = buildPreviewTerrain();
+    const material = field.material as THREE.MeshStandardMaterial;
+    const texture = material.map as THREE.DataTexture;
+    // Sampled patch, not the full 5120x4096 map albedo.
+    expect(texture.image.width).toBeLessThan(5120);
+    expect(texture.image.height).toBeLessThan(4096);
+    const window = previewAlbedoWindow({ width: 320, height: 256 });
+    expect(texture.image.width).toBe(window.tilesW * 32);
+    expect(texture.image.height).toBe(window.tilesH * 32);
+    // The window covers every cell the 1400-wide plane can sample.
+    const reach = 700 / 16;
+    expect(window.tileX * 2).toBeLessThanOrEqual(320 * 0.48 - reach);
+    expect((window.tileX + window.tilesW) * 2).toBeGreaterThanOrEqual(320 * 0.48 + reach);
+    expect(window.tileZ * 2).toBeLessThanOrEqual(256 * 0.48 - reach);
+    expect((window.tileZ + window.tilesH) * 2).toBeGreaterThanOrEqual(256 * 0.48 + reach);
+    const uv = field.geometry.getAttribute("uv");
+    for (let i = 0; i < uv.count; i++) {
+      expect(uv.getX(i)).toBeGreaterThanOrEqual(0);
+      expect(uv.getX(i)).toBeLessThanOrEqual(1);
+      expect(uv.getY(i)).toBeGreaterThanOrEqual(0);
+      expect(uv.getY(i)).toBeLessThanOrEqual(1);
+    }
+    disposeStudioObject(new THREE.Group().add(field));
+  });
+  it("shares the cached study map across builds until the cache is cleared", () => {
+    clearPreviewTerrainCache();
+    const first = buildPreviewTerrain(), second = buildPreviewTerrain();
+    const firstMap = (first.material as THREE.MeshStandardMaterial).map as THREE.DataTexture;
+    const secondMap = (second.material as THREE.MeshStandardMaterial).map as THREE.DataTexture;
+    // Same CPU-side albedo bytes: repeat visits skip map generation + compose.
+    // (Boolean probes: pretty-printing megabytes of texels on failure is slow.)
+    expect(secondMap.image.data === firstMap.image.data).toBe(true);
+    // Fresh GPU handles per build: disposing one visit never frees the cache.
+    expect(secondMap === firstMap).toBe(false);
+    disposeStudioObject(new THREE.Group().add(first));
+    const third = buildPreviewTerrain();
+    const thirdMap = (third.material as THREE.MeshStandardMaterial).map as THREE.DataTexture;
+    expect(thirdMap.image.data === firstMap.image.data).toBe(true);
+    clearPreviewTerrainCache();
+    const cold = buildPreviewTerrain();
+    const coldMap = (cold.material as THREE.MeshStandardMaterial).map as THREE.DataTexture;
+    expect(coldMap.image.data === firstMap.image.data).toBe(false);
+    disposeStudioObject(new THREE.Group().add(second, third, cold));
   });
 });
 

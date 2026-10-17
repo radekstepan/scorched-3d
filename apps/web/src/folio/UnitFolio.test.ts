@@ -22,9 +22,9 @@ describe("folio / battlefield integration contracts", () => {
   });
   it("connects independent preview controls without rebuilding the paused battlefield", () => {
     for (const name of ["Terrain", "Motion", "Shooting", "Selection ring"]) expect(folio).toContain(`>${name} <span>`);
-    expect(folio).toContain('animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck)');
+    expect(folio).toContain('sub.animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck)');
     expect(folio).toContain('field.visible = preview.current.terrain');
-    expect(folio).toContain('grid.visible = !preview.current.terrain');
+    expect(folio).toContain('sub.grid.visible = !preview.current.terrain');
     expect(folio).toContain('sun.shadow.dispose()');
   });
   it("exposes all reference workshop settings with explicit unsupported states", () => {
@@ -34,9 +34,18 @@ describe("folio / battlefield integration contracts", () => {
     expect(folio).toContain('const live = !current.inspection.wreck && !comparing');
     expect(folio).toContain('study === "rts" ? "Gameplay"');
   });
-  it("cancels the studio loop and removes observer, controls, models and context on roster change or exit", () => {
+  it("swaps only the study subject on roster change and tears everything down on exit", () => {
+    // Mount effect builds the studio once; the roster effect only swaps subjects.
+    expect(folio).toContain('}, []);');
+    expect(folio).toContain('actions.current?.swap(kind, view); }, [kind]);');
+    // Swap retires the previous subject before mounting the new one.
+    expect(folio).toContain('scene.remove(subject.root)');
+    expect(folio).toContain('disposeStudySubject(subject)');
+    expect(folio).toContain('subject = buildStudySubject(next)');
+    // One renderer and one terrain build per visit — never per roster click.
+    expect(folio.indexOf('new THREE.WebGLRenderer')).toBe(folio.lastIndexOf('new THREE.WebGLRenderer'));
+    expect(folio.indexOf('buildPreviewTerrain()')).toBe(folio.lastIndexOf('buildPreviewTerrain()'));
     for (const action of ['cancelAnimationFrame(raf)', 'observer.disconnect()', 'controls.dispose()', 'disposeStudioObject(scene)', 'renderer.dispose()', 'renderer.forceContextLoss()', 'renderer.domElement.remove()']) expect(folio).toContain(action);
-    expect(folio).toContain('}, [kind])');
     expect(folio).toContain('UNIT_KINDS.map');
     expect(folio).toContain('aria-pressed={kind === unit}');
   });

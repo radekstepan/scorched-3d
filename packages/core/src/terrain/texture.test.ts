@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPalette, palRGB } from "./palette.js";
-import { composeAlbedo, composeHeight, composeMinimap } from "./texture.js";
+import { composeAlbedo, composeAlbedoWindow, composeHeight, composeMinimap } from "./texture.js";
 import { TILE_PIXELS, type TNTMap } from "./types.js";
 
 // texture.ts targets the DOM ImageData API, which the node test environment
@@ -73,6 +73,63 @@ describe("composeAlbedo", () => {
     expect(img.data[4]).toBe(r2);
     expect(img.data[5]).toBe(g2);
     expect(img.data[6]).toBe(b2);
+  });
+});
+
+describe("composeAlbedoWindow", () => {
+  // 4x4 attribute grid -> 2x2 tiles with distinct top-left pixels per tile.
+  function makeWindowMap(): TNTMap {
+    const base = makeMap();
+    const tiles = [0, 1, 2, 3].map((t) => {
+      const tile = new Uint8Array(TILE_PIXELS * TILE_PIXELS);
+      tile.fill(16 + t);
+      tile[0] = 96 + t;
+      return tile;
+    });
+    return {
+      ...base,
+      width: 4,
+      height: 4,
+      tileMap: new Uint16Array([0, 1, 2, 3]),
+      tiles,
+      tileKinds: ["grass", "grass", "grass", "grass"],
+    };
+  }
+
+  it("matches the full compose at the same tile coordinates", () => {
+    const map = makeWindowMap();
+    const full = composeAlbedo(map) as unknown as StubImageData;
+    const win = composeAlbedoWindow(map, 1, 0, 1, 2) as unknown as StubImageData;
+    expect(win.width).toBe(TILE_PIXELS);
+    expect(win.height).toBe(2 * TILE_PIXELS);
+    // Right column of the full image, both rows.
+    for (const [wx, wy, fx, fy] of [[0, 0, TILE_PIXELS, 0], [0, TILE_PIXELS, TILE_PIXELS, TILE_PIXELS]] as const) {
+      const wOff = (wy * win.width + wx) * 4;
+      const fOff = (fy * full.width + fx) * 4;
+      expect(Array.from(win.data.slice(wOff, wOff + 4))).toEqual(Array.from(full.data.slice(fOff, fOff + 4)));
+    }
+    // Top-left pixel of tile 1 resolves through the palette.
+    const [r, g, b] = palRGB(map.palette, 97);
+    expect(win.data[0]).toBe(r);
+    expect(win.data[1]).toBe(g);
+    expect(win.data[2]).toBe(b);
+    expect(win.data[3]).toBe(255);
+  });
+
+  it("clamps the origin into the map and the size to fit", () => {
+    const map = makeWindowMap();
+    const clamped = composeAlbedoWindow(map, -5, 99, 4, 4) as unknown as StubImageData;
+    // Origin clamps to (0, 1); width fits 2 tiles, height only the last row.
+    expect(clamped.width).toBe(2 * TILE_PIXELS);
+    expect(clamped.height).toBe(TILE_PIXELS);
+    const full = composeAlbedo(map) as unknown as StubImageData;
+    // First pixel equals tile 2's top-left (bottom-left of the full image).
+    const fOff = TILE_PIXELS * full.width * 4;
+    expect(Array.from(clamped.data.slice(0, 4))).toEqual(Array.from(full.data.slice(fOff, fOff + 4)));
+    // Degenerate sizes still emit at least one tile.
+    const tiny = composeAlbedoWindow(map, 0, 0, 0, -3) as unknown as StubImageData;
+    expect(tiny.width).toBe(TILE_PIXELS);
+    expect(tiny.height).toBe(TILE_PIXELS);
   });
 });
 

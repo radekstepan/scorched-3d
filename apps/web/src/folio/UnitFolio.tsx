@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { UNIT_DEFS, UNIT_KINDS, type UnitKind } from "@scorched-3d/core";
-import { buildPreviewTerrain, PreviewAnimation } from "./preview";
-import { buildLegacyStumpy } from "./legacy";
-import { DEFAULT_INSPECTION, InspectionModel, applyStudyLighting, type Livery } from "./settings";
+import { buildPreviewTerrain } from "./preview";
+import { DEFAULT_INSPECTION, applyStudyLighting, type Livery } from "./settings";
 import { getUnitIconDataUrl } from "../renderer/selectionIcons";
-import { buildStudioBody, disposeStudioObject, frameStudioBody, STUDY_VIEWS, type StudyView } from "./studio";
+import { disposeStudioObject, frameStudioBody, STUDY_VIEWS, type StudyView } from "./studio";
+import { buildStudySubject, disposeStudySubject, type StudySubject } from "./subject";
 
 export default function UnitFolio() {
   const [kind, setKind] = useState<UnitKind>("stump");
@@ -22,7 +22,7 @@ export default function UnitFolio() {
   preview.current = { terrain, motion, shooting, selection, inspection, wireframe };
   const [error, setError] = useState(false);
   const host = useRef<HTMLDivElement>(null);
-  const actions = useRef<{ frame(view: StudyView): void; wireframe(on: boolean): void } | null>(null);
+  const actions = useRef<{ frame(view: StudyView): void; wireframe(on: boolean): void; swap(kind: UnitKind, view: StudyView): void } | null>(null);
   const rotating = useRef(turntable);
   rotating.current = turntable;
   const def = UNIT_DEFS[kind];
@@ -48,22 +48,14 @@ export default function UnitFolio() {
     controls.enablePan = false;
     controls.maxPolarAngle = Math.PI * 0.49;
     controls.autoRotateSpeed = 1;
-    const body = buildStudioBody(kind);
-    scene.add(body);
-    body.traverse((object) => { if (object instanceof THREE.Mesh) object.castShadow = true; });
-    const animation = new PreviewAnimation(body, kind);
-    const model = new InspectionModel(body);
-    const legacy = buildLegacyStumpy();
-    const legacyModel = new InspectionModel(legacy);
-    scene.add(legacy);
-    scene.add(animation.effects);
+    // The roster effect swaps this per kind; renderer/scene/terrain persist.
+    let subject: StudySubject | null = null;
+    // Shared with swap: a fresh subject must apply finishes on its first frame.
+    const applied: { lastSettings: typeof inspection | undefined; lastWire: boolean | undefined; lastTerrain: boolean | undefined } = { lastSettings: undefined, lastWire: undefined, lastTerrain: undefined };
     const field = buildPreviewTerrain();
     scene.add(field);
-    const size = new THREE.Box3().setFromObject(body).getSize(new THREE.Vector3()).length();
-    const grid = new THREE.GridHelper(size * 2.8, 24, 0x7d8c5e, 0x39432f);
-    grid.position.y = -0.1;
     const hemi = new THREE.HemisphereLight(0xdbe7cf, 0x34372c, 0.85);
-    scene.add(grid, hemi);
+    scene.add(hemi);
     const sun = new THREE.DirectionalLight(0xffedcd, 2.6);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
@@ -74,18 +66,32 @@ export default function UnitFolio() {
     rim.position.set(50, 30, -50);
     scene.add(sun, rim);
     const frame = (study: StudyView) => {
-      controls.target.copy(frameStudioBody(body, camera, study));
-      controls.minDistance = size * 0.5;
-      controls.maxDistance = size * 8;
+      const current = subject;
+      if (!current) return;
+      controls.target.copy(frameStudioBody(current.body, camera, study));
+      controls.minDistance = current.size * 0.5;
+      controls.maxDistance = current.size * 8;
       controls.update();
     };
-    const setWire = (on: boolean) => body.traverse((object) => {
+    const setWire = (on: boolean) => subject?.body.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       for (const mat of Array.isArray(object.material) ? object.material : [object.material]) {
         if ("wireframe" in mat) (mat as THREE.MeshLambertMaterial).wireframe = on;
       }
     });
-    actions.current = { frame, wireframe: setWire };
+    // Roster switch: retire only the previous subject, then frame the new one.
+    const swap = (next: UnitKind, study: StudyView) => {
+      if (subject) {
+        scene.remove(subject.root);
+        disposeStudySubject(subject);
+      }
+      subject = buildStudySubject(next);
+      scene.add(subject.root);
+      applied.lastSettings = applied.lastWire = applied.lastTerrain = undefined;
+      setWire(preview.current.wireframe);
+      frame(study);
+    };
+    actions.current = { frame, wireframe: setWire, swap };
     let aspect = 0;
     const resize = () => {
       const w = Math.max(element.clientWidth, 1), h = Math.max(element.clientHeight, 1);
@@ -99,31 +105,29 @@ export default function UnitFolio() {
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     resize();
-    frame(view);
-    setWire(wireframe);
-    let lastSettings: typeof inspection | undefined;
-    let lastWire: boolean | undefined;
-    let lastTerrain: boolean | undefined;
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
       field.visible = preview.current.terrain;
-      grid.visible = !preview.current.terrain;
-      const current = preview.current;
-      const comparing = kind === "stump" && current.inspection.legacy;
-      body.visible = !comparing;
-      legacy.visible = comparing;
-      // Update finishes only when controls change, not on every animation frame.
-      if (lastSettings !== current.inspection || lastWire !== current.wireframe || lastTerrain !== current.terrain) {
-        model.update(current.inspection, current.wireframe);
-        legacyModel.update(current.inspection, current.wireframe);
-        renderer.toneMappingExposure = applyStudyLighting(scene, sun, hemi, rim, current.terrain, current.inspection.night);
-        lastSettings = current.inspection; lastWire = current.wireframe; lastTerrain = current.terrain;
+      const sub = subject;
+      if (sub) {
+        sub.grid.visible = !preview.current.terrain;
+        const current = preview.current;
+        const comparing = sub.kind === "stump" && current.inspection.legacy;
+        sub.body.visible = !comparing;
+        sub.legacy.visible = comparing;
+        // Update finishes only when controls change, not on every animation frame.
+        if (applied.lastSettings !== current.inspection || applied.lastWire !== current.wireframe || applied.lastTerrain !== current.terrain) {
+          sub.model.update(current.inspection, current.wireframe);
+          sub.legacyModel.update(current.inspection, current.wireframe);
+          renderer.toneMappingExposure = applyStudyLighting(scene, sun, hemi, rim, current.terrain, current.inspection.night);
+          applied.lastSettings = current.inspection; applied.lastWire = current.wireframe; applied.lastTerrain = current.terrain;
+        }
+        const live = !current.inspection.wreck && !comparing;
+        sub.animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck);
       }
-      const live = !current.inspection.wreck && !comparing;
-      animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck);
       controls.autoRotate = rotating.current;
       controls.update(dt);
       renderer.render(scene, camera);
@@ -135,14 +139,17 @@ export default function UnitFolio() {
       observer.disconnect();
       controls.dispose();
       actions.current = null;
+      subject = null;
       disposeStudioObject(scene);
       sun.shadow.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
     };
-    // Study controls update the existing camera/materials; only a roster change rebuilds the model.
-  }, [kind]);
+    // Renderer, scene, and terrain persist for the visit; the roster effect below swaps subjects.
+  }, []);
+  // Roster switches swap only the study subject and reframe it; nothing else rebuilds.
+  useEffect(() => { actions.current?.swap(kind, view); }, [kind]);
   useEffect(() => { actions.current?.frame(view); }, [view]);
   useEffect(() => { actions.current?.wireframe(wireframe); }, [wireframe]);
 

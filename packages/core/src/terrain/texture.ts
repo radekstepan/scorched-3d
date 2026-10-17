@@ -2,24 +2,48 @@ import { TILE_PIXELS, type TNTMap } from "./types";
 import { palRGB } from "./palette";
 
 export function composeAlbedo(map: TNTMap): ImageData {
-  const tileW = map.width / 2;
-  const tileH = map.height / 2;
-  const width = tileW * TILE_PIXELS;
-  const height = tileH * TILE_PIXELS;
-  const data = new Uint8ClampedArray(width * height * 4);
+  return composeAlbedoWindow(map, 0, 0, map.width / 2, map.height / 2);
+}
 
-  for (let tz = 0; tz < tileH; tz++) {
-    for (let tx = 0; tx < tileW; tx++) {
-      const tile = map.tiles[map.tileMap[tz * tileW + tx] ?? 0] ?? map.tiles[0] ?? new Uint8Array(TILE_PIXELS * TILE_PIXELS);
+/**
+ * Compose only a tile window of the albedo (origin clamped into the map,
+ * size clamped to fit, at least one tile). Same texels as `composeAlbedo`
+ * at the same tile coordinates, without the full-map cost — the Unit Folio
+ * preview plane samples a small patch of Greenreach, so composing the whole
+ * 5120x4096 image (plus its GPU upload) on every folio visit is pure waste.
+ * The inner loop reads palette bytes directly instead of allocating a
+ * per-pixel RGB tuple.
+ */
+export function composeAlbedoWindow(
+  map: TNTMap,
+  tileX: number,
+  tileZ: number,
+  tilesW: number,
+  tilesH: number,
+): ImageData {
+  const tileW = Math.max(Math.floor(map.width / 2), 1);
+  const tileH = Math.max(Math.floor(map.height / 2), 1);
+  const x0 = Math.max(0, Math.min(Math.floor(tileX), tileW - 1));
+  const z0 = Math.max(0, Math.min(Math.floor(tileZ), tileH - 1));
+  const w = Math.max(1, Math.min(Math.floor(tilesW), tileW - x0));
+  const h = Math.max(1, Math.min(Math.floor(tilesH), tileH - z0));
+  const width = w * TILE_PIXELS;
+  const height = h * TILE_PIXELS;
+  const data = new Uint8ClampedArray(width * height * 4);
+  const pal = map.palette;
+
+  for (let tz = 0; tz < h; tz++) {
+    for (let tx = 0; tx < w; tx++) {
+      const tile = map.tiles[map.tileMap[(z0 + tz) * tileW + (x0 + tx)] ?? 0] ?? map.tiles[0] ?? new Uint8Array(TILE_PIXELS * TILE_PIXELS);
       const ox = tx * TILE_PIXELS;
       const oy = tz * TILE_PIXELS;
       for (let py = 0; py < TILE_PIXELS; py++) {
         for (let px = 0; px < TILE_PIXELS; px++) {
-          const [r, g, b] = palRGB(map.palette, tile[py * TILE_PIXELS + px] ?? 0);
+          const pi = (tile[py * TILE_PIXELS + px] ?? 0) * 3;
           const o = ((oy + py) * width + (ox + px)) * 4;
-          data[o] = r;
-          data[o + 1] = g;
-          data[o + 2] = b;
+          data[o] = pal[pi] ?? 0;
+          data[o + 1] = pal[pi + 1] ?? 0;
+          data[o + 2] = pal[pi + 2] ?? 0;
           data[o + 3] = 255;
         }
       }

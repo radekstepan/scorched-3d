@@ -1,11 +1,69 @@
 import * as THREE from "three";
-import { generateMap, composeAlbedo, sampleHeightBilinear, worldHeight, type UnitKind } from "@scorched-3d/core";
+import { generateMap, composeAlbedoWindow, sampleHeightBilinear, worldHeight, CELL_PIXELS, type TNTMap, type UnitKind } from "@scorched-3d/core";
 import { advanceLocomotion, buildTeamRing, getBarrel, getMuzzleTip } from "../renderer/units";
+
+/** Fixed study field: deterministic Greenreach patch, safe to cache across folio visits. */
+const PREVIEW_PRESET = "greenreach";
+const PREVIEW_SEED = 24;
+/** Preview plane half-extent in world units (PlaneGeometry 1400x1400). */
+const PREVIEW_HALF_EXTENT = 700;
+/** Study patch center as a fraction of the map grid. */
+const PREVIEW_CENTER = 0.48;
+
+export interface PreviewAlbedoWindow {
+  tileX: number;
+  tileZ: number;
+  tilesW: number;
+  tilesH: number;
+}
+
+/** Tile window covering every cell the preview plane can sample. */
+export function previewAlbedoWindow(map: Pick<TNTMap, "width" | "height">): PreviewAlbedoWindow {
+  const cx = map.width * PREVIEW_CENTER;
+  const cz = map.height * PREVIEW_CENTER;
+  const reach = PREVIEW_HALF_EXTENT / CELL_PIXELS;
+  const tx0 = Math.floor((cx - reach) / 2);
+  const tx1 = Math.ceil((cx + reach) / 2);
+  const tz0 = Math.floor((cz - reach) / 2);
+  const tz1 = Math.ceil((cz + reach) / 2);
+  return { tileX: tx0, tileZ: tz0, tilesW: tx1 - tx0, tilesH: tz1 - tz0 };
+}
+
+interface PreviewTerrainSource {
+  map: TNTMap;
+  albedo: ImageData;
+  window: PreviewAlbedoWindow;
+}
+
+/**
+ * CPU-side study data, built once per session. Map generation + albedo
+ * compose (~750ms, formerly a full 5120x4096 image) blocked folio entry and
+ * every roster switch; the source is deterministic and GPU uploads stay
+ * per-mount (fresh DataTexture each build), so sharing it is safe.
+ */
+let sourceCache: PreviewTerrainSource | null = null;
+
+/** Drop the cached study map/albedo (tests). */
+export function clearPreviewTerrainCache(): void {
+  sourceCache = null;
+}
+
+function getPreviewTerrainSource(): PreviewTerrainSource {
+  if (!sourceCache) {
+    const map = generateMap(PREVIEW_PRESET, PREVIEW_SEED);
+    const window = previewAlbedoWindow(map);
+    sourceCache = {
+      map,
+      window,
+      albedo: composeAlbedoWindow(map, window.tileX, window.tileZ, window.tilesW, window.tilesH),
+    };
+  }
+  return sourceCache;
+}
 
 /** Textured Greenreach field and rock scatter from the Unit Workshop reference. */
 export function buildPreviewTerrain(): THREE.Mesh {
-  const map = generateMap("greenreach", 24);
-  const albedo = composeAlbedo(map);
+  const { map, albedo, window } = getPreviewTerrainSource();
   const tex = new THREE.DataTexture(
     albedo.data,
     albedo.width,
@@ -18,14 +76,17 @@ export function buildPreviewTerrain(): THREE.Mesh {
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   // Real Greenreach albedo and heights; the inspection pad is leveled under the hull.
-  const cx = map.width * 0.48,
-    cz = map.height * 0.48;
+  const cx = map.width * PREVIEW_CENTER,
+    cz = map.height * PREVIEW_CENTER;
+  // The albedo holds only the sampled tile window: map plane cells into it.
+  const cellX0 = window.tileX * 2, cellsW = window.tilesW * 2;
+  const cellZ0 = window.tileZ * 2, cellsH = window.tilesH * 2;
   const height = (x: number, z: number) =>
     worldHeight(
       sampleHeightBilinear(
         map,
-        (cx - (map.width - 1) / 2) * 16 + x,
-        (cz - (map.height - 1) / 2) * 16 + z,
+        (cx - (map.width - 1) / 2) * CELL_PIXELS + x,
+        (cz - (map.height - 1) / 2) * CELL_PIXELS + z,
       ),
       0.38,
     );
@@ -42,8 +103,8 @@ export function buildPreviewTerrain(): THREE.Mesh {
     p.setY(i, (height(x, z) - groundY) * level - 0.06);
     uv.setXY(
       i,
-      (cx + x / 16) / (map.width - 1),
-      1 - (cz + z / 16) / (map.height - 1),
+      (cx + x / CELL_PIXELS - cellX0) / cellsW,
+      1 - (cz + z / CELL_PIXELS - cellZ0) / cellsH,
     );
   }
   geo.computeVertexNormals();
