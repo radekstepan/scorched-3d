@@ -44,6 +44,7 @@ import {
   sweepIntel,
   TEAM_ADVANCE_LEASH_RADIUS,
   THREAT_MEMORY_DURATION,
+  treesIntersectSegment,
   type CrushContext,
   type HullSeat,
   type IntelBoard,
@@ -379,6 +380,11 @@ export class UnitMovement {
    * through the retaliation pursuit drive, so the hull closes toward the
    * target — a higher vantage, shorter range, or out of the forest — holds
    * at weapons-range stand-off, and resumes patrol if the fight moves on).
+   * When standing wood sits on the muzzle-to-target lane the seek also
+   * carries a lateral `firingSidestep` point (see `attachForestStep`), so
+   * the hull steps off the blocked lane instead of closing straight
+   * through the wood firing into the crown the whole way; ridge-only
+   * blocks keep the plain close (a closer/higher vantage is their cure).
    * Structure targets (an HQ fort, `target -1`) assault through core
    * `seekStructure` instead: the push survives the hunt sweep (never
    * clobbered by a team advance) and yields to consistent challengers
@@ -392,10 +398,93 @@ export class UnitMovement {
     if (!mover || this.destroyed[seeker]) return;
     if (seeker === target) return;
     const anchor = this.routes[seeker]?.[0] ?? null;
-    this.movers[seeker] =
+    const next =
       target === -1
         ? seekStructure(mover, mover, x, z, anchor)
         : seekEngage(mover, mover, target, x, z, anchor);
+    // Core returns the mover untouched on refusal (ordered/holding hulls,
+    // leash, self-seeks): only a freshly written memory earns the step, so
+    // the cure never fights player orders or dead seeks.
+    if (next === mover) {
+      this.movers[seeker] = next;
+      return;
+    }
+    this.movers[seeker] = this.attachForestStep(next, seeker, target, x, z);
+  }
+
+  /**
+   * Forest-futility cure for an obstructed seek: when live wood blocks the
+   * muzzle-to-target lane, score the two lateral seats (`firingSidestep`,
+   * same evaluator the sweep uses) and carry the better one on the fresh
+   * memory, so the hull steps out of the wood instead of feeding the
+   * canopy. Event-gated (one obstructed report per three consecutive
+   * sticks), so the all-stands lane scan costs nothing per tick; the drive
+   * walks the step first at any range and clears it on arrival, and each
+   * further step needs three more consecutive sticks on a strictly better
+   * seat — bounded, terminating, never a move-shoot-move loop. Returns the
+   * mover untouched when the lane is clear of wood (ridge-only blocks
+   * close), when neither lateral clears it (deep forest: closing through
+   * still crushes a lane), or when the seats cannot be resolved. Pure over
+   * the mover: only the fresh memory is decorated, never the drive.
+   */
+  private attachForestStep(
+    mover: Mover,
+    seeker: number,
+    target: number,
+    x: number,
+    z: number,
+  ): Mover {
+    const memory = mover.threat;
+    if (!memory || memory.ttl <= 0) return mover;
+    const stands = this.env.treeStands?.() ?? [];
+    if (stands.length === 0) return mover;
+    if (!Number.isFinite(mover.x) || !Number.isFinite(mover.z)) return mover;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return mover;
+    // Victim seat: the live roster position for hull targets (what the guns
+    // aim at), the reported point for structures and stale indices.
+    let vx = x;
+    let vz = z;
+    let victimKind: UnitKind | undefined;
+    if (target >= 0 && target < this.movers.length && !this.destroyed[target]) {
+      const live = this.movers[target]!;
+      if (Number.isFinite(live.x) && Number.isFinite(live.z)) {
+        vx = live.x;
+        vz = live.z;
+      }
+      victimKind = this.kinds[target];
+    }
+    const groundY = this.env.groundY;
+    const shooter = {
+      x: mover.x,
+      y: groundY(mover.x, mover.z) + muzzleHeight(this.kinds[seeker] ?? "flash"),
+      z: mover.z,
+    };
+    const victim =
+      target === -1
+        ? { x: vx, y: groundY(vx, vz) + STRUCTURE_SIGHT_LIFT, z: vz }
+        : { x: vx, y: groundY(vx, vz) + muzzleHeight(victimKind ?? "flash"), z: vz };
+    if (!treesIntersectSegment(shooter, victim, stands)) return mover;
+    // Teammates engaging the same hull (live grudges — the same discipline
+    // as the squad focus): stacking on one's line is what a flank step
+    // opens away from. Structures carry no flank pressure.
+    const allies: { x: number; z: number }[] = [];
+    if (target >= 0) {
+      const side = this.teamAt(seeker);
+      for (let j = 0; j < this.movers.length; j++) {
+        if (j === seeker || this.destroyed[j]) continue;
+        if (this.teamAt(j) === undefined || this.teamAt(j) !== side) continue;
+        if (this.movers[j]?.threat?.attacker !== target) continue;
+        const at = this.movers[j]!;
+        if (Number.isFinite(at.x) && Number.isFinite(at.z)) allies.push({ x: at.x, z: at.z });
+      }
+    }
+    const spot = firingSidestep(shooter, victim, stands, {
+      allies,
+      selfIndex: seeker,
+      ...(target >= 0 ? { targetIndex: target } : {}),
+    });
+    if (!spot) return mover;
+    return { ...mover, threat: { ...memory, sidestep: spot } };
   }
 
   /**

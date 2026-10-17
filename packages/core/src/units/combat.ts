@@ -1052,8 +1052,9 @@ export function flightStickChance(crossedCount: number, kind: UnitKind): number 
  * standing statue-still while its turret does all the work. `firingSidestep`
  * scores the two lateral candidates (one short shuffle each way off the
  * firing line) and names the better seat; the renderer sweep attaches it to
- * the holder's threat memory on a cooldown (see `ThreatMemory.sidestep`),
- * and the pursuit drive walks it like any other short leg.
+ * the holder's threat memory on a cooldown, forest-obstructed seeks attach
+ * it on proven futility (see `ThreatMemory.sidestep`), and the pursuit
+ * drive walks it like any other short leg.
  *
  * Restraint is the point: the step is small (`SIDESTEP_OFFSET`, a couple of
  * hull lengths), rare (`SIDESTEP_COOLDOWN` between steps, staggered per hull

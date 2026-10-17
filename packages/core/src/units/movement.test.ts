@@ -2032,13 +2032,49 @@ describe("pursuit sidestep", () => {
     expect(next.hull).toBeGreaterThan(0);
   });
 
-  it("drops a carried sidestep while closing (stale by arrival)", () => {
+  it("keeps walking a sidestep across the stand-off boundary (no self-cancel)", () => {
+    // Flash holder exactly at its 220 stand-off with a live grudge: the
+    // first lateral strides push it just past stand-off — the step must
+    // still be walked to arrival, not dropped for a drive back at the foe.
+    // Dropping here self-cancels the forest-futility cure: every sidestep
+    // died at the boundary and the hull kept firing into the wood.
+    const edge = [
+      { x: 0, z: 0 },
+      { x: 220, z: 0 },
+    ];
+    const mover: Mover = {
+      ...initMover(route, yawToTarget({ x: 0, z: 0 }, { x: 0, z: 48 })),
+      x: 0,
+      z: 0,
+      threat: {
+        attacker: 1,
+        x: 220,
+        z: 0,
+        ttl: THREAT_MEMORY_DURATION,
+        sidestep: { x: 0, z: 48 },
+      },
+    };
+    let next = mover;
+    for (let n = 0; n < 20; n++) next = step(next, edge);
+    // Walked laterally off the firing line instead of closing on the foe.
+    expect(next.z).toBeGreaterThan(10);
+    expect(next.x).toBeCloseTo(0, 6);
+    expect(next.threat?.attacker).toBe(1);
+    expect(next.threat?.sidestep).toEqual({ x: 0, z: 48 });
+  });
+
+  it("walks a carried sidestep while closing (fresh steps finish)", () => {
+    // Contract change (was: "drops while closing as stale"): a carried step
+    // is scored fresh at attach and walks in ~1 s, so the geometry cannot
+    // go stale mid-stride — and dropping it on the close self-cancelled the
+    // forest-futility cure the stride the hull crossed stand-off. Closers
+    // therefore walk the step first, then resume the close on arrival.
     const far = [
       { x: 0, z: 0 },
       { x: 500, z: 0 },
     ];
     const mover: Mover = {
-      ...initMover(route, yawToTarget({ x: 0, z: 0 }, far[1]!)),
+      ...initMover(route, yawToTarget({ x: 0, z: 0 }, { x: 0, z: 48 })),
       x: 0,
       z: 0,
       threat: {
@@ -2050,10 +2086,12 @@ describe("pursuit sidestep", () => {
       },
     };
     const next = step(mover, far);
-    // Still closing on the foe — but the stale point is gone.
-    expect(next.x).toBeGreaterThan(0);
+    // Full-stride step along the pre-aligned hull (72 u/s): purely lateral,
+    // the point surviving the close for the walk.
+    expect(next.z).toBeCloseTo(72 / 60, 9);
+    expect(next.x).toBeCloseTo(0, 9);
     expect(next.threat?.attacker).toBe(1);
-    expect(next.threat).not.toHaveProperty("sidestep");
+    expect(next.threat?.sidestep).toEqual({ x: 0, z: 48 });
   });
 });
 

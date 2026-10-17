@@ -101,15 +101,16 @@ export interface ThreatMemory {
   challenger?: ThreatChallenger;
   /**
    * Firing-position sidestep: a nearby lateral point the hull should shuffle
-   * to while holding at stand-off (see `firingSidestep` in combat.ts, which
-   * names it, and the renderer sweep, which attaches it on a cooldown).
-   * Carried only on live-duel memories (attacker >= 0) already inside
-   * stand-off: the pursuit drive walks to it and clears it on arrival (see
-   * `SIDESTEP_ARRIVE_RADIUS`), drops it while closing (stale by the time the
-   * hull arrives — re-evaluated fresh on the hold), and never carries it
-   * across a re-hit or a re-seek (fresh information wins; the sweep
-   * re-attaches after `SIDESTEP_COOLDOWN` when still warranted). Absent
-   * means hold facing the threat, exactly as before.
+   * to while engaging (see `firingSidestep` in combat.ts, which names it;
+   * the renderer sweep attaches it on a cooldown and forest-obstructed
+   * seeks attach it on proven futility). Carried on live-duel memories
+   * (attacker >= 0): the pursuit drive walks to it first at any range and
+   * clears it on arrival (see `SIDESTEP_ARRIVE_RADIUS`) — the step is
+   * scored fresh at attach and walks in ~1 s, so the hold/close boundary
+   * never drops it mid-stride — and never carries it across a re-hit or a
+   * re-seek (fresh information wins; attachers re-evaluate when still
+   * warranted). Absent means hold facing the threat / close on it, exactly
+   * as before.
    */
   sidestep?: { x: number; z: number };
 }

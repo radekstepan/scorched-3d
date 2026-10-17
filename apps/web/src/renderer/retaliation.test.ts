@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  countTreesOnSegment,
   HUNT_LEASH_RADIUS,
   initMover,
   mulberry32,
+  muzzleHeight,
   muzzleYaw,
   notifyThreat,
   wrapAngle,
@@ -1572,6 +1574,83 @@ describe("UnitMovement firing footwork", () => {
     }
     expect(movement.moverState(1)?.threat?.sidestep).toBeUndefined();
     expect(movement.moverState(1)!.z).toBeGreaterThan(30);
+    movement.dispose();
+  });
+
+  it("steps laterally out of the wood on a forest-obstructed seek", () => {
+    // Flash vs hammer 200 apart with one crown centered on the lane: the
+    // obstructed gun reports (CombatFx forest futility) and the reposition
+    // must step laterally off the blocked lane — not just close straight
+    // through the wood firing into the crown the whole way.
+    const stands = () => [{ x: 100, z: 0, groundY: 104, standing: true }];
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+      stands,
+    );
+    movement.seekEngage(0, 1, 200, 0);
+    const memory = movement.moverState(0)?.threat;
+    expect(memory?.attacker).toBe(1);
+    expect(memory?.sidestep).toBeDefined();
+    // The stepped lane crosses strictly less wood than the direct lane.
+    const wood = stands();
+    const seat = { x: 0, y: 100 + muzzleHeight("flash"), z: 0 };
+    const foe = { x: 200, y: 100 + muzzleHeight("hammer"), z: 0 };
+    const direct = countTreesOnSegment(seat, foe, wood);
+    expect(direct).toBeGreaterThan(0);
+    const spot = memory!.sidestep!;
+    const stepped = countTreesOnSegment({ x: spot.x, y: seat.y, z: spot.z }, foe, wood);
+    expect(stepped).toBeLessThan(direct);
+    // The hull walks the step instead of standing in the wood: off the
+    // firing line, then arrived and cleared.
+    movement.threatenUnit(1, 0, 0, 0);
+    for (let n = 0; n < 120 && movement.moverState(0)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
+    expect(Math.abs(movement.moverState(0)!.z)).toBeGreaterThan(30);
+    movement.dispose();
+  });
+
+  it("steps laterally when a fort assault lane crosses wood", () => {
+    // Same cure for structure seeks: the shell lane to the fort clips the
+    // crown, so the assault carries a lateral step off the blocked lane.
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+      () => [{ x: 100, z: 0, groundY: 104, standing: true }],
+    );
+    movement.seekEngage(0, -1, 200, 0);
+    const memory = movement.moverState(0)?.threat;
+    expect(memory?.attacker).toBe(-1);
+    expect(memory?.structure).toBe(true);
+    expect(memory?.sidestep).toEqual({ x: 0, z: 48 });
+    movement.dispose();
+  });
+
+  it("keeps closing (no sidestep) when the obstructed lane has no wood", () => {
+    // Ridge-blocked, not forest-blocked: the cure is a closer/higher
+    // vantage, so the seek carries no lateral step — plain pursuit.
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+    );
+    movement.seekEngage(0, 1, 200, 0);
+    const memory = movement.moverState(0)?.threat;
+    expect(memory?.attacker).toBe(1);
+    expect(memory?.sidestep).toBeUndefined();
     movement.dispose();
   });
 

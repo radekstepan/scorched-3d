@@ -985,11 +985,14 @@ function tickStunned(
  * live attacker past the disengage bound, or threat past the leash from
  * the patrol anchor — position memories skip the disengage bound, see
  * below) so the caller drops the memory and resumes patrol.
- * Inside weapons-range stand-off the hull holds and faces the threat while
- * the memory stays fresh — or walks a carried `sidestep` point (see
- * `firingSidestep`) and clears it on arrival; pinned against a slope it
- * holds like an ordered hull instead of skipping its frozen leg away. With
- * `tactics`, a hull
+ * A carried `sidestep` point (see `firingSidestep`) is walked first at any
+ * range — through the same drive, cleared on arrival — and only then does
+ * the hull hold at weapons-range stand-off facing the threat; pinned
+ * against a slope it holds like an ordered hull instead of skipping its
+ * frozen leg away. The step is a fresh ~1 s walk, so the hold/close
+ * boundary never drops it mid-stride (dropping there self-cancelled the
+ * forest-futility cure: every sidestep died the stride the hull crossed
+ * stand-off and the gun kept firing into the wood). With `tactics`, a hull
  * that would drive alone into a stronger force holds in place facing the
  * threat instead — waiting for backup, not suiciding — while the memory
  * stays fresh so it re-engages (or gives up by the usual gates) once the
@@ -1035,11 +1038,12 @@ function pursueStep(
   // the live roster when the challenger is still up — the count survives the
   // march, so consistent fire preempts mid-push, not just on arrival).
   const foeChallenger = threat.challenger ? foes?.[threat.challenger.attacker] : undefined;
-  // A carried sidestep survives only on the hold: while closing, the flank
-  // geometry moves under it, so it is stale by arrival — drop it here and
-  // let the sweep re-evaluate fresh once the hull holds (see `pursueStandOff`
-  // below). Outnumbered holders keep it through the wait and walk it when
-  // the odds change.
+  // A carried sidestep survives the hold/close boundary: the step is
+  // scored fresh at attach (a sweep seat or a forest-futility cure) and
+  // walks in ~1 s, so the geometry cannot go stale mid-stride — and
+  // dropping it on the close would self-cancel the cure the stride the
+  // hull crosses stand-off. Arrival clears it below; outnumbered hulls
+  // keep it through the wait and walk it when the odds change.
   const holding = Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind);
   const memory: ThreatMemory = {
     attacker: threat.attacker,
@@ -1058,7 +1062,7 @@ function pursueStep(
           },
         }
       : {}),
-    ...(holding && threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
+    ...(threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
   };
   const want = yawToTarget(mover, { x: tx, z: tz });
   // Outnumbered: hold facing the threat and wait for backup instead of
@@ -1077,27 +1081,26 @@ function pursueStep(
     // Holding hulls do not translate, so they face at the pivot floor.
     return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
   }
-  if (holding) {
-    // Firing-position footwork: a holder carrying a sidestep point walks the
-    // short lateral shuffle instead of standing still — through the same
-    // drive (turn caps, grip, slope gating), so it reads as deliberate
-    // footwork, not a slide. The turret tracks the threat independently
-    // while the hull shuttles, so the gun never leaves the target mid-step.
-    // Arrival clears the point (the sweep re-arms the cooldown, never the
-    // point); slope-pinned hulls hold like an ordered hull with the point
-    // surviving for a later tick.
-    const step = memory.sidestep;
-    if (step && Number.isFinite(step.x) && Number.isFinite(step.z)) {
-      if (Math.hypot(step.x - mover.x, step.z - mover.z) <= SIDESTEP_ARRIVE_RADIUS) {
-        const { sidestep: _arrived, ...rest } = memory;
-        return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: rest };
-      }
-      const shuffle = driveToward(kind, mover, step, dt, spacing, terrain, undefined, crush);
-      if (shuffle.skipped) {
-        return { ...mover, hull: shuffle.mover.hull, stuck: 0, threat: memory };
-      }
-      return { ...shuffle.mover, threat: memory };
+  // Firing-position footwork: a hull carrying a sidestep point walks the
+  // short lateral shuffle first at any range — through the same drive
+  // (turn caps, grip, slope gating), so it reads as deliberate footwork,
+  // not a slide. The turret tracks the threat independently while the hull
+  // shuttles, so the gun never leaves the target mid-step. Arrival clears
+  // the point (attachers re-arm, never the point); slope-pinned hulls hold
+  // like an ordered hull with the point surviving for a later tick.
+  const step = memory.sidestep;
+  if (step && Number.isFinite(step.x) && Number.isFinite(step.z)) {
+    if (Math.hypot(step.x - mover.x, step.z - mover.z) <= SIDESTEP_ARRIVE_RADIUS) {
+      const { sidestep: _arrived, ...rest } = memory;
+      return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: rest };
     }
+    const shuffle = driveToward(kind, mover, step, dt, spacing, terrain, undefined, crush);
+    if (shuffle.skipped) {
+      return { ...mover, hull: shuffle.mover.hull, stuck: 0, threat: memory };
+    }
+    return { ...shuffle.mover, threat: memory };
+  }
+  if (holding) {
     return { ...mover, hull: turnHull(kind, mover.hull, want, dt, 0), threat: memory };
   }
   const driven = driveToward(kind, mover, { x: tx, z: tz }, dt, spacing, terrain, undefined, crush);
