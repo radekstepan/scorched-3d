@@ -16,16 +16,20 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Units lock up where one might be attacking an another is maybe just moving but not shooting. It's weird. Or 10 units facing enemy and just 1 shooting.
+For unit folio show the unit on terrain with toggles for motion shotting etc. This from `redesign-stumpy-tank-model` sibling directory.
 
-The units sometimes engage in a little "dance" with each other. Distracting, reduce it and think about how groups of units and enemies can not "cycle" trying to avoid each other. This is still not fixed. Units will jitter around each other, I want smooth movement.
+Use the logo from `redesign-stumpy-tank-model` sibling directory for the game
 
-The HQ flag should be flickering and give it an outline so it doesn't blend e.g. against the blue water.
+The tab for Battlefield is too far left. Should be aligned with the actual UI.
 
-Add a "chrome" to the UI and for visual elements like the panels from `redesign-stumpy-tank-model` sibling directory. Make it look more like a full RTS
+I don't like the faint border inside the game.
 
-Now that we have a "chrome", add a second "tab" to the game which when clicked (will pause the game) and show units just like `redesign-stumpy-tank-model` sibling directory does. The goal is to have a "folio" of different units that we can browse and see up close.
+Last bunch of commits fucked up pan speed and max zoom when zoomed in close. Panning is too slow in some cases, I couldn't even zoom in up close, but now it seems to work. Is it unit count causing this? When zooming in don't zoom in so close and keep the angle!
 
-Make units shoot through trees less.
+Peewee shooting grenades too high, should be more ballistic. And while walking should have a gun pointing forward not up by default.
 
-The commander sometimes does a few steps back, same as peewee, while walking forward.
+Tweak the commander model to have a weapon in one of the claw. Right now it seems to shoot from the body?
+
+In top right corner show actual latest version number of the game.
+
+Sometimes a tank in a forest being attacked seems to just "take it" pointing at one or the other unit attacking instead of firing.
