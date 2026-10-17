@@ -6,6 +6,7 @@ import {
   ballisticPosition,
   ballisticVelocity,
   barrelSegment,
+  barrelTouchesTrunk,
   BARREL_MOUNT,
   clampElevation,
   disperseAim,
@@ -758,6 +759,61 @@ describe("trunksOnBarrel", () => {
   it("costs nothing on open ground", () => {
     const seg = segOf();
     expect(trunksOnBarrel(seg.a, seg.b, [])).toEqual([]);
+  });
+
+  it("keeps the bole boundary (exactly at tube reach still clips)", () => {
+    // The exact test includes the boundary (`> r²` rejects, `==` clips), so
+    // the broadphase must let boundary boles through — a trunk at exactly
+    // trunk + tube reach (4 + 2 = 6) from the tube line at bole height
+    // still fells. Exactly-representable geometry (midpoint approach,
+    // axis-aligned tube) so the boundary is bit-exact, not 1-ulp luck.
+    const a = { x: 0, y: 110, z: 0 };
+    const b = { x: 0, y: 110, z: 30 };
+    expect(trunksOnBarrel(a, b, [tree(6, 15)])).toEqual([0]);
+    // …while a hair past clears.
+    expect(trunksOnBarrel(a, b, [tree(6 + 1e-6, 15)])).toEqual([]);
+  });
+
+  it("agrees with brute force on a seeded sweep (broadphase tripwire)", () => {
+    // The per-tree broadphase is an optimization only: on scattered forests
+    // and tube-scale segments it must return exactly the brute-force set
+    // (same fids, ascending). Any future broadphase change that alters a
+    // verdict fails here instead of silently clipping through boles.
+    const rng = mulberry32(0xba442);
+    const brute = (
+      a: { x: number; y: number; z: number },
+      b: { x: number; y: number; z: number },
+      trees: readonly TreeStand[],
+    ): number[] => {
+      const out: number[] = [];
+      for (let i = 0; i < trees.length; i++) {
+        if (barrelTouchesTrunk(a, b, trees[i]!)) out.push(i);
+      }
+      return out;
+    };
+    for (let field = 0; field < 4; field++) {
+      const count = 150 + Math.floor(rng() * 100);
+      const trees: TreeStand[] = [];
+      for (let i = 0; i < count; i++) {
+        trees.push({
+          x: (rng() - 0.5) * 4000,
+          z: (rng() - 0.5) * 4000,
+          groundY: 80 + rng() * 60,
+          standing: rng() < 0.7,
+        });
+      }
+      for (let s = 0; s < 25; s++) {
+        // Tube-scale segments (~30u) at hull heights, plus degenerate points.
+        const cx = (rng() - 0.5) * 4000;
+        const cz = (rng() - 0.5) * 4000;
+        const cy = 90 + rng() * 40;
+        const yaw = rng() * Math.PI * 2;
+        const len = rng() < 0.15 ? 0 : 20 + rng() * 20;
+        const a = { x: cx, y: cy, z: cz };
+        const b = { x: cx + Math.sin(yaw) * len, y: cy + (rng() - 0.5) * 30, z: cz + Math.cos(yaw) * len };
+        expect(trunksOnBarrel(a, b, trees)).toEqual(brute(a, b, trees));
+      }
+    }
   });
 });
 

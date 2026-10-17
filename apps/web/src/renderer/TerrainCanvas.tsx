@@ -107,6 +107,8 @@ import {
   movePingScale,
 } from "./movePing";
 import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
+import { StandsCache } from "./stands";
+import { computeUnitVisibility } from "./viewCull";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
@@ -418,27 +420,23 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       );
       if (craters.length > 48) craters.shift();
       applyCraters(geometry, map, craters, optsRef.current.exaggeration);
+      // Fresh dent moves the dirt under nearby trees: the stands snapshot
+      // reads live heights, so invalidate it (otherwise occlusion and
+      // interception would sample pre-crater ground until the next fell).
+      dirtyStands();
     };
-    const liveStands = (): TreeStand[] =>
-      allTrees.map((p, fid) => {
-        const state = damage.trees[fid] ?? "intact";
-        return {
-          x: p.x,
-          z: p.z,
-          groundY: groundY(p.x, p.z),
-          standing: state === "intact" || state === "burning" || state === "smouldering",
-        };
-      });
-    // Per-tick stands snapshot, shared by the occlusion x-ray and the
-    // combat tree-interception rolls: one `liveStands()` build per tick
-    // (N groundY probes, one per tree) instead of one per reader per tick.
-    // Mutators that flip `standing` mid-tick (blast flattens, hull crushes)
-    // dirty it so later readers in the same tick still see live wood;
+    // Tree-stands snapshot, shared by the occlusion x-ray, the combat
+    // tree-interception rolls, and hunt visibility: one build per
+    // invalidation instead of one per tick (~15k groundY probes per build on
+    // Ashen Pass, so quiet ticks now cost zero). Mutators that flip
+    // `standing` mid-tick (blast flattens, hull crushes, burn resolutions)
+    // dirty it so later readers in the same tick still see live wood, and so
+    // do the two height movers below (crater dents, exaggeration re-snaps);
     // ignitions never dirty it (burning still stands, heights unchanged).
-    let standsCache: TreeStand[] | null = null;
-    const getStands = (): TreeStand[] => (standsCache ??= liveStands());
+    const stands = new StandsCache(allTrees, damage, groundY);
+    const getStands = (): TreeStand[] => stands.get();
     const dirtyStands = (): void => {
-      standsCache = null;
+      stands.dirty();
     };
     // HQ structures (assigned below, after movement exists): ambient guns
     // shell live enemy HQs inside admitted range, and every blast splashes
@@ -999,9 +997,6 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const dt = Math.min(clock.getDelta(), 0.05);
       const t = clock.elapsedTime;
       const opt = optsRef.current;
-      // Fresh stands snapshot for this tick (built lazily on first read,
-      // shared by occlusion + combat — see `getStands`).
-      standsCache = null;
 
       if (opt.exaggeration !== lastExag) {
         // Keep the view geometry while the terrain re-snaps: shift camera and
@@ -1032,6 +1027,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         tracks.resnap();
         waypoints.resnap();
         combat.reseatScorch();
+        // Heights re-scale: the stands snapshot caches live heights, so it
+        // must rebuild before the next occlusion/interception read.
+        dirtyStands();
         markHoverDirty();
       }
 
@@ -1199,8 +1197,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       tracks.update(movement, dt);
       waypoints.setVisible(opt.showWaypoints);
       waypoints.update(movement, units.children.length, t);
+      // Frustum gate for view-only per-unit work (the camera is final by
+      // now): off-screen units skip occlusion sampling, ghost pose syncs,
+      // and health-bar re-seats — the simulation underneath (drive, combat,
+      // damage) runs ungated, and every gated readout re-syncs the same
+      // tick its unit re-enters view. HQ bars stay ungated (two forts).
+      const unitVisible = computeUnitVisibility(camera, units.children);
       health.setVisible(opt.showHealth);
-      health.update(combat, units.children, camera);
+      health.update(combat, units.children, camera, unitVisible);
       if (hq) {
         health.updateHq(
           hq,
@@ -1208,7 +1212,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           camera,
         );
       }
-      occlusion.update(camera.position, units.children, { groundY, stands: getStands() }, combat);
+      occlusion.update(
+        camera.position,
+        units.children,
+        { groundY, stands: getStands() },
+        combat,
+        unitVisible,
+      );
       combat.update(dt);
       // Feed live damage into the movement drive so idle hulls weigh remaining
       // health when deciding whether to engage, whom to pursue, and whether

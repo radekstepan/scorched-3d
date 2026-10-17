@@ -365,10 +365,21 @@ export function treesCrushedByStep(
   const r2 = keepout * keepout;
   const crushed: number[] = [];
   const n = Math.min(points.length, states?.length ?? points.length);
+  // Broadphase: a drive step is ~1 unit on a thousands-wide map, so reject
+  // points outside the step's box (± keepout) with four compares before the
+  // closest-approach division — on Ashen Pass this skips the exact math for
+  // ~99.9% of the 15k trees per step. Bit-identical results: anything
+  // outside the expanded box is provably past reach, and boundary points
+  // still reach the exact strict-`<` test below.
+  const minX = Math.min(fromX, toX) - keepout;
+  const maxX = Math.max(fromX, toX) + keepout;
+  const minZ = Math.min(fromZ, toZ) - keepout;
+  const maxZ = Math.max(fromZ, toZ) + keepout;
   for (let i = 0; i < n; i++) {
     const state = states?.[i];
     if (state !== undefined && state !== "intact" && state !== "burning") continue;
     const p = points[i]!;
+    if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
     if (segmentPointDistSq(fromX, fromZ, toX, toZ, p.x, p.z) < r2) crushed.push(i);
   }
   return crushed;

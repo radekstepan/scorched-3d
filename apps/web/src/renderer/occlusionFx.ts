@@ -327,12 +327,18 @@ export class OcclusionFx {
    * show it exactly while occluded. Dead units (destroyed, including
    * present/smouldering husks) and fully-decayed husks show nothing.
    * Only live units ghost, matching the health-bar policy.
+   * `visible` gates the per-unit sampling + pose sync on camera frustum
+   * membership (see `viewCull`): off-screen units skip the terrain/tree
+   * probes and the mirror sync entirely (their ghost hides), and re-sync
+   * the same tick they re-enter view — omitted/short entries default to
+   * visible, so legacy callers keep the unculled behavior.
    */
   update(
     cam: Vec3Like,
     bodies: readonly THREE.Object3D[],
     env: OcclusionEnv,
     health: OcclusionHealth,
+    visible?: readonly boolean[],
   ): void {
     if (this.disposed) return;
     for (let i = 0; i < this.ghosts.length; i++) {
@@ -340,7 +346,8 @@ export class OcclusionFx {
       const body = bodies[i];
       const gone = health.isHuskGoneAt?.(i) ?? false;
       const dead = health.isDestroyedAt(i);
-      if (!body || dead || gone) {
+      const seen = visible?.[i] ?? true;
+      if (!body || dead || gone || !seen) {
         ghost.visible = false;
         continue;
       }

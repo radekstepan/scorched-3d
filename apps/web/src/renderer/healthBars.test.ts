@@ -150,6 +150,35 @@ describe("HealthBars", () => {
     bars.dispose();
   });
 
+  it("skips re-seating off-screen bars, resyncing on return", () => {
+    // Frustum gate: an off-screen bar hides and holds its pose (no re-seat,
+    // no billboard churn); the tick it re-enters view it re-seats above the
+    // live body. Omitted/short entries default to visible (legacy callers).
+    const { bars, camera } = makeBars(2);
+    const [a, b] = bodies(2, 12);
+    bars.update(source([0, 0]), [a!, b!], camera, [true, true]);
+    expect(bars.isShown(1)).toBe(true);
+    const bar = bars.group.children[1]!;
+    const y = bar.position.y;
+    expect(y).toBe(12 + HEALTH_BAR_LIFT);
+    // Drive the body away while gated: the bar hides and never follows.
+    b!.position.set(999, 888, 777);
+    bars.update(source([0, 0]), [a!, b!], camera, [true, false]);
+    expect(bars.isShown(0)).toBe(true);
+    expect(bars.isShown(1)).toBe(false);
+    expect(bar.position.y).toBe(y);
+    expect(bar.position.x).not.toBe(999);
+    // Re-entering view re-seats above the live body the same tick.
+    bars.update(source([0, 0]), [a!, b!], camera, [true, true]);
+    expect(bars.isShown(1)).toBe(true);
+    expect(bar.position.x).toBe(999);
+    expect(bar.position.y).toBe(888 + HEALTH_BAR_LIFT);
+    // Short arrays default the rest to visible.
+    bars.update(source([0, 0]), [a!, b!], camera, [true]);
+    expect(bars.isShown(1)).toBe(true);
+    bars.dispose();
+  });
+
   it("hides bars past the roster and disposes cleanly", () => {    const scene = new THREE.Scene();
     const bars = new HealthBars(scene, 2);
     const camera = new THREE.PerspectiveCamera();

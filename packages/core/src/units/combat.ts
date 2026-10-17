@@ -1530,8 +1530,21 @@ export function trunksOnBarrel(
   trees: readonly TreeStand[],
 ): number[] {
   const hit: number[] = [];
+  // Broadphase: the tube is tens of units long on a thousands-wide map, so
+  // reject trees outside the tube's XZ box (± trunk + tube reach) with four
+  // compares before the closest-approach math — same bit-identical-results
+  // contract as the crush broadphase (outside is provably past reach, the
+  // boundary still reaches the exact inclusive test).
+  const r = TREE_TRUNK_RADIUS + BARREL_TUBE_RADIUS;
+  const minX = Math.min(a.x, b.x) - r;
+  const maxX = Math.max(a.x, b.x) + r;
+  const minZ = Math.min(a.z, b.z) - r;
+  const maxZ = Math.max(a.z, b.z) + r;
   for (let i = 0; i < trees.length; i++) {
-    if (barrelTouchesTrunk(a, b, trees[i]!)) hit.push(i);
+    const tree = trees[i]!;
+    if (!tree.standing) continue;
+    if (tree.x < minX || tree.x > maxX || tree.z < minZ || tree.z > maxZ) continue;
+    if (barrelTouchesTrunk(a, b, tree)) hit.push(i);
   }
   return hit;
 }

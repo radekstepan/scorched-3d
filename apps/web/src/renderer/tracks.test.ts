@@ -222,6 +222,29 @@ describe("TrackTrails", () => {
     walkTracks.dispose();
   });
 
+  it("leaves marks frustum-culled so off-screen lanes cost no draw calls", () => {
+    // The pool holds up to 320 quads; with culling disabled every one of
+    // them would issue a draw call on every frame from any camera. Marks
+    // are static positioned/scaled quads, so the default world-sphere
+    // culling is exact — pin that nothing disables it.
+    const scene = new THREE.Scene();
+    const tank: TrackSource = {
+      unitCount: 1,
+      kindAt: () => "stump",
+      isDestroyed: () => false,
+      moverState: null as unknown as TrackSource["moverState"],
+    };
+    let tx = 0;
+    tank.moverState = () => ({ x: (tx += TRACK_SPACING + 1), z: 0, hull: 0, leg: 1 });
+    const tracks = new TrackTrails(scene, { groundY: () => 100 });
+    tracks.update(tank, 1 / 60);
+    tracks.update(tank, 1 / 60);
+    const meshes = scene.children.filter((c): c is THREE.Mesh => c.type === "Mesh");
+    expect(meshes.length).toBeGreaterThan(0);
+    for (const mesh of meshes) expect(mesh.frustumCulled).toBe(true);
+    tracks.dispose();
+  });
+
   it("stays silent while stunned or wrecked — and stamps while driving", () => {
     const scene = new THREE.Scene();
     const { units, routes } = makeGroup();

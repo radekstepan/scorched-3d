@@ -365,4 +365,57 @@ describe("OcclusionFx ghost policy", () => {
       disposeOcclusionAssets();
     }
   });
+
+  it("skips sampling + sync for off-screen units, resyncing on return", () => {
+    // Frustum gate: an off-screen unit costs zero terrain/tree probes and no
+    // mirror sync (its ghost hides); the tick it re-enters view it samples
+    // and syncs like any visible unit, so the camera never returns to a
+    // stale ghost. Omitted entries default to visible (legacy callers).
+    const scene = new THREE.Scene();
+    const fx = new OcclusionFx(scene, kinds);
+    try {
+      const list = bodies();
+      const health = { isDestroyedAt: () => false };
+      let probes = 0;
+      const counting = (x: number, z: number): number => {
+        probes++;
+        return ridge(x, z);
+      };
+      // Both occluded behind the ridge, but only the first is on-screen.
+      fx.update(cam, list, { groundY: counting, stands: [] }, health, [true, false]);
+      expect(fx.isShown(0)).toBe(true);
+      expect(fx.isShown(1)).toBe(false);
+      const oneUnit = probes;
+      expect(oneUnit).toBeGreaterThan(0);
+      // All hidden: zero probes, zero ghosts.
+      probes = 0;
+      fx.update(cam, list, { groundY: counting, stands: [] }, health, [false, false]);
+      expect(probes).toBe(0);
+      expect(fx.isShown(0)).toBe(false);
+      expect(fx.isShown(1)).toBe(false);
+      // The hidden ghost never synced: drive the body elsewhere while gated…
+      list[1]!.position.set(500, 10, 200);
+      fx.update(cam, list, { groundY: counting, stands: [] }, health, [true, false]);
+      const ghost = fx.group.children[1] as THREE.Group;
+      expect(ghost.position.x).not.toBe(500);
+      // …and it re-syncs the same tick it re-enters view.
+      fx.update(cam, list, { groundY: counting, stands: [] }, health, [true, true]);
+      expect(fx.isShown(1)).toBe(true);
+      expect(ghost.position.x).toBe(500);
+      expect(ghost.position.z).toBe(200);
+      // Omitted/short arrays keep the unculled behavior.
+      probes = 0;
+      fx.update(cam, list, { groundY: counting, stands: [] }, health);
+      expect(probes).toBeGreaterThan(oneUnit);
+      expect(fx.isShown(0)).toBe(true);
+      expect(fx.isShown(1)).toBe(true);
+      probes = 0;
+      fx.update(cam, list, { groundY: counting, stands: [] }, health, [true]);
+      expect(probes).toBeGreaterThan(oneUnit);
+      expect(fx.isShown(1)).toBe(true);
+    } finally {
+      fx.dispose();
+      disposeOcclusionAssets();
+    }
+  });
 });

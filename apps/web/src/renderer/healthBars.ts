@@ -174,9 +174,17 @@ export class HealthBars {
    * `camera`, and refill from live damage. Wrecks (destroyed or gone husks)
    * show nothing. While the toggle is off every bar is hidden up front and
    * the re-seat/billboard work is skipped — same hidden result, no per-tick
-   * transform churn.
+   * transform churn. `visible` gates the per-unit re-seat on camera frustum
+   * membership (see `viewCull`): off-screen bars hide and hold their pose,
+   * re-seating the same tick they re-enter view — omitted/short entries
+   * default to visible, so legacy callers keep the unculled behavior.
    */
-  update(source: HealthSource, bodies: readonly THREE.Object3D[], camera: THREE.Camera): void {
+  update(
+    source: HealthSource,
+    bodies: readonly THREE.Object3D[],
+    camera: THREE.Camera,
+    visible?: readonly boolean[],
+  ): void {
     if (this.disposed) return;
     if (!this.visible) {
       for (let i = 0; i < this.bars.length; i++) this.bars[i]!.group.visible = false;
@@ -186,7 +194,8 @@ export class HealthBars {
       const bar = this.bars[i]!;
       const body = bodies[i];
       const gone = source.isHuskGoneAt?.(i) ?? false;
-      if (!body || source.isDestroyedAt(i) || gone) {
+      const seen = visible?.[i] ?? true;
+      if (!body || source.isDestroyedAt(i) || gone || !seen) {
         bar.group.visible = false;
         continue;
       }

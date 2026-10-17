@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CELL_PIXELS, worldHeight } from "../terrain/types.js";
 import { generateMap } from "../terrain/generate.js";
-import { isWalkable } from "./pathfinding.js";
+import { mulberry32 } from "../terrain/noise.js";
+import { isWalkable, segmentPointDistSq } from "./pathfinding.js";
 import {
   HULL_CLEARANCE,
   HULL_FOOTPRINT,
@@ -539,6 +540,70 @@ describe("hull crush contact (which standing trees a step touches)", () => {
     const a = points[0]!;
     expect(treesCrushedByStep(points, undefined, a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([0]);
     expect(treesCrushedByStep([], [], a.x - 40, a.z, a.x + 40, a.z, "flash")).toEqual([]);
+  });
+
+  it("keeps the strict keepout boundary (exactly at reach never crushes)", () => {
+    // A broadphase must never swallow the boundary: a trunk at *exactly*
+    // the keepout distance still reaches the exact test, which excludes it
+    // on the strict `<` — while a hair inside still crushes.
+    const keepout = trunkKeepoutFor("flash");
+    const points = [
+      { x: 0, z: keepout },
+      { x: 40, z: keepout - 1e-6 },
+    ];
+    const states = ["intact", "intact"] as const;
+    expect(treesCrushedByStep(points, states, -20, 0, 60, 0, "flash")).toEqual([1]);
+    // Degenerate step parked exactly at reach: same strict exclusion.
+    expect(treesCrushedByStep(points, states, 0, 0, 0, 0, "flash")).toEqual([]);
+  });
+
+  it("agrees with brute force on a seeded sweep (broadphase tripwire)", () => {
+    // The per-tree broadphase is an optimization only: on scattered forests
+    // and drive-step-scale segments it must return exactly the brute-force
+    // set (same fids, ascending). Any future broadphase widening/narrowing
+    // that changes a verdict fails here instead of silently re-felling lanes.
+    const rng = mulberry32(0xc4e55);
+    const brute = (
+      points: readonly { x: number; z: number }[],
+      states: readonly ("intact" | "burning" | "toppled" | "gone")[] | undefined,
+      fromX: number, fromZ: number, toX: number, toZ: number, kind: "flash" | "stump",
+    ): number[] => {
+      const keepout = trunkKeepoutFor(kind);
+      const r2 = keepout * keepout;
+      const out: number[] = [];
+      const n = Math.min(points.length, states?.length ?? points.length);
+      for (let i = 0; i < n; i++) {
+        const state = states?.[i];
+        if (state !== undefined && state !== "intact" && state !== "burning") continue;
+        const p = points[i]!;
+        if (segmentPointDistSq(fromX, fromZ, toX, toZ, p.x, p.z) < r2) out.push(i);
+      }
+      return out;
+    };
+    for (let field = 0; field < 4; field++) {
+      const count = 150 + Math.floor(rng() * 100);
+      const points: { x: number; z: number }[] = [];
+      const states: ("intact" | "burning" | "toppled" | "gone")[] = [];
+      for (let i = 0; i < count; i++) {
+        points.push({ x: (rng() - 0.5) * 4000, z: (rng() - 0.5) * 4000 });
+        const roll = rng();
+        states.push(roll < 0.6 ? "intact" : roll < 0.7 ? "burning" : roll < 0.85 ? "toppled" : "gone");
+      }
+      for (let s = 0; s < 25; s++) {
+        // Drive-step scale (a tick's stride is ~1u) plus occasional long lanes.
+        const long = rng() < 0.2;
+        const len = long ? 40 + rng() * 200 : rng() * 3;
+        const cx = (rng() - 0.5) * 4000;
+        const cz = (rng() - 0.5) * 4000;
+        const yaw = rng() * Math.PI * 2;
+        const fromX = cx - Math.sin(yaw) * len;
+        const fromZ = cz - Math.cos(yaw) * len;
+        const kind = rng() < 0.5 ? "flash" : "stump";
+        expect(treesCrushedByStep(points, states, fromX, fromZ, cx, cz, kind)).toEqual(
+          brute(points, states, fromX, fromZ, cx, cz, kind),
+        );
+      }
+    }
   });
 });
 

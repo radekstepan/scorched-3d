@@ -308,7 +308,10 @@ export class TrackTrails {
         polygonOffsetFactor: -1,
       });
       const mesh = new THREE.Mesh(this.geo, mat);
-      mesh.frustumCulled = false;
+      // Frustum-culled (the default): each mark is a static
+      // positioned/scaled quad, so three.js culls off-screen marks exactly
+      // by their world sphere — up to 320 pooled draw calls collapse to the
+      // visible lane instead of rendering into every frame from anywhere.
       mesh.renderOrder = 1;
       mesh.visible = false;
       this.scene.add(mesh);
