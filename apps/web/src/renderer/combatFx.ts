@@ -19,6 +19,7 @@ import {
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
   ELEVATION_SLEW_RATE,
+  FOREST_HOLD_FIRE_THROUGH_HITS,
   FOREST_STICK_REPOSITION_HITS,
   flightClearsTerrain,
   flightClearsTrees,
@@ -903,6 +904,19 @@ export class CombatFx {
    * gunner's entry and `clearTransients` drops the map with the shots.
    */
   private forestSticks = new Map<number, number>();
+  /**
+   * Consecutive wood-blocked launch holds per attacker: every volley the
+   * pre-launch tree gate refuses increments its gunner's count, every
+   * launched round clears it. On `FOREST_HOLD_FIRE_THROUGH_HITS` the gun
+   * fires through the standing wood anyway (see `launchShot`) — the
+   * in-flight stick rolls and struck-tree damage resolve the lane from
+   * there — and the count re-arms from zero, so a genuinely uncoverable
+   * duel reads as patient holds broken by probing shots, not a mute
+   * standoff. Terrain/range/mount/traverse holds never touch this count
+   * (dirt is hard cover); kills drop the gunner's entry and
+   * `clearTransients` drops the map with the shots.
+   */
+  private woodHolds = new Map<number, number>();
   /** Instanced damage smoke + embers over the hulls (transient view). */
   private damageFx: UnitDamageFx;
   /** Reused husk-decay fractions for `poseHusks` (no per-tick array). */
@@ -1445,6 +1459,7 @@ export class CombatFx {
     this.elevGoal.clear();
     this.pendingHq.clear();
     this.forestSticks.clear();
+    this.woodHolds.clear();
     for (const pose of this.aim) pose.overshoot = 0;
     for (const light of this.lights) light.intensity = 0;
     // In-flight glow goes dark with the shots (persistent scorch, kill
@@ -1577,8 +1592,9 @@ export class CombatFx {
         this.destroyed[i] = true;
         this.killedAt[i] = this.elapsed;
         this.deathCount += 1;
-        // A wreck's gun never fires again: drop its futility streak.
+        // A wreck's gun never fires again: drop its futility streaks.
         this.forestSticks.delete(i);
+        this.woodHolds.delete(i);
         const wreck = bodies[i];
         if (wreck) {
           this.settleNudge(i, wreck);
@@ -2563,8 +2579,19 @@ export class CombatFx {
     // clear seat immediately; live projectile interception remains a safety
     // net when wood enters an already launched flight.
     if (!flightClearsTrees(start, sol.velocity, roundGravity, sol.duration, stands)) {
-      this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);
-      return false;
+      // Patient holds first, then hose the wood: a lane no reposition can
+      // clear (a hull parked in a crown has no clean seat at any stand-off)
+      // must not mute both guns forever — each hold already refreshed the
+      // reposition pursuit, so by now the hull has had its chance to step
+      // out. Firing through still pays the canopy: the in-flight stick
+      // rolls swallow most rounds and the struck crowns burn down.
+      const holds = (this.woodHolds.get(attackerIdx) ?? 0) + 1;
+      if (holds < FOREST_HOLD_FIRE_THROUGH_HITS) {
+        this.woodHolds.set(attackerIdx, holds);
+        this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);
+        return false;
+      }
+      this.woodHolds.delete(attackerIdx);
     }
     const barrelDir = live
       ? new THREE.Vector3(live.direction.x, live.direction.y, live.direction.z)
@@ -2616,6 +2643,10 @@ export class CombatFx {
       tz: impact.z,
     });
     this.fired += 1;
+    // A round away breaks the futility streak — only *consecutive* holds
+    // fire blind, so a lane that clears (or a probing shot through) re-arms
+    // the patient's full count.
+    this.woodHolds.delete(attackerIdx);
     this.lastKind = kind;
     this.lastAttacker = attackerIdx;
     if (lobGrenade) this.lobs += 1;

@@ -535,6 +535,24 @@ export const CANOPY_SAMPLE_STEP = 16;
  * noise, three in a row is a blocked lane.
  */
 export const FOREST_STICK_REPOSITION_HITS = 3;
+/**
+ * Consecutive wood-blocked launch holds after which a gun fires through the
+ * standing wood anyway instead of holding forever: the renderer counts
+ * per-attacker volleys refused by the pre-launch tree gate (see
+ * `flightClearsTrees`) and, on the Nth consecutive hold, launches the round
+ * regardless — the in-flight stick rolls (see `rollTreeStick`) and the
+ * struck-tree damage then resolve the lane physically: rounds mostly stick,
+ * crowns catch fire and fall, and an eventual round gets through. A launched
+ * round resets the count: only *consecutive* futility fires blind. Without
+ * this, two enemies with wood on the lane (a hull parked in a crown has no
+ * clear seat at any stand-off) hold fire forever — each hold refreshes the
+ * reposition pursuit that has nowhere better to stand, so nothing ever
+ * shoots until the player moves a hull by hand. Terrain/range/mount holds
+ * never count: dirt is hard cover (reposition or hold), wood is soft cover
+ * fire destroys. Sized like the stick precedent above: three patient holds,
+ * then hose the wood.
+ */
+export const FOREST_HOLD_FIRE_THROUGH_HITS = 3;
 
 /** One tree as a projectile obstacle: ground seat plus standing mask. */
 export interface TreeStand {

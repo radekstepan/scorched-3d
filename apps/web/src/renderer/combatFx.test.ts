@@ -1548,7 +1548,7 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
   }
 
   it.each(["flash", "commander", "stump"] as const)(
-    "%s holds fire and requests a clear lane before shooting through a standing tree",
+    "%s holds fire first, then fires through a standing tree after repeated holds",
     (kind) => {
       const scene = new THREE.Scene();
       const units = makeWoodlandPair(kind, kind);
@@ -1556,12 +1556,66 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
       const fx = new CombatFx(scene, units, () => 0, ctl.env);
       const obstructed: unknown[][] = [];
       fx.onObstructedShot = (...args) => obstructed.push(args);
-      for (let n = 0; n < 600; n++) fx.update(1 / 60);
-      expect(fx.totalFired).toBe(0);
-      expect(fx.stuckCount).toBe(0);
-      expect(ctl.struck).toEqual([]);
+      // Holds precede fire: run until the first obstruction report — the gun
+      // asks for a clear lane before any round leaves.
+      for (let n = 0; n < 600 && obstructed.length === 0; n++) fx.update(1 / 60);
       expect(obstructed.length).toBeGreaterThan(0);
+      expect(fx.totalFired).toBe(0);
       expect(obstructed[0]).toEqual([0, 1, 400, 0]);
+      // ...but a lane no reposition can clear never mutes the gun forever:
+      // repeated holds escalate to probing shots through the wood.
+      for (let n = 0; n < 600; n++) fx.update(1 / 60);
+      expect(fx.totalFired).toBeGreaterThan(0);
+      // rng() === 0 sticks every crossing round: the canopy still eats the
+      // probes (cover costs fire, it just no longer forbids it).
+      expect(fx.stuckCount).toBeGreaterThan(0);
+      expect(ctl.struck.length).toBeGreaterThan(0);
+      fx.dispose();
+    },
+  );
+
+  it.each([["on-target", 220], ["on-shooter", 0]] as const)(
+    "close enemies unstick when a crown sits %s: holds first, then fire through",
+    (_, treeX) => {
+      // The reported deadlock: two enemies holding at close range with one
+      // hull parked in a crown — no firing seat clears the lane, so the old
+      // binary hold muted both guns until the player moved a hull by hand.
+      const scene = new THREE.Scene();
+      const group = new THREE.Group();
+      group.userData.units = [
+        { kind: "flash", cellX: 1, cellZ: 1, rotation: Math.PI / 2 },
+        { kind: "flash", cellX: 2, cellZ: 2, rotation: -Math.PI / 2 },
+      ];
+      for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(220, 100, 0)]) {
+        const body = new THREE.Group();
+        body.position.copy(pos);
+        const turret = new THREE.Group();
+        turret.name = "turret";
+        body.add(turret);
+        body.userData.turret = turret;
+        group.add(body);
+      }
+      (group.children[0] as THREE.Group).rotation.y = Math.PI / 2;
+      (group.children[1] as THREE.Group).rotation.y = -Math.PI / 2;
+      const struck: number[] = [];
+      const fx = new CombatFx(scene, group, () => 0, {
+        groundY: () => 100,
+        blastFeatures: () => {},
+        // Crown center at muzzle height, right on one hull's seat.
+        treeStands: () => [{ x: treeX, z: 0, groundY: 86, standing: true }],
+        strikeTree: (fid: number) => {
+          struck.push(fid);
+        },
+      });
+      const obstructed: unknown[][] = [];
+      fx.onObstructedShot = (...args) => obstructed.push(args);
+      for (let n = 0; n < 600 && obstructed.length === 0; n++) fx.update(1 / 60);
+      expect(obstructed.length).toBeGreaterThan(0);
+      expect(fx.totalFired).toBe(0);
+      for (let n = 0; n < 600; n++) fx.update(1 / 60);
+      expect(fx.totalFired).toBeGreaterThan(0);
+      expect(fx.stuckCount).toBeGreaterThan(0);
+      expect(struck.length).toBeGreaterThan(0);
       fx.dispose();
     },
   );
@@ -1578,12 +1632,17 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     let blocked = 0;
     fx.onObstructedShot = () => blocked++;
     for (let n = 0; n < 300; n++) fx.update(1 / 60);
-    expect(fx.totalFired).toBe(0);
+    // Blocked phase: patient holds plus probing shots that stick in the crown.
     expect(blocked).toBeGreaterThan(0);
+    const firedBlocked = fx.totalFired;
+    const stuckBlocked = fx.stuckCount;
+    expect(firedBlocked).toBeGreaterThan(0);
+    expect(stuckBlocked).toBeGreaterThan(0);
     tree.standing = false;
     for (let n = 0; n < 300; n++) fx.update(1 / 60);
-    expect(fx.totalFired).toBeGreaterThan(0);
-    expect(fx.stuckCount).toBe(0);
+    // Felled phase: volleys keep leaving and nothing sticks anymore.
+    expect(fx.totalFired).toBeGreaterThan(firedBlocked);
+    expect(fx.stuckCount).toBe(stuckBlocked);
     fx.dispose();
   });
 
@@ -1620,12 +1679,15 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
       if (clear) {
         expect(fx.totalFired).toBeGreaterThan(0);
         expect(obstructed).toEqual([]);
+        expect(fx.stuckCount).toBe(0);
       } else {
-        // Never regain the unwanted mortar pose just to clear a tall crown.
-        expect(fx.totalFired).toBe(0);
+        // Tall crown: patient holds first, then shallow probing lobs through
+        // the wood — never a mortar arc over it (stuck rounds prove the flat
+        // throw: a lobbed arc would sail past the crown untouched).
         expect(obstructed.length).toBeGreaterThan(0);
+        expect(fx.totalFired).toBeGreaterThan(0);
+        expect(fx.stuckCount).toBeGreaterThan(0);
       }
-      expect(fx.stuckCount).toBe(0);
       fx.dispose();
     },
   );
@@ -1705,7 +1767,7 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     );
   }
 
-  it("holds a mount-limited shell when its flat trajectory crosses canopy", () => {
+  it("fires a mount-limited shell flat through canopy after holds, never lobbing", () => {
     const scene = new THREE.Scene();
     const units = makeArtilleryDuel();
     const fx = new CombatFx(scene, units, () => 0, {
@@ -1729,9 +1791,12 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
       }
     }
     expect(blocked).toBeGreaterThan(0);
-    expect(fx.totalFired).toBe(0);
-    // The tube lays flat onto the low root instead of mortar-lobbing — and
-    // never climbs past the artillery mount, not even toward the old lob.
+    // Repeated holds escalate to flat probing shots through the canopy —
+    // the duel never mutes forever — but the tube still lays flat onto the
+    // low root instead of mortar-lobbing, and never climbs past the
+    // artillery mount, not even toward the old lob.
+    expect(fx.totalFired).toBeGreaterThan(0);
+    expect(fx.stuckCount).toBeGreaterThan(0);
     expect(flat).toBe(true);
     expect(peak).toBeLessThanOrEqual(ELEVATION_MAX.hammer + 1e-9);
     expect(peak).toBeLessThan(1.0);

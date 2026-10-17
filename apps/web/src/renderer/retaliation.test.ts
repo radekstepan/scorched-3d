@@ -1679,8 +1679,14 @@ describe("UnitMovement firing footwork", () => {
     fx.trackThreat(0, 1);
     movement.threatenUnit(0, 1, 200, 0);
     const internals = fx as unknown as { shots: { attacker: number }[] };
+    // Probing shots leave through the wood while the escape is still
+    // underway (repeated holds escalate to fire-through), so fire no longer
+    // marks the escape's end: track it stickily and run until the
+    // obstruction step is attached and then walked off on arrival.
     let returnedFire = false;
-    for (let tick = 0; tick < 480; tick++) {
+    let sawStep = false;
+    let escapeZ = 0;
+    for (let tick = 0; tick < 1200; tick++) {
       if (tick % 6 === 0) {
         const enemy = tick % 12 === 0 ? 1 : 2;
         movement.threatenUnit(0, enemy, 200, enemy === 1 ? 0 : 100);
@@ -1688,12 +1694,15 @@ describe("UnitMovement firing footwork", () => {
       }
       movement.update(1 / 60);
       fx.update(1 / 60);
-      if (internals.shots.some((shot) => shot.attacker === 0)) {
-        returnedFire = true;
+      if (internals.shots.some((shot) => shot.attacker === 0)) returnedFire = true;
+      if (movement.moverState(0)?.threat?.sidestep) sawStep = true;
+      else if (sawStep) {
+        escapeZ = Math.abs(movement.moverState(0)!.z);
         break;
       }
     }
-    expect(Math.abs(movement.moverState(0)!.z)).toBeGreaterThan(20);
+    expect(sawStep).toBe(true);
+    expect(escapeZ).toBeGreaterThan(20);
     expect(returnedFire).toBe(true);
     fx.dispose();
     movement.dispose();
