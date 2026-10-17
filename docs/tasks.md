@@ -16,20 +16,16 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-The red HQ light needs to have wider cones, like 45 degrees each, and fade more gently into the distance but also onto the sides. RIght now you can clearly see a "line" of the angle.
+Add a flag to each HQ corresponding to the team's colors
 
-Make new units drive off the road leading from HQ and not block the entrance. THis is still not fixed from the last batch. Multiple times not fixed.
+The units sometimes engage in a little "dance" with each other. Distracting, reduce it and think about how groups of units and enemies can not "cycle" trying to avoid each other.
 
-are we animating areas that the user is not looking at? Can be simplified right? identify how to make maps like Ashen Pass more performant. We are at 29 fps now.
+Make HQ produce units faster, I want the peewee out in 20s, adjust the other units accordingly.
 
-When units are close together you see this jitter. I assume it's them trying to not be close together, I hate the jitter though, is distracting.
+Units keep firing through or in forest and keep hitting trees. If that happens the unit should move out such that it can actually hit the enemy.
 
-Units in fog are (a bit) harder to see.
+Start the game in "RTS" angle taken from `redesign-stumpy-tank-model` sibling directory
 
-A unit can fire while moving, just not as fast.
+Add random rocks into the world from `redesign-stumpy-tank-model` sibling directory
 
-A unit shooting another unit should try to "snap" (have a stickiness) rather than try attacking always a new unit. Maybe that's why we sometimes have a big group of enemies and they all are more stationary and not shooting much. Investigate if that's the case. We could even model a simplified model of units on a "grid" without all the nuances of their movement and see how likely they are to shoot or move etc. Make sure we haev great unit test coverage on this core functionality of the "ai"
-
-The territory right now is flashing. Make it fade a bit more slowly and be a contiguous blob.
-
-Sometimes the tanks and other units just turn 45 degrees. That's not how physics of a vehicle like a tank work. Make proper turns.
+Color the units of each time in the team's colors so they actually stand out. I like the commander blue. Use that for "blue" team. Pick a similar vibrancy of a color for the other team.
