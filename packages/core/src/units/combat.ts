@@ -466,7 +466,7 @@ export function muzzleHeight(kind: UnitKind): number {
     case "hammer":
       return 22;
     case "commander":
-      return 30;
+      return 16.9;
     case "peewee":
       return 9;
   }
@@ -482,10 +482,15 @@ export function muzzleForward(kind: UnitKind): number {
     case "hammer":
       return 18;
     case "commander":
-      return 6;
+      return 8.95;
     case "peewee":
       return 8;
   }
+}
+
+/** Lateral muzzle offset in the hull frame (+X right, -X left). */
+export function muzzleSide(kind: UnitKind): number {
+  return kind === "commander" ? -7.1 : 0;
 }
 
 /**
@@ -1441,8 +1446,8 @@ export function flightClearsTerrain(
  * barrel: traverse and fire stay sane, forests near parked guns thin the
  * way crushed lanes do. Crowns are deliberately ignored (a tube brushing
  * leaves reads fine; a tube through a bole does not), as are felled trees
- * (flat wood has no bole left to hit) and the commander (no tube — its
- * torso turns inside the hull keepout).
+ * (flat wood has no bole left to hit) and the commander (its compact
+ * claw cannon turns inside the hull keepout).
  */
 
 /** Gun-tube radius, world units (tube 1.2–1.8 plus margin, so paint never touches bark). */
@@ -1475,7 +1480,7 @@ export interface BarrelSegment {
 /**
  * World-space gun-tube segment for a hull at `hull` (ground-anchor position)
  * with `hullYaw` + `turretRel` aim and `elevation` barrel pitch. Null for
- * kinds without a tube (commander). Pure, so the renderer and vitest share
+ * kinds without an elevating tube (commander). Pure, so the renderer and vitest share
  * the exact segment the pose draws.
  */
 export function barrelSegment(

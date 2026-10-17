@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { muzzleForward, muzzleHeight, muzzleSide } from "@scorched-3d/core";
 import { armor, Assembly } from "./vehicleGeometry";
 import { unitHullMaterial } from "./unitFog";
 import type { TeamLivery } from "./teamPaint";
@@ -45,6 +46,7 @@ function legDesign() {
 
 function design() {
   const torso = new Assembly(PAINT), mastAssembly = new Assembly(PAINT);
+  const weapon = new Assembly(PAINT);
   const waist = new THREE.CylinderGeometry(4, 4.6, 2.2, 12);
   torso.add(waist, DARK, 0, 15.5, -0.2);
   torso.add(armor([[16, 8.8, 7.3, 1.4, -0.4], [22, 13.1, 10.2, 2, -0.7],
@@ -83,7 +85,7 @@ function design() {
     [28.7, 3, 0.35, 0.1, -5.6]]), DARK);
   torso.add(armor([[21.6, 2.1, 0.3, 0.1, -6.03], [25.4, 3.2, 0.3, 0.1, -6.38],
     [28.3, 2.5, 0.3, 0.1, -5.9]]), PAINT);
-  // One utility claw, one armored fist: construction capability in the silhouette.
+  // A metal claw grips the pulse cannon; the other hand stays an armored fist.
   for (const side of [-1, 1]) {
     link(torso, [-7.1 + side * 0.95, 16.5, 3.5], [-7.1 + side, 15.8, 6], 0.8, 1, METAL);
     link(torso, [-7.1 + side, 15.8, 6], [-7.1 + side * 0.65, 15.4, 6.6], 0.8, 0.9, METAL);
@@ -98,17 +100,20 @@ function design() {
   torso.block(4.15, 0.45, 0.12, 0, 33.15, 3.15, OPTIC);
   torso.add(armor([[33.75, 6.1, 2, 0.55, 2], [34.4, 5.6, 1.7, 0.5, 1.7]]), GOLD);
   torso.plate(2.7, 2.6, 35.15, 0.35, 0, -0.9, PANEL);
-  // Fixed chest emitter is centered on the existing (0,30,6) muzzle marker.
-  torso.add(armor([[27.9, 5.8, 2.8, 0.7, 3.8], [30.5, 5.1, 2.4, 0.7, 3.8]]), GOLD);
-  const muzzle = new THREE.Shape();
-  muzzle.moveTo(-1.1, -1.5); muzzle.lineTo(1.1, -1.5); muzzle.lineTo(1.7, -0.9);
-  muzzle.lineTo(1.7, 0.9); muzzle.lineTo(1.1, 1.5); muzzle.lineTo(-1.1, 1.5);
-  muzzle.lineTo(-1.7, 0.9); muzzle.lineTo(-1.7, -0.9); muzzle.closePath();
-  const opening = new THREE.Path(); opening.absarc(0, 0, 0.95, 0, Math.PI * 2, true); muzzle.holes.push(opening);
-  torso.add(new THREE.ExtrudeGeometry(muzzle, {depth:1, bevelEnabled:true,
-    bevelThickness:0.08, bevelSize:0.08, bevelSegments:1, steps:1, curveSegments:3}), METAL, 0, 30, 4.92);
-  const emitter = new THREE.CylinderGeometry(0.85, 0.85, 0.08, 10); emitter.rotateX(Math.PI / 2);
-  torso.add(emitter, OPTIC, 0, 30, 5.25);
+  // The left claw grips a forward-pointing pulse cannon. Keep an open
+  // bore, a substantial breech and a pale armored sleeve readable at RTS scale.
+  weapon.block(2, 2.2, 3.6, 0, 0, 0.5, DARK);
+  weapon.add(armor([[-1.3, 2.8, 3.7, 0.5, 0.6], [0.8, 3.1, 3.8, 0.55, 0.6],
+    [1.4, 2.3, 3.2, 0.45, 0.8]]), PAINT);
+  weapon.block(1.9, 0.35, 2.6, 0, 1.45, 1.1, PANEL);
+  const tube = new THREE.CylinderGeometry(0.75, 0.9, 2.4, 10);
+  tube.rotateX(Math.PI / 2);
+  weapon.add(tube, METAL, 0, 0, 3.4);
+  const collar = new THREE.TorusGeometry(0.83, 0.27, 4, 10);
+  weapon.add(collar, METAL, 0, 0, 4.65);
+  const bore = new THREE.CylinderGeometry(0.57, 0.57, 0.08, 10);
+  bore.rotateX(Math.PI / 2);
+  weapon.add(bore, DARK, 0, 0, 4.63);
   // Telescoping comms mast: the original tall recognition feature, not a tower.
   torso.add(armor([[28.7, 1.8, 2, 0.4, -4.4], [33.3, 1.2, 1.5, 0.3, -4.1]]), PANEL, 3);
   const mast = new THREE.CylinderGeometry(0.13, 0.3, 13.1, 6);
@@ -117,7 +122,7 @@ function design() {
     const collar = new THREE.CylinderGeometry(0.35, 0.35, 0.55, 6);
     mastAssembly.add(collar, GOLD, 3, y, -4.1);
   }
-  return {torso:torso.bake(), mast:mastAssembly.bake(), legs:legDesign()};
+  return {torso:torso.bake(), mast:mastAssembly.bake(), legs:legDesign(), weapon:weapon.bake()};
 }
 let template: ReturnType<typeof design> | undefined;
 
@@ -142,7 +147,13 @@ export function buildCommander(parent: THREE.Group, turret: THREE.Group, livery?
   };
   attach(turret, source.torso, "commander-torso");
   attach(turret, source.mast, "commander-mast");
-  const tip = new THREE.Object3D(); tip.name = "tip"; tip.position.set(0, 30, 6); turret.add(tip);
+  const weapon = new THREE.Group(); weapon.name = "commander-weapon";
+  weapon.position.set(muzzleSide("commander"), muzzleHeight("commander"), 4);
+  attach(weapon, source.weapon, "commander-weapon-finish");
+  turret.add(weapon);
+  const tip = new THREE.Object3D(); tip.name = "tip";
+  tip.position.z = muzzleForward("commander") - weapon.position.z;
+  weapon.add(tip);
   for (const x of [-4, 4]) {
     const [color, geometry] = source.legs[0]!;
     const leg = new THREE.Mesh(geometry.clone(), unitHullMaterial(remap(color))); leg.name = "leg";

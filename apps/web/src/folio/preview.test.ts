@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import { UNIT_KINDS } from "@scorched-3d/core";
-import { muzzleWorld, getBarrel, getLegs, getMuzzleTip, getWheels } from "../renderer/units";
+import { muzzleWorld, getBarrel, getLegs, getMuzzleTip, getTurret, getWheels } from "../renderer/units";
 import { buildStudioBody, disposeStudioObject } from "./studio";
 import { buildPreviewTerrain, PreviewAnimation } from "./preview";
 
@@ -60,6 +60,27 @@ describe("visual-only folio animation", () => {
       for (let i = 0; i < 60; i++) animation.update(1 / 60, true, shooting, false);
       expect(muzzleWorld(body)!.direction.y).toBeCloseTo(0, 8);
     }
+    disposeStudioObject(scene);
+  });
+
+  it("fires the Commander preview from the claw cannon after torso traverse", () => {
+    const body = buildStudioBody("commander");
+    getTurret(body)!.rotation.y = 0.6;
+    body.rotation.y = 0.4;
+    const animation = new PreviewAnimation(body, "commander");
+    const scene = new THREE.Group(); scene.add(body, animation.effects);
+    animation.update(0.05, false, true, false);
+    const weapon = body.getObjectByName("commander-weapon")!;
+    const tip = getMuzzleTip(body)!;
+    expect(tip.parent).toBe(weapon);
+    expect(animation.flash.position.distanceTo(tip.getWorldPosition(new THREE.Vector3()))).toBeLessThan(0.001);
+    const local = weapon.worldToLocal(animation.flash.position.clone());
+    expect(local.x).toBeCloseTo(0, 7); expect(local.y).toBeCloseTo(0, 7);
+    expect(local.z).toBeCloseTo(4.95, 7);
+    const start = animation.tracer.position.clone();
+    animation.update(0.05, false, true, false);
+    const direction = new THREE.Vector3(0, 0, 1).transformDirection(tip.matrixWorld);
+    expect(animation.tracer.position.clone().sub(start).normalize().distanceTo(direction)).toBeLessThan(0.001);
     disposeStudioObject(scene);
   });
 

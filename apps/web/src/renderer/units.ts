@@ -241,7 +241,7 @@ export function getMuzzleTip(body: THREE.Group): THREE.Object3D | null {
 
 /**
  * Aim the barrel at `elevation` radians above horizontal. No-op when the
- * body has no elevating pivot (commander ASMs its bolt from the chest
+ * body has no elevating pivot (commander fires its bolt from the claw
  * marker; plain test groups keep the math fallback in combatFx).
  */
 export function setBarrelElevation(body: THREE.Group, elevation: number): void {

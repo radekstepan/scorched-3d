@@ -843,7 +843,7 @@ describe("CombatFx walker weapon cycle", () => {
     recoil(fx, 0, body);
     fx.update(1 / 60);
     const tk = 1 - 1 / 60 / TURRET_RECOIL_DURATION;
-    // Tube-less walker: the torso pitches back off the chest cannon while
+    // Tube-less walker: the torso pitches back off the claw cannon while
     // aim yaw and the turret slide compose untouched.
     expect(turret.rotation.x).toBeCloseTo(-COMMANDER_BRACE_KICK * tk, 9);
     expect(turret.rotation.y).toBe(0);

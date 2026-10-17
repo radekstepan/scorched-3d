@@ -40,6 +40,7 @@ import {
   maxRangeFor,
   muzzleForward,
   muzzleHeight,
+  muzzleSide,
   muzzleYaw,
   nextShotDelay,
   nextShotDelayFor,
@@ -259,7 +260,7 @@ interface Nudge {
   /**
    * Walker weapon cycle, riding the turret clock: the peewee's hand-cannon
    * pumps its barrel pivot rearward (`pump` units at envelope 1, restored
-   * from `barrelBase`), while the tube-less commander braces its torso back
+   * from `barrelBase`), while the fixed-mount commander braces its torso back
    * (`nod` radians at envelope 1, applied through `appliedNod` like the
    * hull rock). Both are the walkers' "reloading" read — the visible weapon
    * motion at the gun itself, on top of the shared turret slide. Zero (and
@@ -321,8 +322,8 @@ export const TURRET_RECOIL_DURATION = 0.25;
  */
 export const BARREL_PUMP_KICK = 1.2;
 /**
- * Walker weapon cycle: rearward torso pitch of the tube-less commander at
- * full envelope — the walker braces back off its chest cannon and recovers
+ * Walker weapon cycle: rearward torso pitch of the fixed-mount commander at
+ * full envelope — the walker braces back off its claw cannon and recovers
  * on the turret clock. Aim is yaw-only, so the brace composes with traverse
  * instead of fighting it.
  */
@@ -617,10 +618,11 @@ export function muzzlePoint(
   const fx = Math.sin(rotationY);
   const fz = Math.cos(rotationY);
   const fwd = muzzleForward(kind);
+  const side = muzzleSide(kind);
   return {
-    x: pos.x + fx * fwd,
+    x: pos.x + fx * fwd + fz * side,
     y: pos.y + muzzleHeight(kind),
-    z: pos.z + fz * fwd,
+    z: pos.z + fz * fwd - fx * side,
   };
 }
 
@@ -2619,7 +2621,7 @@ export class CombatFx {
     // organic fire only ever picks live attackers).
     if (this.destroyed[index]) return;
     // Walker weapon cycle: the peewee pumps its hand-cannon tube back along
-    // the gun line, the tube-less commander braces its torso back — the
+    // the gun line, the fixed-mount commander braces its torso back — the
     // walkers' visible "reloading" motion at the weapon, on top of the
     // shared turret slide. Tanks keep the slide alone.
     const kind = this.unitKind(index);
@@ -3384,7 +3386,7 @@ export class CombatFx {
           turret.position.z = -Math.cos(yaw) * nudge.turret * tk;
           // Walker weapon cycle on the same envelope: the peewee's tube
           // pumps back into its mount along the gun line, the commander's
-          // torso braces back off its chest cannon.
+          // torso braces back off its claw cannon.
           const barrel = getBarrel(child);
           if (barrel && nudge.barrelBase && nudge.pump > 0) {
             barrel.position.set(
