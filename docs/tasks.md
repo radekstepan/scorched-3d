@@ -16,12 +16,20 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-The red HQ light needs to have wider cones, travel further and fade more gently into the distance but also onto the sides.
+The red HQ light needs to have wider cones, like 45 degrees each, and fade more gently into the distance but also onto the sides. RIght now you can clearly see a "line" of the angle.
 
-Make new units drive off the road leading from HQ and not block the entrance. THis is still not fixed from the last batch.
+Make new units drive off the road leading from HQ and not block the entrance. THis is still not fixed from the last batch. Multiple times not fixed.
 
-Fireflies need to move slightly faster.
+are we animating areas that the user is not looking at? Can be simplified right? identify how to make maps like Ashen Pass more performant. We are at 29 fps now.
 
-Add an overlay we can toggle that would show in the minimap and on actual map the area each team considers "theirs". If an area is contested, fade the 2 factions colors. Same in an area that hasn't been around a unit in a long time. Make this performant.
+When units are close together you see this jitter. I assume it's them trying to not be close together, I hate the jitter though, is distracting.
 
-When we manually move units somewhere, they stop all their behaviors like movememtn, attacking etc. Wrong. They should go where we ask them to do, while responding to any fire if attacked, but still moving to where we want them. And once they get to the destination, they continue with the SAME behavior as now of wayfinding, monitoring, attacking, defending etc.
+Units in fog are (a bit) harder to see.
+
+A unit can fire while moving, just not as fast.
+
+A unit shooting another unit should try to "snap" (have a stickiness) rather than try attacking always a new unit. Maybe that's why we sometimes have a big group of enemies and they all are more stationary and not shooting much. Investigate if that's the case. We could even model a simplified model of units on a "grid" without all the nuances of their movement and see how likely they are to shoot or move etc. Make sure we haev great unit test coverage on this core functionality of the "ai"
+
+The territory right now is flashing. Make it fade a bit more slowly and be a contiguous blob.
+
+Sometimes the tanks and other units just turn 45 degrees. That's not how physics of a vehicle like a tank work. Make proper turns.
