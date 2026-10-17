@@ -877,8 +877,8 @@ export class CombatFx {
     | null = null;
   /**
    * Fired when a gun cannot engage through its lane: either it holds fire
-   * because terrain hides its target (the arc would hit the hillside), or
-   * its rounds keep sticking in live wood (`FOREST_STICK_REPOSITION_HITS`
+   * because terrain or standing wood hides its target, or
+   * its rounds keep sticking in newly encountered live wood (`FOREST_STICK_REPOSITION_HITS`
    * consecutive sticks — the lane is blocked, not unlucky). Either way the
    * attacker must reposition toward the target — a higher vantage, closer,
    * or out of the forest — instead of shooting through the hill or feeding
@@ -2448,11 +2448,9 @@ export class CombatFx {
     const roundFlash = lobGrenade ? PEEWEE_GRENADE_FLASH_TIME : profile.flashTime;
     const roundShell = lobGrenade || profile.shot === "shell";
     const roundGravity = roundShell ? GRAVITY : 0;
-    // Canopy admission: shells lob the high root over live wood when it
-    // clears and fits the flight-time safety net, else fire flat into the
-    // branches (the interception roll may catch the round); flat bolts stay
-    // on the target line and accept the stick risk. Grenades always lob —
-    // the steep arc is their whole trajectory (see `solveShotClearing`).
+    // Prefer an admissible canopy-clearing arc before laying the barrel.
+    // The final live-muzzle flight gate below rejects any fallback that
+    // still crosses wood. Grenades always use their steep mortar arc.
     const stands = this.env?.treeStands?.() ?? [];
     const seedClearing = solveShotClearing(
       kind,
@@ -2523,6 +2521,17 @@ export class CombatFx {
           return false;
         }
       }
+    }
+    // Admit the trajectory from the resolved barrel tip, including any
+    // terrain-driven high-root change above. A visible target is not a
+    // clear firing lane: bolts cannot thread trunks and shells must respect
+    // their mount limits instead of firing flat through a blocked crown.
+    // Keep the target and use the existing obstruction pursuit to seek a
+    // clear seat immediately; live projectile interception remains a safety
+    // net when wood enters an already launched flight.
+    if (!flightClearsTrees(start, sol.velocity, roundGravity, sol.duration, stands)) {
+      this.onObstructedShot?.(attackerIdx, target, impact.x, impact.z);
+      return false;
     }
     const barrelDir = live
       ? new THREE.Vector3(live.direction.x, live.direction.y, live.direction.z)

@@ -960,11 +960,12 @@ export function solvePeeweeGrenade(
  * canopy when that clears, fits the flight-time safety net, and stays inside
  * the kind's `ELEVATION_MAX` mount; when the lob is blocked — or the mount
  * refuses it (the hammer's 70° cap rejects every near-vertical high root at
- * doctrine ranges) — the flat round still leaves, and the interception roll
- * below may catch it in the branches. A low root the mount cannot make (only
- * extreme up-cliff shots) is no solution at all: the gun holds fire. Bolts
- * fly flat and cannot lob: they stay on the target line and accept the stick
- * risk, which is what makes tracers get stuck in forests.
+ * doctrine ranges) — retain the flat candidate so callers can lay the tube
+ * and classify the obstruction from its final muzzle. This selects a firing
+ * solution, not launch admission: callers must check the resolved flight
+ * against wood before launching. A low root the mount cannot make (only
+ * extreme up-cliff shots) is no solution at all. Bolts cannot lob and always
+ * return their direct candidate for the same final admission check.
  */
 export function solveShotClearing(
   kind: UnitKind,
@@ -976,9 +977,8 @@ export function solveShotClearing(
   const profile = WEAPON_PROFILES[kind];
   if (!profile) return null;
   // Peewee grenades always lob the steep mortar arc (the high root is the
-  // whole point of the secondary): no flat root exists to prefer, and wood
-  // in the way just fires anyway — the interception roll below may catch
-  // the round as an early burst, the same fallback flat cannon fire gets.
+  // whole point of the secondary): no flat root exists to prefer. The
+  // caller admits or rejects the lob from the final live muzzle.
   if (attack === "grenade" && kind === "peewee") {
     const lob = solvePeeweeGrenade(from, to, PEEWEE_GRENADE_SPEED, GRAVITY);
     if (!lob) return null;
