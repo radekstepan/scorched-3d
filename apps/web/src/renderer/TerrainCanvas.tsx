@@ -538,13 +538,15 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
             cellZ: Math.min(Math.max(Math.round(z / CELL_PIXELS + (map.height - 1) / 2), 0), map.height - 1),
             rotation: yaw,
           });
-          // Staging loop past the mouth: the first leg walks the hall's full
-          // length straight out, then the loop turns off the lane and never
-          // returns to the door — the entrance stays passable. Successive
-          // releases alternate sides so stagings spread instead of stacking.
+          // Staging route past the mouth: a one-shot departure walks the
+          // hall's full length straight out, then the release joins an
+          // off-lane staging loop that never returns to the road or the
+          // door — the entrance stays passable. Successive releases
+          // alternate sides so stagings spread instead of stacking.
           const side: HqStagingSide = spawnCounts[team]! % 2 === 0 ? 1 : -1;
           spawnCounts[team]! += 1;
-          movement.addUnit(x, z, yaw, hqStagingRoute(exit, hqFacingFor(team), side), kind);
+          const staging = hqStagingRoute(exit, hqFacingFor(team), side);
+          movement.addUnit(x, z, yaw, staging.loop, kind, staging.leadIn);
           health.setCount(units.children.length);
           occlusion.setKinds(placed.map((u) => u.kind));
           waypoints.setRoutes(routes);

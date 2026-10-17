@@ -11,6 +11,7 @@ import {
   cellFromWorld,
   groupSpeedCap,
   hasOrder,
+  holdMover,
   initMover,
   MOVE_SPEED,
   orderMover,
@@ -191,6 +192,109 @@ describe("advanceMover", () => {
     expect(advanceMover("stump", mover, [{ x: 5, z: 5 }], 0.05)).toEqual(mover);
     expect(advanceMover("stump", mover, flatRoute(), 0)).toEqual(mover);
     expect(advanceMover("stump", mover, flatRoute(), -1)).toEqual(mover);
+  });
+});
+
+describe("departure lead-in", () => {
+  // HQ releases carry a one-shot departure point ahead of their patrol loop
+  // (the straight walk out of the hall mouth) that joins the loop on
+  // arrival instead of cycling back — a cyclic patrol alone cannot express
+  // "lead in, then loop", and any on-lane loop waypoint gets revisited
+  // every cycle, keeping staged hulls on the road forever.
+  const LEAD = { x: 100, z: 0 };
+  const LOOP: RoutePoint[] = [
+    { x: 160, z: 96 },
+    { x: 320, z: 96 },
+  ];
+
+  it("drives the lead-in first, then joins the loop on arrival", () => {
+    let mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { ...LEAD } };
+    // Before arrival the hull holds the straight exit line toward the
+    // lead-in — it never bends toward the off-lane loop point early.
+    for (let n = 0; n < 30; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+      expect(Math.abs(mover.z)).toBeLessThan(5);
+      expect(mover.leg).toBe(0);
+      expect(mover.leadIn).toEqual(LEAD);
+    }
+    expect(mover.x).toBeGreaterThan(20);
+    // Past arrival the lead-in clears and the hull joins its patrol leg.
+    for (let n = 0; n < 300 && mover.leadIn; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+    }
+    expect(mover.leadIn).toBeUndefined();
+    expect(Math.hypot(mover.x - LEAD.x, mover.z - LEAD.z)).toBeLessThan(40);
+    // And the loop itself cycles from there (the departure never repeats).
+    let sawLeg1 = false;
+    for (let n = 0; n < 2000; n++) {
+      mover = advanceMover("flash", mover, LOOP, 1 / 60);
+      if (mover.leg === 1) sawLeg1 = true;
+      expect(mover.leadIn).toBeUndefined();
+    }
+    expect(sawLeg1).toBe(true);
+  });
+
+  it("lets pursuit steer over the lead-in and keeps the departure", () => {
+    // Splashed mid-exit: the hull answers the threat, then resumes the
+    // departure where it left off instead of cutting to the loop early.
+    const threat = { attacker: 3, x: 0, z: 300, ttl: THREAT_MEMORY_DURATION };
+    let mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { ...LEAD }, threat };
+    const before = { ...mover };
+    mover = advanceMover("flash", mover, LOOP, 1 / 60);
+    // Steering bends toward the threat (+Z), away from the exit line.
+    expect(mover.z).toBeGreaterThan(before.z);
+    expect(mover.leadIn).toEqual(LEAD);
+    expect(mover.threat?.attacker).toBe(3);
+  });
+
+  it("abandons a slope-pinned lead-in to patrol instead of grinding", () => {
+    // The departure point sits past a wall: patrol patience applies, so the
+    // hull drops the departure and joins its loop rather than pinning.
+    const field = walledField();
+    const z = 0;
+    const route: RoutePoint[] = [
+      { x: worldX(field, 14), z },
+      { x: worldX(field, 10), z },
+    ];
+    let mover: Mover = {
+      x: worldX(field, 14),
+      z,
+      hull: Math.PI / 2,
+      leg: 0,
+      leadIn: { x: worldX(field, 35), z },
+    };
+    const dt = 1 / 60;
+    const ticks = Math.ceil(BLOCKED_SKIP_AFTER / dt) + 120;
+    let maxX = mover.x;
+    for (let n = 0; n < ticks; n++) {
+      mover = advanceMover("stump", mover, route, dt, 1, field);
+      maxX = Math.max(maxX, mover.x);
+      const { cellX } = cellFromWorld(field, mover.x, mover.z);
+      expect(cellX).toBeLessThan(16);
+    }
+    // Drove at the departure (up against the wall face) before abandoning.
+    expect(maxX).toBeGreaterThan(worldX(field, 15));
+    expect(mover.leadIn).toBeUndefined();
+  });
+
+  it("clears the lead-in on player orders and holds, but survives stuns", () => {
+    const mover: Mover = { x: 0, z: 0, hull: Math.PI / 2, leg: 0, leadIn: { ...LEAD } };
+    // A player order (or a hold) wins over the departure: no resurrection.
+    const ordered = orderMover(mover, [{ x: 50, z: 50 }]);
+    expect(hasOrder(ordered)).toBe(true);
+    expect(ordered.leadIn).toBeUndefined();
+    expect(holdMover(mover).leadIn).toBeUndefined();
+    // A recoil beat only pauses the drive: the departure resumes after.
+    // Start facing the loop point, so facing the departure reads as turning.
+    const facingLoop: Mover = { ...mover, hull: yawToTarget(mover, LOOP[0]!) };
+    const stunned = stunMover(facingLoop, 0.2);
+    expect(stunned.leadIn).toEqual(LEAD);
+    let faced = stunned;
+    for (let n = 0; n < 10; n++) faced = advanceMover("flash", faced, LOOP, 1 / 60);
+    expect(faced.leadIn).toEqual(LEAD);
+    // ... and the recoiling hull turns toward the departure, not the loop.
+    const wantLead = yawToTarget(stunned, LEAD);
+    expect(Math.abs(faced.hull - wantLead)).toBeLessThan(Math.abs(stunned.hull - wantLead) - 0.01);
   });
 });
 

@@ -258,6 +258,20 @@ export interface Mover {
    * drop it), and the patrol leg freezes while it steers.
    */
   threat?: ThreatMemory;
+  /**
+   * Departure lead-in: a one-shot drive target ahead of the patrol loop.
+   * The hull drives here first (patrol leg frozen), and arrival clears it
+   * and joins the loop the same tick — the departure never repeats. Retail
+   * factories hand products their rally the same way (nanolathe
+   * `04-units-orders-scripts-and-movement.md` §3.8: `GetBuilt` re-enqueues
+   * the builder's queued move/patrol rallies onto the product in order, so
+   * the product walks the rally, then patrols). Pursuit steers over it and
+   * freezes it like the leg; stuns pause it; orders and holds clear it (a
+   * player-sent hull never resumes a departure); slope-pinned past
+   * `BLOCKED_SKIP_AFTER` it abandons to patrol. Absent — never stale —
+   * once joined, matching the `stuck`/`stun` convention.
+   */
+  leadIn?: RoutePoint;
 }
 
 /**
@@ -408,7 +422,9 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * omit it and drive at full kind speed.
  */
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
-  const calm = clearThreat(mover);
+  // A player order supersedes any departure: the hull never resumes it.
+  const { leadIn: _superseded, ...rest } = clearThreat(mover);
+  const calm = rest;
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
   const order: MoveOrder =
     groupSpeed !== undefined && Number.isFinite(groupSpeed) && groupSpeed > 0
@@ -419,8 +435,9 @@ export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: numb
 
 /** Hold in place: drop any order and stop patrolling until ordered again. */
 export function holdMover(mover: Mover): Mover {
-  const calm = clearThreat(mover);
-  return { ...calm, order: undefined, hold: true };
+  // A hold supersedes any departure like an order does: nothing resumes it.
+  const { leadIn: _superseded, ...rest } = clearThreat(mover);
+  return { ...rest, order: undefined, hold: true };
 }
 
 /** True while the mover is driving a player-issued move order. */
@@ -550,9 +567,12 @@ export interface PursuitTactics {
  * with a live retaliation threat pursues it (see `retaliation.ts`: steer to
  * the attacker's last-known position through the same drive, freezing the
  * patrol leg, holding at weapons-range stand-off, giving up past the
- * disengage bound / leash / memory expiry) — and only then does the patrol
- * leg advance as before. Either way the hull turns toward its target at
- * the kind's turn rate, then drives forward along the hull — never
+ * disengage bound / leash / memory expiry) — then a departure lead-in
+ * drives first with the leg frozen (arrival clears it and joins the loop
+ * the same tick; slope-pinned past patience it abandons to patrol) — and
+ * only then does the patrol leg advance as before. Either way the hull
+ * turns toward its target at the kind's turn rate, then drives
+ * forward along the hull — never
  * sideways — at per-kind speed scaled by alignment grip (slow in turns,
  * like retail's capped blocked-mover speed) and the spacing factor. When
  * `terrain` is provided, steps into unwalkable/too-steep ground are refused:
@@ -611,10 +631,37 @@ export function advanceMover(
   const threat = mover.threat;
   if (threat && threat.ttl > 0) {
     const chased = pursueStep(kind, mover, threat, route, dt, spacing, terrain, crush, foes, tactics);
-    if (chased) return { ...chased, leg };
+    // A departure in progress freezes while pursuit steers (like the patrol
+    // leg) and resumes when the memory clears — `pursueStep` rebuilds the
+    // mover without it, so re-attach.
+    if (chased) return mover.leadIn ? { ...chased, leg, leadIn: mover.leadIn } : { ...chased, leg };
     calm = clearThreat(mover);
   } else if (threat) {
     calm = clearThreat(mover);
+  }
+  // Departure lead-in: a one-shot drive target ahead of the patrol loop
+  // (an HQ release's straight walk out of the hall mouth). Drives with the
+  // leg frozen; arrival clears it and joins the loop the same tick below,
+  // so the departure never repeats. Patrol patience applies: slope-pinned
+  // past `BLOCKED_SKIP_AFTER` the departure abandons to patrol instead of
+  // grinding. Pursuit already overrode above, so this never fights it.
+  const lead = calm.leadIn;
+  // A non-finite departure reads as arrived (NaN compares false below) and
+  // strips instead of lingering: fail clean, never fail stuck.
+  if (lead) {
+    const ldx = lead.x - calm.x;
+    const ldz = lead.z - calm.z;
+    if (ldx * ldx + ldz * ldz > ARRIVE_RADIUS * ARRIVE_RADIUS) {
+      const exit = driveToward(kind, calm, lead, dt, spacing, terrain, undefined, crush);
+      if (exit.skipped) {
+        const { leadIn: _abandoned, ...joined } = exit.mover;
+        return { ...joined, leg, stuck: 0 };
+      }
+      // `driveToward` rebuilds the mover without the departure — re-attach.
+      return { ...exit.mover, leg, leadIn: lead };
+    }
+    const { leadIn: _arrived, ...joined } = calm;
+    calm = joined;
   }
   let target = route[leg]!;
   const dx = target.x - calm.x;
@@ -637,9 +684,10 @@ export function advanceMover(
 
 /**
  * Tick a hit-stunned mover by `dt` seconds: turn the hull toward its current
- * target (order cursor or patrol leg, frozen — never advanced) at the kind's
- * turn rate, count the clock down, and drain the standing recoil slide so
- * the hull recoils away from the blast instead of freezing. Both keys drop
+ * target (order cursor, departure lead-in, or patrol leg — frozen, never
+ * advanced) at the kind's turn rate, count the clock down, and drain the
+ * standing recoil slide so the hull recoils away from the blast instead of
+ * freezing. Both keys drop
  * when the clock expires so recoiled-then-free snapshots compare equal with
  * never-hit ones. Pure: returns a new mover.
  */
@@ -658,8 +706,13 @@ function tickStunned(
   if (order && order.at < order.points.length) {
     target = order.points[order.at] ?? null;
   } else if (!awake.hold && route.length >= 2) {
-    const leg = ((awake.leg % route.length) + route.length) % route.length;
-    target = route[leg] ?? null;
+    // A departure in progress is the current target, ahead of the leg.
+    if (awake.leadIn) {
+      target = awake.leadIn;
+    } else {
+      const leg = ((awake.leg % route.length) + route.length) % route.length;
+      target = route[leg] ?? null;
+    }
   }
   const rate = HULL_TURN_RATE[kind] ?? 1.5;
   const hull = target ? stepAngle(awake.hull, yawToTarget(awake, target), rate * dt) : awake.hull;

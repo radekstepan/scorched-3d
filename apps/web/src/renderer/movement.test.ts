@@ -630,43 +630,103 @@ describe("UnitMovement wrecks", () => {
     movement.dispose();
   });
 
-  it("drives HQ releases off the exit lane and never back to the door", () => {
+  it("walks HQ releases straight out of the hall, then off the lane for good", () => {
     const units = makeGroup();
     const rs = routes();
     const movement = new UnitMovement(units, rs, { groundY: () => 100 });
     const anchor = { x: -1000, z: 0 };
     const spawn = hqSpawnWorld(anchor, hqFacingFor(0));
     const exit = hqExitWorld(anchor, hqFacingFor(0));
-    const route = hqStagingRoute(exit, hqFacingFor(0), 1);
-    const idx = movement.addUnit(spawn.x, spawn.z, Math.PI / 2, route, "stump");
+    const staging = hqStagingRoute(exit, hqFacingFor(0), 1);
+    const idx = movement.addUnit(spawn.x, spawn.z, Math.PI / 2, staging.loop, "stump", staging.leadIn);
     const body = new THREE.Group();
     body.position.set(spawn.x, 100, spawn.z);
     units.add(body);
-    // The release seeds at the door with leg 1: its first leg runs straight
-    // to the far lane-end point, never back into the hall.
-    expect(movement.moverState(idx)!.leg).toBe(1);
+    // The release seeds at the door on a one-shot departure, joining the
+    // nearest loop point after — never a loop leg back into the hall.
+    expect(movement.moverState(idx)!.leg).toBe(0);
+    expect(movement.moverState(idx)!.leadIn).toEqual(staging.leadIn);
+    let joined = false;
+    let staged = false;
     let closestToFar = Infinity;
-    let furthestOffLane = 0;
-    let closestToDoorAfterExit = Infinity;
-    for (let n = 0; n < 1800; n++) {
+    let minOffLaneAfterJoin = Infinity;
+    for (let n = 0; n < 2400; n++) {
       movement.update(1 / 60);
       const m = movement.moverState(idx)!;
-      closestToFar = Math.min(closestToFar, Math.hypot(m.x - route[1]!.x, m.z - route[1]!.z));
-      if (n > 700) {
-        // Past the mouth for good: the loop never returns to the door.
+      if (!m.leadIn) joined = true;
+      if (joined && Math.abs(m.z - exit.z) > 80) staged = true;
+      if (!joined) {
+        // Still on the departure: inside the hall the drive holds the
+        // centerline instead of bending off-lane through the curb wall.
+        if (m.x < exit.x) expect(Math.abs(m.z - exit.z)).toBeLessThan(5);
+      } else {
+        // Joined the loop: past the mouth for good, and the departure
+        // never repeats or returns to the door.
         expect(m.x, `tick ${n} stays past the mouth`).toBeGreaterThan(exit.x);
-        closestToDoorAfterExit = Math.min(
-          closestToDoorAfterExit,
-          Math.hypot(m.x - spawn.x, m.z - spawn.z),
+        expect(m.leadIn, `tick ${n} stays joined`).toBeUndefined();
+        // Once veered off, the loop never comes back within the road edge
+        // plus a full spacing stop.
+        if (staged) minOffLaneAfterJoin = Math.min(minOffLaneAfterJoin, Math.abs(m.z - exit.z));
+      }
+      closestToFar = Math.min(
+        closestToFar,
+        Math.hypot(m.x - staging.loop[1]!.x, m.z - staging.loop[1]!.z),
+      );
+    }
+    expect(joined).toBe(true);
+    expect(staged).toBe(true);
+    expect(closestToFar).toBeLessThan(40);
+    expect(minOffLaneAfterJoin).toBeGreaterThan(52);
+    expect(minOffLaneAfterJoin).toBeLessThan(160);
+    movement.dispose();
+  });
+
+  it("keeps the exit road clear with a full cap of staged releases", () => {
+    // Four releases at realistic cadence, alternating sides like the canvas:
+    // with the old on-lane far point every hull re-entered the road twice
+    // per cycle and the road sat occupied ~95% of the time. Staged loops
+    // live off the lane now, so once every release has exited, the road
+    // stays empty and the entrance approach stays passable.
+    const units = new THREE.Group();
+    units.userData.units = [];
+    const movement = new UnitMovement(units, [], { groundY: () => 100 });
+    const anchor = { x: -1000, z: 0 };
+    const facing = hqFacingFor(0);
+    const spawn = hqSpawnWorld(anchor, facing);
+    const exit = hqExitWorld(anchor, facing);
+    const kinds = ["flash", "stump", "hammer", "peewee"] as const;
+    const releaseAt = [0, 20, 45, 70];
+    const dt = 1 / 60;
+    let released = 0;
+    let roadTicks = 0;
+    let windowTicks = 0;
+    const indices: number[] = [];
+    for (let t = 0; t < 170; t += dt) {
+      if (released < kinds.length && t >= releaseAt[released]!) {
+        const staging = hqStagingRoute(exit, facing, released % 2 === 0 ? 1 : -1);
+        const idx = movement.addUnit(spawn.x, spawn.z, Math.PI / 2, staging.loop, kinds[released]!, staging.leadIn);
+        const body = new THREE.Group();
+        body.position.set(spawn.x, 100, spawn.z);
+        units.add(body);
+        (units.userData.units as unknown[]).push({ kind: kinds[released], team: 0 });
+        indices.push(idx);
+        released++;
+      }
+      movement.update(dt);
+      // Past the exit window every release has joined its loop: the road
+      // (hall + graded lane, hull half-width included) must sit empty.
+      if (t > 100) {
+        windowTicks++;
+        const pos = movement.positions();
+        const onRoad = pos.some(
+          (p) => Math.abs(p.z - exit.z) < 52 && p.x > exit.x - 130 && p.x < exit.x + 340,
         );
-        furthestOffLane = Math.max(furthestOffLane, Math.abs(m.z - exit.z));
+        if (onRoad) roadTicks++;
       }
     }
-    // Reached the lane end, turned off the lane (past the road edge plus a
-    // full spacing stop), and stayed well away from the door.
-    expect(closestToFar).toBeLessThan(40);
-    expect(furthestOffLane).toBeGreaterThan(88);
-    expect(closestToDoorAfterExit).toBeGreaterThan(200);
+    expect(released).toBe(4);
+    for (const idx of indices) expect(movement.moverState(idx)!.leadIn).toBeUndefined();
+    expect(roadTicks / windowTicks).toBeLessThan(0.05);
     movement.dispose();
   });
 });

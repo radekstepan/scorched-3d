@@ -230,6 +230,7 @@ export class UnitMovement {
           }
         : undefined,
       threat: mover.threat ? { ...mover.threat } : undefined,
+      leadIn: mover.leadIn ? { ...mover.leadIn } : undefined,
     };
   }
 
@@ -272,7 +273,7 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    const { stun: _dropped, recoil: _absorbed, threat: _calmed, ...rest } = mover;
+    const { stun: _dropped, recoil: _absorbed, threat: _calmed, leadIn: _joined, ...rest } = mover;
     this.movers[index] = { ...rest, order: undefined, hold: true };
   }
 
@@ -951,17 +952,31 @@ export class UnitMovement {
 
   /**
    * Register a reinforcement released by an HQ: append its mover (seeded at
-   * the door-side hall start on the staging loop past the mouth — first leg
-   * straight out of the hall, then off the lane, so it walks the hall on
-   * foot, never returns to the door, and the hunt sweep can acquire enemies
-   * same-tick), kind, and route, and return its roster index. The caller
-   * owns the body, placement entry, and HUD roster push; combat's per-unit
-   * arrays grow on their own next tick.
+   * the door-side hall start on a one-shot departure past the mouth when
+   * `leadIn` is given — the straight hall walk, joining the staging loop
+   * at the near point on arrival — so it walks the hall on foot, stages
+   * off the lane, never returns to the door, and the hunt sweep can
+   * acquire enemies same-tick), kind, and route, and return its roster
+   * index. The caller owns the body, placement entry, and HUD roster push;
+   * combat's per-unit arrays grow on their own next tick.
    */
-  addUnit(x: number, z: number, yaw: number, route: RoutePoint[], kind: UnitKind): number {
+  addUnit(
+    x: number,
+    z: number,
+    yaw: number,
+    route: RoutePoint[],
+    kind: UnitKind,
+    leadIn?: RoutePoint,
+  ): number {
     const mover = initMover(route, yaw);
     mover.x = x;
     mover.z = z;
+    if (leadIn) {
+      // Releases join the nearest loop point after the departure instead
+      // of the far one: less time on the road during the exit veer.
+      mover.leg = 0;
+      mover.leadIn = { ...leadIn };
+    }
     this.movers.push(mover);
     this.kinds.push(kind);
     this.routes.push(route);

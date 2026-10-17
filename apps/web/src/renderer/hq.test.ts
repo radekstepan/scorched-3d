@@ -55,6 +55,7 @@ import {
   HQ_HALL_LEN,
   HQ_SPAWN_OFFSET,
   HQ_STAGING_FAR_AHEAD,
+  HQ_STAGING_LEAD_AHEAD,
   HQ_STAGING_NEAR_AHEAD,
   HQ_STAGING_SIDE,
   HQ_WALL_H,
@@ -759,29 +760,40 @@ describe("hq reinforcement exit", () => {
     }
   });
 
-  it("stages releases on a loop that exits straight, then turns off the lane", () => {
-    // Far keeps the legacy lane-end distance; near sits halfway back; the
-    // lateral stands clear of the graded lane (2.5 cells ≈ 40) plus a full
-    // spacing stop (48), so staged hulls never pin the exit drive.
+  it("stages releases on a loop that exits straight, then leaves the lane for good", () => {
+    // The loop lives ENTIRELY off the lane: the previous shape kept the far
+    // point on the centerline, so every hull re-entered the road twice per
+    // cycle and the road sat occupied ~95% of the time with a full cap of
+    // releases. Both points now stand clear of the graded lane (2.5 cells
+    // ≈ 40) plus a full spacing stop (48) on the release's side, and the
+    // straight hall walk rides a one-shot departure instead of a loop leg.
     expect(HQ_STAGING_FAR_AHEAD).toBe(320);
     expect(HQ_STAGING_NEAR_AHEAD).toBe(160);
     expect(HQ_STAGING_SIDE).toBeGreaterThan(40 + 48);
+    // The departure clears the curb ends (at the mouth) before the veer can
+    // start — arrival fires within 14 of it, so it must sit past the mouth
+    // by more than that, but close enough that the exit drive is short.
+    expect(HQ_STAGING_LEAD_AHEAD).toBeGreaterThan(14);
+    expect(HQ_STAGING_LEAD_AHEAD).toBeLessThan(HQ_STAGING_NEAR_AHEAD);
     for (const team of [0, 1] as const) {
       const facing = hqFacingFor(team);
       const exit = hqExitWorld({ x: 100, z: -40 }, facing);
       for (const side of [1, -1] as const) {
-        const [near, far] = hqStagingRoute(exit, facing, side);
-        // Both points past the mouth toward the map center, in [near, far]
-        // order — the mover seeds at the door with leg 1, so the first leg
-        // runs door → far.
+        const { leadIn, loop } = hqStagingRoute(exit, facing, side);
+        const [near, far] = loop;
+        // The departure sits just past the mouth ON the anchor row: the
+        // first drive runs straight down the hall instead of grinding
+        // through the curb wall, and arrival joins the loop past the mouth.
+        expect(leadIn.x).toBe(exit.x + facing * HQ_STAGING_LEAD_AHEAD);
+        expect(leadIn.z).toBe(exit.z);
+        // Both loop points past the mouth toward the map center, in [near,
+        // far] order — the mover joins at the near one after the departure.
         expect(far!.x).toBe(exit.x + facing * HQ_STAGING_FAR_AHEAD);
         expect(near!.x).toBe(exit.x + facing * HQ_STAGING_NEAR_AHEAD);
-        // Far sits ON the anchor row: the exit leg runs straight down the
-        // hall instead of grinding through the curb wall.
-        expect(far!.z).toBe(exit.z);
-        // Near sits off the lane on the release's side: the loop turns off
-        // the road past the mouth instead of returning to the door.
+        // Both loop points off the lane on the release's side: every loop
+        // leg runs parallel to the road and never crosses back onto it.
         expect(near!.z).toBe(exit.z + side * HQ_STAGING_SIDE);
+        expect(far!.z).toBe(exit.z + side * HQ_STAGING_SIDE);
       }
     }
   });

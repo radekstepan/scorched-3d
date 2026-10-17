@@ -141,36 +141,63 @@ export function hqSpawnWorld(anchor: { x: number; z: number }, facing: HqFacing)
 }
 
 /**
- * Staging loop for a release, past the hall mouth along `facing`. Route
- * order is [near, far]: the mover seeds at the door with leg 1, so the
- * first leg runs door → far straight down the hall (far sits ON the anchor
- * row at the legacy 320 — the cleared lane's far end — because a straight
- * leg from inside the hall to an off-road point would grind through the
- * curb wall; the veer must happen past the mouth). Past the mouth the loop
- * turns off the lane: near sits halfway back and `HQ_STAGING_SIDE` off the
- * anchor row — clear of the graded lane (2.5 cells ≈ 40) plus a full
- * spacing stop (48), so a hull on the off-road leg never pins a hull
- * exiting down the centerline. The loop never returns to the door, so the
- * entrance stays passable for the next release.
+ * Departure lead-in for a release, past the hall mouth along `facing`: the
+ * one-shot straight walk out of the hall. Sits ON the anchor row just past
+ * the mouth — past the curb ends (which terminate at the mouth), so the
+ * veer onto the loop can only start once the hull is clear of the hall, and
+ * close enough that the exit drive stays short. Arrival joins the loop the
+ * same tick and never repeats, so the straight exit does not need a loop
+ * leg of its own (a cyclic patrol alone cannot express "lead in, then
+ * loop": any on-lane loop waypoint gets revisited every cycle, which kept
+ * staged hulls re-entering the road twice per cycle and the road occupied
+ * ~95% of the time with a full cap of releases).
  */
+export const HQ_STAGING_LEAD_AHEAD = 24;
+/** Near loop point ahead of the mouth (halfway to the legacy lane end). */
 export const HQ_STAGING_NEAR_AHEAD = 160;
+/** Far loop point ahead of the mouth (the legacy lane-end distance). */
 export const HQ_STAGING_FAR_AHEAD = 320;
+/**
+ * Loop lateral off the anchor row: clear of the graded lane (2.5 cells ≈
+ * 40) plus a full spacing stop (48), so a staged hull never pins an
+ * exiting hull — and every loop leg runs parallel to the road instead of
+ * crossing back onto it.
+ */
 export const HQ_STAGING_SIDE = 96;
 
 /** Which side of the exit lane a release stages on (releases alternate). */
 export type HqStagingSide = 1 | -1;
 
-/** Staging loop for an HQ mouth `exit` + facing + side. */
+/** A release's departure plus its off-lane staging loop. */
+export interface HqStagingRoute {
+  /** One-shot straight exit past the mouth, on the anchor row. */
+  leadIn: { x: number; z: number };
+  /** [near, far] staging loop, both points off the lane. */
+  loop: { x: number; z: number }[];
+}
+
+/**
+ * Staging route for an HQ mouth `exit` + facing + side: the mover seeds at
+ * the door on the departure (straight down the hall, past the mouth — a
+ * straight leg from inside the hall to an off-road point would grind
+ * through the curb wall, so the veer must happen past the mouth), then
+ * joins the loop at the near point. Both loop points sit past the mouth on
+ * the release's side of the lane, so staged hulls drive beside the road
+ * and the entrance stays passable for the next release.
+ */
 export function hqStagingRoute(
   exit: { x: number; z: number },
   facing: HqFacing,
   side: HqStagingSide,
-): { x: number; z: number }[] {
+): HqStagingRoute {
   const s = side < 0 ? -1 : 1;
-  return [
-    { x: exit.x + facing * HQ_STAGING_NEAR_AHEAD, z: exit.z + s * HQ_STAGING_SIDE },
-    { x: exit.x + facing * HQ_STAGING_FAR_AHEAD, z: exit.z },
-  ];
+  return {
+    leadIn: { x: exit.x + facing * HQ_STAGING_LEAD_AHEAD, z: exit.z },
+    loop: [
+      { x: exit.x + facing * HQ_STAGING_NEAR_AHEAD, z: exit.z + s * HQ_STAGING_SIDE },
+      { x: exit.x + facing * HQ_STAGING_FAR_AHEAD, z: exit.z + s * HQ_STAGING_SIDE },
+    ],
+  };
 }
 
 function hqBox(
