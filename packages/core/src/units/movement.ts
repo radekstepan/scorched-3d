@@ -1,3 +1,4 @@
+import { terrainDetour } from "./detour.js";
 import { CELL_PIXELS } from "../terrain/types.js";
 import { mulberry32 } from "../terrain/noise.js";
 import { HULL_TURN_RATE, stepAngle, turnAuthority, wrapAngle, yawToTarget } from "./facing.js";
@@ -340,6 +341,8 @@ export interface Mover {
    * orders, holds and recoil bypass it; new orders/holds clear it.
    */
   motion?: { x: number; z: number; crowd?: true };
+  /** Persistent local recovery route, tied to the intent that requested it. */
+  detour?: { target: RoutePoint; points: RoutePoint[]; at: number };
 }
 
 /**
@@ -496,7 +499,7 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
   // A player order supersedes any departure and any separation coast: the
   // hull never resumes either — explicit new intent wins over a glide.
-  const { leadIn: _superseded, sep: _glide, motion: _motion, ...rest } = clearThreat(mover);
+  const { leadIn: _superseded, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
   const calm = rest;
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
   const order: MoveOrder =
@@ -510,7 +513,7 @@ export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: numb
 export function holdMover(mover: Mover): Mover {
   // A hold supersedes any departure and any separation coast like an order
   // does: nothing resumes them, so a held hull stops crisply.
-  const { leadIn: _superseded, sep: _glide, motion: _motion, ...rest } = clearThreat(mover);
+  const { leadIn: _superseded, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
   return { ...rest, order: undefined, hold: true };
 }
 
@@ -1165,7 +1168,16 @@ function driveToward(
   order?: MoveOrder,
   crush?: CrushContext | null,
 ): { mover: Mover; skipped: boolean } {
-  const desired = yawToTarget(mover, target);
+  let detour = mover.detour;
+  // Small live-target motion must not flip the chosen side of an obstacle.
+  if (detour && Math.hypot(detour.target.x - target.x, detour.target.z - target.z) > CELL_PIXELS * 2) detour = undefined;
+  if (detour) {
+    let at = detour.at;
+    while (at < detour.points.length && Math.hypot(detour.points[at]!.x - mover.x, detour.points[at]!.z - mover.z) <= 4) at++;
+    detour = at < detour.points.length ? { ...detour, at } : undefined;
+  }
+  const steering = detour?.points[detour.at] ?? target;
+  const desired = yawToTarget(mover, steering);
   // Group cohesion: orders issued together cap faster members at the
   // slowest member's base speed, so the column moves as a group. Single
   // orders carry no cap and drive at full kind speed. The cap only ever
@@ -1191,7 +1203,11 @@ function driveToward(
   // ploughing a fresh lane reads much slower than brushing canopy.
   const strideFor = (want: number): number => {
     const grip = Math.max(GRIP_FLOOR, Math.cos(wrapAngle(want - mover.hull)));
-    const stride = top * Math.max(spacing, 0) * grip * dt;
+    // Recovery corners need a pivot before rolling: the usual grip floor
+    // can orbit a nearby via point forever, or cut back into the obstacle.
+    const recoveryGrip = detour && Math.cos(wrapAngle(want - mover.hull)) < 0.7 ? 0 : grip;
+    const stride = Math.min(top * Math.max(spacing, 0) * recoveryGrip * dt,
+      detour ? Math.hypot(steering.x - mover.x, steering.z - mover.z) : Infinity);
     const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(mover.hull) * stride, mover.z + Math.cos(mover.hull) * stride) : 1;
     const probeX = mover.x + Math.sin(mover.hull) * stride * rough;
     const probeZ = mover.z + Math.cos(mover.hull) * stride * rough;
@@ -1209,6 +1225,7 @@ function driveToward(
   const baseFor = (hull: number): Pick<Mover, "hull" | "leg"> & Partial<Mover> => ({
     hull,
     leg: mover.leg,
+    ...(detour ? { detour } : {}),
     ...(order ? { order } : {}),
     ...(mover.hold ? { hold: true as const } : {}),
   });
@@ -1242,6 +1259,12 @@ function driveToward(
       };
     }
     return { mover: { x: direct.nx, z: direct.nz, ...baseFor(direct.hull), stuck: 0 }, skipped: false };
+  }
+  // Recover isolated dry obstacles once, then follow the same route until
+  // it is consumed. Shorelines retain their existing bounded slide policy.
+  if (!detour && (mover.stuck ?? 0) <= 0 && !destinationTooWet(terrain, direct.nx, direct.nz)) {
+    const points = terrainDetour(terrain, mover, target);
+    if (points) return driveToward(kind, { ...mover, detour: { target: { ...target }, points, at: 0 } }, target, dt, spacing, terrain, order, crush);
   }
   // Ordered hulls beached on a shoreline edge around the water instead of
   // grinding nose-on: fan headings around the turned hull heading
@@ -1286,7 +1309,7 @@ function driveToward(
   // Wood never pins — crush steps above always drive — so only walls wait.
   // Nothing rolls, so the pivot runs at the floor: deliberate, never a whip.
   const stuck = (mover.stuck ?? 0) + dt;
-  const base = baseFor(turnHull(kind, mover.hull, desired, dt, 0));
+  const base = { ...baseFor(turnHull(kind, mover.hull, desired, dt, 0)), detour };
   if (!order && stuck >= BLOCKED_SKIP_AFTER) return { mover: { ...mover, ...base }, skipped: true };
   return { mover: { ...mover, ...base, stuck }, skipped: false };
 }

@@ -12,6 +12,8 @@ Autonomous units combine forward drive, collision separation and the short exit 
 
 Firing lines keep their seats when nearby units leave no room for routine circling. Genuine clearer firing positions and flanks still allow a shuffle, provided its whole travel lane clears nearby hulls and earlier reserved shuffles. Isolated duels retain their combat movement.
 
+When a dry terrain obstacle blocks a unit, it searches a bounded 21×21-cell neighbourhood and follows a persistent detour around the outcrop. Patrols, pursuits and orders share this recovery. The unit keeps its chosen side while nearby targets move, pivots before tight corners, and resumes its original destination after clearing the obstacle. Searches that cannot cross a large barrier retain the existing patrol skip or ordered hold behavior; shoreline sliding is unchanged. New orders and holds discard the recovery route.
+
 ## Command interface
 
 The battlefield sits inside an RTS command shell inspired by the sibling Stumpy model viewer: olive instrument panels, lime accents, fine dividers and condensed headings. The header holds the game-view navigation and current build version; the left rail holds the operation, world presets and live radar; the right rail holds view controls, the probe, live unit counts and expandable terrain diagnostics. Both rails scroll independently, leaving the central canvas and its selection tray unobstructed on desktop.
