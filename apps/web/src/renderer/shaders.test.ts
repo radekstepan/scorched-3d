@@ -458,19 +458,17 @@ describe("territory overlay", () => {
   });
 });
 
-describe("gated calm water", () => {
-  it("terrain underwater tint + caustics render only with water on", () => {
-    expect(terrainFragment).toContain("uniform float showWater;");
-    expect(terrainFragment).toContain("showWater > 0.5 && vWorld.y < waterY");
+describe("always-on calm water", () => {
+  it("terrain underwater tint + caustics render below the waterline, no toggle", () => {
+    // The Water toggle is gone: water always renders, so the shader has no
+    // showWater uniform and the underwater branch keys on depth alone.
+    expect(terrainFragment).not.toContain("showWater");
+    expect(terrainFragment).toContain("if (vWorld.y < waterY) {");
   });
 
-  it("canvas drives the terrain water toggle with the surface visibility", () => {
-    expect(canvasSource).toContain(
-      "showWater: { value: options.showWater && map.seaLevel > 0 ? 1 : 0 }",
-    );
-    expect(canvasSource).toContain(
-      "terrainMat.uniforms.showWater!.value = opt.showWater && map.seaLevel > 0 ? 1 : 0;",
-    );
+  it("canvas gates the water surface on sea level only", () => {
+    expect(canvasSource).not.toContain("showWater");
+    expect(canvasSource).toContain("water.visible = map.seaLevel > 0;");
   });
 
   it("swell runs low and slow (halved chop)", () => {

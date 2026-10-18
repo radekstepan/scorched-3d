@@ -64,7 +64,6 @@ export default function App() {
     const sound = loadSoundPrefs(typeof localStorage === "undefined" ? undefined : localStorage);
     return {
       exaggeration: DEFAULT_EXAGGERATION,
-      showWater: true,
       showFeatures: true,
       showWire: false,
       showContours: false,
@@ -403,7 +402,6 @@ export default function App() {
             step={0.1}
             onChange={(v) => patch({ zoomSpeed: v })}
           />
-          <Toggle label="Water" on={options.showWater} onClick={() => patch({ showWater: !options.showWater })} />
           <Toggle label="Night" on={options.nightMode} onClick={() => patch({ nightMode: !options.nightMode })} />
           <Toggle label="Features" on={options.showFeatures} onClick={() => patch({ showFeatures: !options.showFeatures })} />
           <Toggle label="Wireframe" on={options.showWire} onClick={() => patch({ showWire: !options.showWire })} />

@@ -247,7 +247,6 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         seaLevel: { value: map.seaLevel },
         exaggeration: { value: effectiveExaggeration(options.exaggeration) },
         showContours: { value: 0 },
-        showWater: { value: options.showWater && map.seaLevel > 0 ? 1 : 0 },
         time: { value: 0 },
         sunDir: { value: SUN.clone() },
         sunColor: { value: new THREE.Color(1.0, 0.93, 0.78) },
@@ -376,11 +375,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // its own stream, hidden at night). The rest surface folds the water
     // sheet in, so banks over lakes read as lake mist instead of sinking
     // under the sheet; the closure reads live heights, so resnaps track.
-    // Fold the sheet in only while it renders (same condition as the
-    // water mesh): with water hidden there is no sheet to stay out of.
+    // Fold the sheet in while it renders (same condition as the water
+    // mesh): banks over lakes read as lake mist instead of sinking under it.
     const fogSurface = (x: number, z: number): number => {
       const g = groundY(x, z);
-      return optsRef.current.showWater && map.seaLevel > 0 ? Math.max(g, water.position.y) : g;
+      return map.seaLevel > 0 ? Math.max(g, water.position.y) : g;
     };
     const dayFog = new DayFogFx(
       scene,
@@ -1200,14 +1199,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       terrainMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       terrainMat.uniforms.showTerritory!.value = opt.showTerritory ? 1 : 0;
       terrainMat.uniforms.showContours!.value = opt.showContours ? 1 : 0;
-      terrainMat.uniforms.showWater!.value = opt.showWater && map.seaLevel > 0 ? 1 : 0;
       terrainMat.uniforms.time!.value = t;
       waterMat.uniforms.exaggeration!.value = effectiveExaggeration(opt.exaggeration);
       waterMat.uniforms.time!.value = t;
       // Hull valley band tracks the height slider with the terrain shaders.
       unitFogUniforms.waterY.value = worldHeight(map.seaLevel, opt.exaggeration);
       unitFogUniforms.exaggeration.value = effectiveExaggeration(opt.exaggeration);
-      water.visible = opt.showWater && map.seaLevel > 0;
+      water.visible = map.seaLevel > 0;
       trees.visible = opt.showFeatures;
       rocks.visible = opt.showFeatures;
       if (opt.nightMode !== lastNight) {
@@ -1344,7 +1342,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // Lift eye and focus together: terrain/water safety must preserve the
       // selected orbit angle and distance, including on slopes at close zoom.
       const surfaceY =
-        opt.showWater && map.seaLevel > 0
+        map.seaLevel > 0
           ? Math.max(groundY(camera.position.x, camera.position.z), water.position.y)
           : groundY(camera.position.x, camera.position.z);
       liftCameraRigAboveSurface(

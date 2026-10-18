@@ -29,7 +29,6 @@ export const terrainFragment = /* glsl */ `
   uniform float seaLevel;
   uniform float exaggeration;
   uniform float showContours;
-  uniform float showWater;
   uniform float time;
   uniform vec3 sunDir;
   uniform vec3 sunColor;
@@ -79,9 +78,9 @@ export const terrainFragment = /* glsl */ `
     vec3 color = albedo * (hemi * 0.52 + sunColor * wrap * 0.78);
 
     float waterY = seaLevel * exaggeration;
-    // Water toggle: with the surface hidden the seabed renders dry — the
-    // wet tint + caustics would otherwise linger as animated "blotches".
-    if (showWater > 0.5 && vWorld.y < waterY) {
+    // Water always renders: the seabed below the waterline takes the wet
+    // tint + caustics unconditionally.
+    if (vWorld.y < waterY) {
       float depth = waterY - vWorld.y;
       float wet = clamp(depth * 0.025, 0.0, 0.82);
       color = mix(color, vec3(0.04, 0.16, 0.26), wet);

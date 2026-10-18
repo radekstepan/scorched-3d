@@ -114,7 +114,6 @@ export interface HoverInfo {
 
 export interface ViewOptions {
   exaggeration: number;
-  showWater: boolean;
   showFeatures: boolean;
   showWire: boolean;
   showContours: boolean;
