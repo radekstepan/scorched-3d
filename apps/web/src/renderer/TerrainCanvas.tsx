@@ -118,7 +118,7 @@ import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { StandsCache } from "./stands";
 import { computeUnitVisibility } from "./viewCull";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
-import { CombatEventTracker, followBattleStep, followSuppressed } from "./followBattle";
+import { CombatEventTracker, FollowHoldTracker, followBattleStep, followSuppressed } from "./followBattle";
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
@@ -923,6 +923,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // First real gesture unlocks the audio device (autoplay policy);
       // later calls are a no-op once the device is running.
       sound.unlock();
+      // Follow-battle hold: a right-button press (or a second touch
+      // contact) hands the camera to the pan gesture; rotate/zoom contacts
+      // never engage the hold. Fed before the button filter so every
+      // contact is tracked.
+      followHold.pointerDown(ev.button, ev.pointerId, ev.pointerType);
       if (ev.button !== 0 && ev.button !== 2) return;
       down = { x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey };
       boxing = false;
@@ -961,6 +966,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const onPointerUp = (ev: PointerEvent) => {
       const wasDown = down;
       down = null;
+      // Follow-battle hold: releasing the last pan contact stamps the
+      // resume delay — except a right-button click, which is a unit order
+      // (not a drag) and must not pause the glide. Rotate/zoom releases
+      // never reach the tracker. Runs before the suspended return so the
+      // hold can never stick across a suspend.
+      const panEnded = followHold.pointerUp(ev.pointerId);
+      const releaseMoved = wasDown ? Math.hypot(ev.clientX - wasDown.x, ev.clientY - wasDown.y) : 0;
+      if (panEnded && !(wasDown?.button === 2 && releaseMoved < CLICK_DRAG_PX)) {
+        followLastManual = followBattleT;
+      }
       // Shift-drag may have disabled orbiting mid-gesture: always restore.
       const wasBoxing = boxing;
       boxing = false;
@@ -968,7 +983,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       boxEl.style.display = "none";
       if (suspendedRef.current) return;
       if (!wasDown || ev.button !== wasDown.button) return;
-      const moved = Math.hypot(ev.clientX - wasDown.x, ev.clientY - wasDown.y);
+      const moved = releaseMoved;
       if (wasBoxing) {
         if (wasDown.button === 0) {
           const rect = canvasRect();
@@ -1051,21 +1066,23 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // the hover gate on every orbit/zoom update (fires only while the camera
     // actually moves, so a settled camera costs nothing).
     controls.addEventListener("change", markHoverDirty);
-    // Follow-battle hold: orbit/drag/zoom gestures own the camera while
-    // they run (start/end bracket the whole gesture, however long the drag).
+    // Follow-battle hold: only pan gestures own the camera (right-drag,
+    // or multi-touch which pans) — rotate and zoom compose with the rigid
+    // follow glide, so they never pause it. OrbitControls' start/end events
+    // carry no gesture type (and fire once per wheel tick), so the hold
+    // tracks the raw pointer buttons instead; the button mapping is the
+    // stock left-rotates / middle-dollies / right-pans default.
     let followBattleT = 0;
-    let followUserDriving = false;
+    const followHold = new FollowHoldTracker();
     let followLastManual = Number.NEGATIVE_INFINITY;
-    const onFollowStart = (): void => {
-      followUserDriving = true;
+    // A cancelled gesture (touch interruption) releases its contacts like
+    // a pointerup so the pan hold can never stick; a cancelled pan still
+    // moved the camera, so it stamps the resume delay unconditionally.
+    const onPointerCancel = (ev: PointerEvent): void => {
+      if (followHold.pointerUp(ev.pointerId)) followLastManual = followBattleT;
     };
-    const onFollowEnd = (): void => {
-      followUserDriving = false;
-      followLastManual = followBattleT;
-    };
-    controls.addEventListener("start", onFollowStart);
-    controls.addEventListener("end", onFollowEnd);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
     const onContextMenu = (ev: Event): void => {
       ev.preventDefault();
     };
@@ -1097,6 +1114,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       boxEl.style.display = "none";
       controls.enabled = false;
       hoverGate.leave();
+      followHold.reset();
     };
     const onKeyUp = (ev: KeyboardEvent) => {
       pressed.delete(ev.code);
@@ -1260,11 +1278,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // Follow-battle camera (View menu): glide the orbit rig toward the
       // centroid of recent impacts through the keyboard-pan path — rigid
       // translation of camera + target, same edge clamps — so yaw/pitch/
-      // zoom survive and the mode-off path is untouched. Manual input
-      // pauses the glide (see FOLLOW_RESUME_DELAY); a quiet field leaves
-      // the camera resting instead of drifting to a stale point.
+      // zoom survive and the mode-off path is untouched. Pan input pauses
+      // the glide (see FOLLOW_RESUME_DELAY): keyboard pans, right-drag
+      // pans, and minimap jumps borrow the camera, while rotate and zoom
+      // gestures compose with the glide and never pause it. A quiet field
+      // leaves the camera resting instead of drifting to a stale point.
       followTracker.tick(dt);
-      if (opt.followBattle && !followSuppressed(t, followLastManual, followUserDriving)) {
+      if (opt.followBattle && !followSuppressed(t, followLastManual, followHold.userPanning)) {
         const centroid = followTracker.centroid();
         if (centroid) {
           const step = followBattleStep(
@@ -1534,12 +1554,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       controls.removeEventListener("change", markHoverDirty);
-      controls.removeEventListener("start", onFollowStart);
-      controls.removeEventListener("end", onFollowEnd);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();
       renderer.dispose();

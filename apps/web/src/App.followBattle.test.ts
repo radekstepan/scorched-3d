@@ -35,9 +35,9 @@ describe("follow-battle tick wiring", () => {
     expect(canvasSource).toContain("followTracker.tick(dt);");
   });
 
-  it("glides only while the toggle is on and no manual input holds the camera", () => {
+  it("glides only while the toggle is on and no pan gesture holds the camera", () => {
     expect(canvasSource).toContain(
-      "if (opt.followBattle && !followSuppressed(t, followLastManual, followUserDriving)) {",
+      "if (opt.followBattle && !followSuppressed(t, followLastManual, followHold.userPanning)) {",
     );
     expect(canvasSource).toContain("const centroid = followTracker.centroid();");
   });
@@ -54,17 +54,39 @@ describe("follow-battle tick wiring", () => {
 });
 
 describe("follow-battle manual-input hold", () => {
-  it("brackets orbit/drag/zoom gestures with start/end listeners", () => {
-    expect(canvasSource).toContain('controls.addEventListener("start", onFollowStart);');
-    expect(canvasSource).toContain('controls.addEventListener("end", onFollowEnd);');
-    expect(canvasSource).toContain('controls.removeEventListener("start", onFollowStart);');
-    expect(canvasSource).toContain('controls.removeEventListener("end", onFollowEnd);');
+  it("tracks pan gestures from raw pointer buttons, not controls start/end", () => {
+    // start/end carry no gesture type and fire once per wheel tick, so a
+    // zoom or rotate must never engage the hold — only right-drag and
+    // multi-touch pan contacts feed the tracker.
+    expect(canvasSource).toContain("const followHold = new FollowHoldTracker();");
+    expect(canvasSource).toContain("followHold.pointerDown(ev.button, ev.pointerId, ev.pointerType);");
+    expect(canvasSource).toContain("const panEnded = followHold.pointerUp(ev.pointerId);");
+    expect(canvasSource).not.toContain('controls.addEventListener("start"');
+    expect(canvasSource).not.toContain('controls.addEventListener("end"');
+    expect(canvasSource).not.toContain("followUserDriving");
+    expect(canvasSource).not.toContain("onFollowStart");
+    expect(canvasSource).not.toContain("onFollowEnd");
   });
 
-  it("stamps keyboard pans and minimap jumps as manual input", () => {
-    // followLastManual is written in three places: keyboard pan, minimap
-    // jump, and gesture end. All three must survive future edits.
+  it("releases cancelled gestures and resets the hold when input clears", () => {
+    // A missed release would hold follow off forever: pointercancel feeds
+    // the tracker like a pointerup, and the suspend path resets it.
+    expect(canvasSource).toContain('window.addEventListener("pointercancel", onPointerCancel);');
+    expect(canvasSource).toContain('window.removeEventListener("pointercancel", onPointerCancel);');
+    expect(canvasSource).toContain("followHold.reset();");
+  });
+
+  it("stamps keyboard pans, pan-gesture ends, and minimap jumps as manual input", () => {
+    // followLastManual is written in four places: keyboard pan, minimap
+    // jump, pan-gesture release, and gesture cancel. All four must survive
+    // future edits.
     const writes = canvasSource.match(/followLastManual = (t|followBattleT);/g) ?? [];
-    expect(writes).toHaveLength(3);
+    expect(writes).toHaveLength(4);
+  });
+
+  it("never stamps a right-button click (a unit order, not a drag)", () => {
+    // Ordering units mid-battle must not pause the glide: only releases
+    // past the click/drag threshold stamp the resume delay.
+    expect(canvasSource).toContain("wasDown?.button === 2 && releaseMoved < CLICK_DRAG_PX");
   });
 });

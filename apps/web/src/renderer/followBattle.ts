@@ -22,9 +22,11 @@ export const FOLLOW_GAIN = 2.5;
 /** Inside this ground distance of the centroid the camera rests (no jitter). */
 export const FOLLOW_DEADZONE = 8;
 /**
- * Manual camera input (keyboard pan, orbit/drag/zoom gesture, minimap
- * jump) pauses the glide for this long, then follow resumes on its own.
- * The toggle stays on: the user borrows the camera, never loses the mode.
+ * Manual pan input (keyboard pan, drag-pan gesture, minimap jump) pauses
+ * the glide for this long, then follow resumes on its own. The toggle
+ * stays on: the user borrows the camera, never loses the mode. Rotate and
+ * zoom gestures never pause the glide — they compose with the rigid
+ * translation instead of fighting it.
  */
 export const FOLLOW_RESUME_DELAY = 3;
 
@@ -86,9 +88,59 @@ export class CombatEventTracker {
 }
 
 /**
- * True while manual input owns the camera: during an orbit/drag/zoom
+ * Which pointer gestures own the camera against follow-battle. The canvas
+ * keeps OrbitControls on its stock button mapping (left rotates, middle
+ * dollies, right pans, one finger rotates, two fingers dolly-pan), so a
+ * pan hold is exactly: a right-button contact down, or two or more live
+ * touch contacts. Rotate and zoom contacts never feed this tracker, and
+ * the wheel feeds nothing at all — follow glides straight through them.
+ *
+ * Framework-free (no DOM types) so vitest covers it without WebGL: the
+ * canvas feeds raw `button`/`pointerId`/`pointerType` triples.
+ */
+export class FollowHoldTracker {
+  /** Right-button (pan) contacts currently down, by pointer id. */
+  private panButtons = new Set<number>();
+  /** Live touch contacts, by pointer id (two fingers pan). */
+  private touches = new Set<number>();
+
+  pointerDown(button: number, pointerId: number, pointerType: string): void {
+    if (pointerType === "touch") {
+      this.touches.add(pointerId);
+      return;
+    }
+    if (button === 2) this.panButtons.add(pointerId);
+  }
+
+  /**
+   * Release a contact. Returns true when a pan hold ended with this
+   * release (was panning, now not) so the caller can stamp the resume
+   * delay. Feed pointercancel here too — OrbitControls balances its own
+   * gesture state the same way, and a missed release would hold follow
+   * off forever.
+   */
+  pointerUp(pointerId: number): boolean {
+    const was = this.userPanning;
+    this.panButtons.delete(pointerId);
+    this.touches.delete(pointerId);
+    return was && !this.userPanning;
+  }
+
+  /** True while a pan gesture owns the camera. */
+  get userPanning(): boolean {
+    return this.panButtons.size > 0 || this.touches.size >= 2;
+  }
+
+  reset(): void {
+    this.panButtons.clear();
+    this.touches.clear();
+  }
+}
+
+/**
+ * True while manual pan input owns the camera: during a drag-pan
  * gesture, or within FOLLOW_RESUME_DELAY of the last keyboard pan,
- * gesture end, or minimap jump. Follow motion is skipped, not queued —
+ * pan-gesture end, or minimap jump. Follow motion is skipped, not queued —
  * the centroid keeps updating underneath, so resume glides to live action.
  */
 export function followSuppressed(now: number, lastManualInput: number, userDriving: boolean): boolean {

@@ -5,6 +5,7 @@ import {
   FOLLOW_EVENT_WINDOW,
   FOLLOW_MAX_EVENTS,
   FOLLOW_RESUME_DELAY,
+  FollowHoldTracker,
   followBattleStep,
   followSuppressed,
 } from "./followBattle";
@@ -85,6 +86,94 @@ describe("followSuppressed", () => {
   it("never suppresses on non-finite clocks", () => {
     expect(followSuppressed(Number.NaN, 0, false)).toBe(false);
     expect(followSuppressed(0, Number.NaN, false)).toBe(false);
+  });
+});
+
+describe("FollowHoldTracker", () => {
+  it("starts idle and ignores releases of unknown contacts", () => {
+    const hold = new FollowHoldTracker();
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(999)).toBe(false);
+    expect(hold.userPanning).toBe(false);
+  });
+
+  it("holds while a right-button contact is down, ending on its release", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(2, 1, "mouse");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(1)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+    // A second release of the same contact ends nothing.
+    expect(hold.pointerUp(1)).toBe(false);
+  });
+
+  it("ignores rotate/zoom contacts: left, middle, and pen barrel-less buttons", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(0, 1, "mouse");
+    hold.pointerDown(1, 2, "mouse");
+    hold.pointerDown(0, 3, "pen");
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(1)).toBe(false);
+    expect(hold.pointerUp(2)).toBe(false);
+    expect(hold.pointerUp(3)).toBe(false);
+  });
+
+  it("treats a pen right button like a mouse pan", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(2, 7, "pen");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(7)).toBe(true);
+  });
+
+  it("treats a missing pointer type as a mouse (button decides)", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(2, 7, "");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(7)).toBe(true);
+  });
+
+  it("holds only once two touch contacts are down (one finger rotates)", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(0, 10, "touch");
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(10)).toBe(false);
+    hold.pointerDown(0, 10, "touch");
+    hold.pointerDown(0, 11, "touch");
+    expect(hold.userPanning).toBe(true);
+    // Dropping back to one finger ends the pan hold.
+    expect(hold.pointerUp(11)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(10)).toBe(false);
+  });
+
+  it("stays held while any pan contact remains", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(2, 1, "mouse");
+    hold.pointerDown(0, 10, "touch");
+    hold.pointerDown(0, 11, "touch");
+    expect(hold.pointerUp(1)).toBe(false);
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(10)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+  });
+
+  it("a third touch finger keeps the hold when one lifts", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(0, 10, "touch");
+    hold.pointerDown(0, 11, "touch");
+    hold.pointerDown(0, 12, "touch");
+    expect(hold.pointerUp(10)).toBe(false);
+    expect(hold.userPanning).toBe(true);
+  });
+
+  it("reset drops every contact (suspend path)", () => {
+    const hold = new FollowHoldTracker();
+    hold.pointerDown(2, 1, "mouse");
+    hold.pointerDown(0, 10, "touch");
+    hold.reset();
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(1)).toBe(false);
+    expect(hold.pointerUp(10)).toBe(false);
   });
 });
 
