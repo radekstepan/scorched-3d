@@ -69,6 +69,8 @@ export default function App() {
     panSpeed: 1,
     zoomSpeed: 1,
     nightMode: false,
+    muted: false,
+    volume: 0.8,
   });
 
   // Cache selection-tray thumbnails on load (one idle-chunked 3D render
@@ -380,6 +382,19 @@ export default function App() {
           <Toggle label="Territory" on={options.showTerritory} onClick={() => patch({ showTerritory: !options.showTerritory })} />
           <Toggle label="Follow battle" on={options.followBattle} onClick={() => patch({ followBattle: !options.followBattle })} />
           <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
+        </div>
+
+        <div className="hud-panel mt-3 space-y-3 p-3">
+          <Label>Sound</Label>
+          <Toggle label="Mute" on={options.muted} onClick={() => patch({ muted: !options.muted })} />
+          <Slider
+            label="Volume"
+            value={options.volume}
+            min={0}
+            max={1}
+            step={0.05}
+            onChange={(v) => patch({ volume: v })}
+          />
         </div>
 
         <div className="hud-panel mt-3 p-3">

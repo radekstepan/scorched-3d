@@ -133,6 +133,10 @@ export interface ViewOptions {
   zoomSpeed: number;
   /** Moonlit night palette with fireflies instead of daylight. */
   nightMode: boolean;
+  /** Mute every battle sound (the synth stays parked, visuals untouched). */
+  muted: boolean;
+  /** Master battle-sound volume 0..1 (per-cue distance attenuation applies on top). */
+  volume: number;
 }
 
 /**

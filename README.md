@@ -16,6 +16,8 @@ Each team owns one factory. The factory opens its door at fixed times. Then it s
 
 Every shot changes the field. Each blast burns the ground and leaves a black mark. Trees catch fire and the fire spreads to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
 
+The battle has sound. Guns crack and shells thump, blasts boom, and zooming in makes it louder. The Sound panel holds mute and volume.
+
 ## Start the game
 
 Do these steps to start the game:

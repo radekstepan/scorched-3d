@@ -901,6 +901,27 @@ export class CombatFx {
    */
   onCombatEvent: ((x: number, z: number) => void) | null = null;
   /**
+   * Fired once per round leaving the muzzle with the muzzle's world position,
+   * the firing kind, and the weapon mode (the peewee's close-range grenade
+   * lob thumps instead of cracking), so the canvas can voice the gunshot
+   * through the positional sound synth. Assigned by the canvas; null in
+   * headless tests. View-only: nothing downstream reads it back.
+   */
+  onShotFired:
+    | ((x: number, y: number, z: number, kind: UnitKind, attack: AttackMode) => void)
+    | null = null;
+  /**
+   * Fired once per blast with the impact's world position, the firing kind,
+   * whether it stages the epic death stack, and the weapon mode, so the
+   * canvas can voice the explosion through the positional sound synth.
+   * Every blast reports — hostile volleys, wreck cook-offs, and structure
+   * detonations alike. Assigned by the canvas; null in headless tests.
+   * View-only: nothing downstream reads it back.
+   */
+  onExplosion:
+    | ((x: number, y: number, z: number, kind: UnitKind, epic: boolean, attack: AttackMode) => void)
+    | null = null;
+  /**
    * Consecutive tree-stuck rounds per attacker: every round live wood
    * swallows increments its gunner's count, every round that reaches its
    * impact clears it. On `FOREST_STICK_REPOSITION_HITS` the gun reports an
@@ -2686,6 +2707,7 @@ export class CombatFx {
     this.spawnMuzzle(start, roundColor, roundFlash, kind === "peewee" ? PEEWEE_BULLET_SCALE : 1);
     this.kickLight(start, roundColor, kind === "peewee" ? 2600 * PEEWEE_BULLET_SCALE : 2600);
     this.kickRecoil(attackerIdx, attacker, barrelDir);
+    this.onShotFired?.(start.x, start.y, start.z, kind, attack);
     return true;
   }
 
@@ -2841,6 +2863,9 @@ export class CombatFx {
     hostile = true,
     attack: AttackMode = "round",
   ): void {
+    // Sound reports before the pool eviction: even a blast that pushes the
+    // oldest visual out still thumps (the voice pool throttles by itself).
+    this.onExplosion?.(at.x, at.y, at.z, kind, epic, attack);
     if (this.explosions.length >= MAX_EXPLOSIONS) {
       const oldest = this.explosions.shift();
       if (oldest) this.removeExplosion(oldest);

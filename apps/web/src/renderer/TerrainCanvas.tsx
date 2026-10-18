@@ -47,6 +47,7 @@ import {
 } from "./shaders";
 import { buildUnits, buildSpawnedUnit, hideUnitCircles, setTeamRingSelected } from "./units";
 import { CombatFx } from "./combatFx";
+import { SoundFx, stereoPan } from "./sound";
 import { hqFacingFor, hqStagingRoute, type HqStagingSide } from "./hq";
 import { HqFx, type HqStatus } from "./hqFx";
 import { applyCraters } from "./craters";
@@ -540,6 +541,32 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       },
     });
     combat.setExternalHull(true);
+    // Battle sound: every shot/blast/death voices a synthesized cue through
+    // the positional synth — attenuated by camera distance (zooming in makes
+    // the battle louder) and panned by camera-relative bearing. View-only:
+    // combat fires the hooks, nothing reads back. The device unlocks on the
+    // first real gesture (autoplay policy); muted parks the synth silently.
+    const sound = new SoundFx();
+    const soundScratch = new THREE.Vector3();
+    const soundAt = (x: number, y: number, z: number): { distance: number; pan: number } => ({
+      distance: camera.position.distanceTo(soundScratch.set(x, y, z)),
+      pan: stereoPan(
+        camera.position.x,
+        camera.position.z,
+        controls.target.x,
+        controls.target.z,
+        x,
+        z,
+      ),
+    });
+    combat.onShotFired = (x, y, z, kind, attack) => {
+      const s = soundAt(x, y, z);
+      sound.playShot(kind, attack, s.distance, s.pan);
+    };
+    combat.onExplosion = (x, y, z, kind, epic, attack) => {
+      const s = soundAt(x, y, z);
+      sound.playExplosion(kind, attack, epic, s.distance, s.pan);
+    };
     // Team HQs: one fortified bunker per side at its map end (Blue west,
     // Orange east, doors facing the map center). Each live HQ slides its
     // door up every interval and releases a reinforcement at its door that
@@ -593,6 +620,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           health.setCount(units.children.length);
           occlusion.setKinds(placed.map((u) => u.kind));
           waypoints.setRoutes(routes);
+          const heard = soundAt(x, groundY(x, z), z);
+          sound.playSpawn(heard.distance, heard.pan);
         },
         onKilled: (index) => {
           // Epic burst at the fort through the shared stack (non-hostile, so
@@ -701,6 +730,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // instance over its slow decay; the scorch scar stays).
     combat.onUnitKilled = (index) => {
       movement.markDestroyed(index);
+      // The death cue rides on top of the epic blast already voiced through
+      // `onExplosion` — blast plus tearing metal reads as a kill, not a hit.
+      const wreck = units.children[index];
+      if (wreck) {
+        const heard = soundAt(wreck.position.x, wreck.position.y, wreck.position.z);
+        sound.playDeath(heard.distance, heard.pan);
+      }
       // Circles drop with the hull: the team ring + selection beacon hide
       // immediately (the husk still smoulders until decay). Combat already
       // hides them in `poseWreck`; this is belt-and-braces for hook order.
@@ -865,6 +901,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     let boxing = false;
     const onPointerDown = (ev: PointerEvent) => {
       if (suspendedRef.current) return;
+      // First real gesture unlocks the audio device (autoplay policy);
+      // later calls are a no-op once the device is running.
+      sound.unlock();
       if (ev.button !== 0 && ev.button !== 2) return;
       down = { x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey };
       boxing = false;
@@ -966,11 +1005,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           }
           const at = movement.positions()[order.target];
           if (at) addPing(at.x, at.z, ATTACK_PING_COLOR);
+          sound.playAck();
         } else {
           const point = pickGround(ev.clientX, ev.clientY);
           if (point) {
             movement.orderGroup(selection, { x: point.x, z: point.z });
             addPing(point.x, point.z);
+            sound.playAck();
           }
         }
       }
@@ -1015,6 +1056,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     const pressed = new Set<string>();
     const onKeyDown = (ev: KeyboardEvent) => {
       if (suspendedRef.current) return;
+      sound.unlock();
       if (ev.code === "Escape") {
         applySelection([]);
         return;
@@ -1215,6 +1257,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
       // View-menu sliders: OrbitControls reads panSpeed/zoomSpeed live, so
       // re-sync every tick (options arrive via ref, not effect re-runs).
+      // The Sound panel rides the same path (mute + master volume).
+      sound.setMuted(opt.muted);
+      sound.setVolume(opt.volume);
       controls.panSpeed = effectiveDragPanSpeed(opt.panSpeed, camera.position.distanceTo(controls.target));
       if (controls.zoomSpeed !== effectiveZoomSpeed(opt.zoomSpeed)) {
         controls.zoomSpeed = effectiveZoomSpeed(opt.zoomSpeed);
@@ -1443,6 +1488,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       occlusion.dispose();
       disposeOcclusionAssets();
       combat.dispose();
+      sound.dispose();
       fire.dispose();
       fireflies.dispose();
       dayFog.dispose();
