@@ -16,6 +16,4 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Sometimes units are in a forest. Hard to shoot them. The projectiles and explosions should not just start fires but also destroy some trees etc. so that we can "get" to a unit.
-
-If a unit keeps hitting trees and there is a way round them it should move so that it has clear path to enemy.
+...
