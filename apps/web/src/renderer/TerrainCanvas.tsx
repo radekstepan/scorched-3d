@@ -17,17 +17,18 @@ import {
   composeHeight,
   featureName,
   hqAnchor,
-  igniteTree,
   mulberry32,
   planRoutes,
   placeHqs,
   sampleHeightBilinear,
   seatHull,
+  strikeTreeShot,
   THREAT_ENGAGE_RADIUS,
   territoryShare,
   tickDamage,
   worldHeight,
   worldSize,
+  type AttackMode,
   type BlastSlope,
   type Crater,
   type HoverInfo,
@@ -493,8 +494,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // stands feed the occlusion x-ray below, so view-blocking wood and
       // round-blocking wood can never disagree.
       treeStands: getStands,
-      strikeTree: (fid: number) => {
-        if (igniteTree(damage, fid)) {
+      strikeTree: (fid: number, kind: UnitKind, attack?: AttackMode) => {
+        const res = strikeTreeShot(damage, fid, kind, Math.random, attack);
+        if (res.outcome === "felled") {
+          poseTree(fid);
+          fallen.add(fid);
+          dirtyStands();
+        } else if (res.outcome === "ignited") {
           poseTree(fid);
           glowFire(fid);
         }

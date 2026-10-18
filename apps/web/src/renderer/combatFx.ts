@@ -677,11 +677,13 @@ export interface CombatEnv {
    */
   treeStands?: () => TreeStand[];
   /**
-   * A round stuck in tree `fid`: the canvas ignites/re-poses that tree
-   * through the graduated damage field (shell early bursts already scar
-   * through `blastFeatures`, so this mostly serves stuck bolt embers).
+   * A round stuck in tree `fid`: the canvas resolves the strike through the
+   * graduated damage field (`strikeTreeShot` — the shot fells the tree
+   * outright with its per-kind chance, else ignites it) and re-poses it.
+   * Shell early bursts already scar through `blastFeatures`, so this mostly
+   * serves stuck bolt embers.
    */
-  strikeTree?: (fid: number) => void;
+  strikeTree?: (fid: number, kind: UnitKind, attack?: AttackMode) => void;
   /**
    * A gun tube swept into standing tree `fid`: the canvas fells that tree
    * through `crushTree` (the hull-crush parallel — the tube is part of the
@@ -3230,7 +3232,7 @@ export class CombatFx {
       // cheap. Shells detonate early with the full layered stack (the blast
       // itself damages/ignites the wood); stuck bolts read as an ember
       // caught in the branches (hot pop + pooled-light kick, no blast) and
-      // the canvas ignites the struck tree through the damage field.
+      // the canvas fells-or-ignites the struck tree through the damage field.
       if (stands && stands.length > 0 && shot.age < shot.dur) {
         const q = ballisticPosition(
           { x: shot.start.x, y: shot.start.y, z: shot.start.z },
@@ -3247,7 +3249,7 @@ export class CombatFx {
           this.removeShotVisuals(shot);
           this.shots.splice(this.shots.indexOf(shot), 1);
           this.stuck += 1;
-          this.env?.strikeTree?.(stuckFid);
+          this.env?.strikeTree?.(stuckFid, shot.kind, shot.attack);
           // Forest futility: rounds swallowed in a row prove the lane is
           // blocked, not unlucky — report it so the hull repositions out
           // of the wood (or closer through it) instead of feeding the

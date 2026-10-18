@@ -1646,6 +1646,25 @@ describe("CombatFx tree interception (canopy sticks + lobbed aiming)", () => {
     fx.dispose();
   });
 
+  it("reports stuck rounds with the firing kind so strikes fell like the gun hits", () => {
+    const scene = new THREE.Scene();
+    const units = makeWoodlandPair("flash", "flash");
+    const struck: { fid: number; kind: UnitKind; attack: string }[] = [];
+    const fx = new CombatFx(scene, units, () => 0, {
+      groundY: () => 100,
+      blastFeatures: () => {},
+      treeStands: () => [{ x: 200, z: 0, groundY: 86, standing: true }],
+      strikeTree: (fid, kind, attack) => {
+        struck.push({ fid, kind, attack: attack ?? "round" });
+      },
+    });
+    // Holds escalate to probing shots; rng() === 0 sticks every crossing round.
+    for (let n = 0; n < 1200 && struck.length === 0; n++) fx.update(1 / 60);
+    expect(struck.length).toBeGreaterThan(0);
+    expect(struck[0]).toEqual({ fid: 0, kind: "flash", attack: "round" });
+    fx.dispose();
+  });
+
   it("permits a direct trajectory above a standing crown", () => {
     const scene = new THREE.Scene();
     const units = makeWoodlandPair("flash", "flash");

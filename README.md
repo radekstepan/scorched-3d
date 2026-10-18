@@ -16,7 +16,7 @@ Each team owns one factory. The factory opens its door. Then it sends a new unit
 
 Units that destroy enemies earn gold chevrons and fight better. Veterans hit harder and shoot further. Selected veterans show their chevrons in the tray.
 
-Every shot changes the field. Each blast burns the ground and leaves a black mark. Trees catch fire and the fire spreads to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
+Every shot changes the field. Each blast burns the ground and leaves a black mark. Shells knock trees flat and follow-up blasts topple burnt wood, so sustained fire clears a forest; fires spread to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
 
 The battle has sound. Guns crack and shells thump, blasts boom, and zooming in makes it louder. The Sound panel holds mute and volume, M toggles mute, and the mix is remembered between visits. The sound effects come from Kenney's Interface Sounds and Sci-Fi Sounds packs (CC0, licenses in `apps/web/src/renderer/sfx/`).
 

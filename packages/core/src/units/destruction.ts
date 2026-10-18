@@ -113,6 +113,11 @@ export function scorchForAttack(
  * near its core (topple/stump/snag immediately) and ignites the fringe;
  * fringe fires can spread a short distance to intact neighbours before they
  * burn out, so damage reads as a graduated burn scar, not a binary hole.
+ * Burning wood still stands (it keeps blocking shots and sight), so fire
+ * alone never opens a lane: a later blast anywhere inside its radius knocks
+ * fire-weakened (burning/smouldering) trees flat, and a projectile striking
+ * a tree fells it outright with a per-kind chance (see `strikeTreeShot`) —
+ * sustained fire clears a forest instead of only starting slow burns.
  *
  * Rock pipeline: intact(0) → chipped(1) → cracked/displaced(2) →
  * buried rubble(3). Blasts near the core deal two levels, the fringe one.
@@ -272,12 +277,85 @@ export interface TreeBlastResult {
 }
 
 /**
+ * Direct-hit fell chance: a projectile physically striking a tree (see
+ * `rollTreeStick` in `combat.ts`) knocks it flat with this per-kind
+ * probability instead of merely setting it alight. Shells fell more often
+ * than bolts (mass plus a bursting charge), and the infantry rifle least of
+ * all — but every gun clears some wood, so a duel inside a forest opens its
+ * own lanes instead of feeding the canopy forever.
+ */
+export const PROJECTILE_FELL_CHANCE: Record<UnitKind, number> = {
+  flash: 0.3,
+  stump: 0.35,
+  hammer: 0.6,
+  commander: 0.4,
+  peewee: 0.15,
+};
+
+/**
+ * Fell chance for a peewee grenade lob: the bursting grenade fells like a
+ * light shell — well above the rifle bullet, still below the tank guns.
+ */
+export const PEEWEE_GRENADE_FELL_CHANCE = 0.35;
+
+/** Direct-hit fell chance for a shot: grenade lobs use the lob chance. */
+export function fellChanceForShot(kind: UnitKind, attack: AttackMode = "round"): number {
+  if (attack === "grenade" && kind === "peewee") return PEEWEE_GRENADE_FELL_CHANCE;
+  return PROJECTILE_FELL_CHANCE[kind] ?? 0;
+}
+
+/** Outcome of one projectile strike on one tree. */
+export type TreeStrikeOutcome = "felled" | "ignited" | "none";
+
+export interface TreeStrikeResult {
+  outcome: TreeStrikeOutcome;
+  /** Terminal state when the strike felled the tree. */
+  terminal?: "toppled" | "stump" | "snag";
+}
+
+/**
+ * Resolve one projectile strike on tree `index` (a round stuck in the wood —
+ * the renderer calls this through `strikeTree`). Intact, burning, and
+ * smouldering trees are eligible: the fell roll knocks any of them flat
+ * (a round smashing into a charred-but-standing trunk still drops it), and
+ * an intact tree that survives the roll ignites (cap-aware) instead of
+ * shrugging the hit off. Terminal, gone, and out-of-range trees refuse with
+ * "none" and cost no entropy. Consumes one rng draw for the fell roll plus
+ * one for the terminal roll on a fell; ignitions consume none. Mutates
+ * `field` in place; the renderer re-poses the struck tree from the outcome.
+ */
+export function strikeTreeShot(
+  field: DamageField,
+  index: number,
+  kind: UnitKind,
+  rng: () => number,
+  attack: AttackMode = "round",
+): TreeStrikeResult {
+  if (index < 0 || index >= field.trees.length) return { outcome: "none" };
+  const state = field.trees[index]!;
+  if (state !== "intact" && state !== "burning" && state !== "smouldering") {
+    return { outcome: "none" };
+  }
+  if (rng() < fellChanceForShot(kind, attack)) {
+    const terminal = resolveTerminal(rng);
+    field.trees[index] = terminal;
+    field.treeAge[index] = 0;
+    return { outcome: "felled", terminal };
+  }
+  if (state === "intact" && igniteTree(field, index)) return { outcome: "ignited" };
+  return { outcome: "none" };
+}
+
+/**
  * Apply a blast to trees: inside TOPPLE_FRACTION of the radius trees
  * flatten immediately to a terminal state; the fringe ignites (cap-aware).
- * With a wash the flatten/ignite boundary stretches downhill and shrinks
- * uphill (effective distance, not plan distance). Terminal trees are never
- * re-touched. Mutates `field` in place; the renderer re-poses only the
- * returned indices (no full-buffer rewrite).
+ * Fire-weakened trees (burning/smouldering) flatten anywhere inside the
+ * blast — a follow-up shell knocks scorched wood flat — so sustained fire
+ * clears a forest instead of only starting slow burns. With a wash the
+ * flatten/ignite boundary stretches downhill and shrinks uphill (effective
+ * distance, not plan distance). Terminal trees are never re-touched.
+ * Mutates `field` in place; the renderer re-poses only the returned indices
+ * (no full-buffer rewrite).
  */
 export function applyBlastToTrees(
   field: DamageField,
@@ -292,14 +370,15 @@ export function applyBlastToTrees(
   const result: TreeBlastResult = { flattened: [], ignited: [] };
   for (const i of indicesInBlast(points, cx, cz, radius, cap, slope)) {
     if (i >= field.trees.length) continue;
-    if (field.trees[i] !== "intact" && field.trees[i] !== "burning") continue;
+    const state = field.trees[i]!;
+    if (state !== "intact" && state !== "burning" && state !== "smouldering") continue;
     const p = points[i]!;
     const dist = effectiveBlastDist(p.x - cx, p.z - cz, slope);
-    if (dist <= radius * TOPPLE_FRACTION) {
+    if (dist <= radius * TOPPLE_FRACTION || state === "burning" || state === "smouldering") {
       field.trees[i] = resolveTerminal(rng);
       field.treeAge[i] = 0;
       result.flattened.push(i);
-    } else if (field.trees[i] === "intact") {
+    } else if (state === "intact") {
       if (igniteTree(field, i)) result.ignited.push(i);
     }
   }

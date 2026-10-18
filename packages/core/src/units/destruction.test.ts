@@ -20,6 +20,7 @@ import {
   FALLEN_SINK_DEPTH,
   fallenDecay,
   fallenSink,
+  fellChanceForShot,
   FIRE_SPREAD_RADIUS,
   FLAT_BLAST_SLOPE,
   igniteTree,
@@ -44,6 +45,7 @@ import {
   SMOULDER_DURATION,
   SPREAD_MIN_AGE,
   SPREAD_RATE,
+  strikeTreeShot,
   tickDamage,
   TOPPLE_FRACTION,
   type ScorchMark,
@@ -301,10 +303,13 @@ describe("graduated collateral damage", () => {
     expect(isTerminalTree(field.trees[0]!)).toBe(true);
     expect(field.trees[1]).toBe("burning");
     expect(field.trees[2]).toBe("intact");
-    // A second blast never re-touches terminal trees.
+    // A second blast never re-touches terminal trees — but it does knock
+    // the burning fringe tree flat (follow-up shells clear burnt wood).
+    const terminal = field.trees[0];
     const again = applyBlastToTrees(field, points, 0, 0, 100, mulberry32(4));
-    expect(again.flattened).toEqual([]);
-    expect(field.trees[0]).toBe(field.trees[0]);
+    expect(again.flattened).toEqual([1]);
+    expect(field.trees[0]).toBe(terminal);
+    expect(isTerminalTree(field.trees[1]!)).toBe(true);
   });
 
   it("caps concurrent fires with oldest-eviction and resolves every terminal", () => {
@@ -608,5 +613,90 @@ describe("slope-aware blasts (gradient wash)", () => {
     expect(changed).toEqual([0]);
     expect(field.rocks[0]).toBe(2);
     expect(field.rocks[1]).toBe(0);
+  });
+});
+
+describe("forest clearing (strikes fell, blasts clear burnt wood)", () => {
+  it("fells the struck tree on a direct projectile hit, else ignites it", () => {
+    // rng 0 always beats the fell chance → felled to a terminal state.
+    const felled = createDamageField(1, 0);
+    const hit = strikeTreeShot(felled, 0, "flash", () => 0);
+    expect(hit.outcome).toBe("felled");
+    expect(isTerminalTree(felled.trees[0]!)).toBe(true);
+    expect(felled.treeAge[0]).toBe(0);
+    // rng ~1 always misses the fell → an intact tree ignites instead.
+    const lit = createDamageField(1, 0);
+    const miss = strikeTreeShot(lit, 0, "flash", () => 0.999999);
+    expect(miss.outcome).toBe("ignited");
+    expect(lit.trees[0]).toBe("burning");
+  });
+
+  it("sizes fell chance by gun: shells above bolts, grenades above bullets", () => {
+    expect(fellChanceForShot("hammer")).toBeGreaterThan(fellChanceForShot("stump"));
+    expect(fellChanceForShot("stump")).toBeGreaterThan(fellChanceForShot("flash"));
+    expect(fellChanceForShot("flash")).toBeGreaterThan(fellChanceForShot("peewee"));
+    expect(fellChanceForShot("peewee", "grenade")).toBeGreaterThan(
+      fellChanceForShot("peewee", "round"),
+    );
+    for (const kind of ["flash", "stump", "hammer", "commander", "peewee"] as const) {
+      const c = fellChanceForShot(kind);
+      expect(c).toBeGreaterThan(0);
+      expect(c).toBeLessThan(1);
+    }
+  });
+
+  it("refuses terminal, gone, and out-of-range trees without touching rng", () => {
+    const field = createDamageField(2, 0);
+    field.trees[0] = "stump";
+    field.trees[1] = "gone";
+    let draws = 0;
+    const rng = (): number => {
+      draws++;
+      return 0;
+    };
+    expect(strikeTreeShot(field, 0, "hammer", rng).outcome).toBe("none");
+    expect(strikeTreeShot(field, 1, "hammer", rng).outcome).toBe("none");
+    expect(strikeTreeShot(field, -1, "hammer", rng).outcome).toBe("none");
+    expect(strikeTreeShot(field, 2, "hammer", rng).outcome).toBe("none");
+    expect(draws).toBe(0);
+    expect(field.trees[0]).toBe("stump");
+    expect(field.trees[1]).toBe("gone");
+  });
+
+  it("knocks burning trees flat on a strike, but never re-lights them on a miss", () => {
+    const field = createDamageField(2, 0);
+    expect(igniteTree(field, 0)).toBe(true);
+    expect(igniteTree(field, 1)).toBe(true);
+    expect(strikeTreeShot(field, 0, "flash", () => 0).outcome).toBe("felled");
+    expect(isTerminalTree(field.trees[0]!)).toBe(true);
+    expect(strikeTreeShot(field, 1, "flash", () => 0.999999).outcome).toBe("none");
+    expect(field.trees[1]).toBe("burning");
+  });
+
+  it("flattens burning fringe trees on a follow-up blast", () => {
+    const field = createDamageField(2, 0);
+    const points = [
+      { x: 0, z: 0 },
+      { x: 90, z: 0 },
+    ];
+    const first = applyBlastToTrees(field, points, 0, 0, 100, mulberry32(4));
+    expect(first.flattened).toEqual([0]);
+    expect(first.ignited).toEqual([1]);
+    // A second shell on the same patch knocks the burning fringe tree flat
+    // instead of leaving it standing through its full burn.
+    const second = applyBlastToTrees(field, points, 0, 0, 100, mulberry32(4));
+    expect(second.flattened).toEqual([1]);
+    expect(second.ignited).toEqual([]);
+    expect(isTerminalTree(field.trees[1]!)).toBe(true);
+  });
+
+  it("flattens smouldering fringe trees too (charred wood falls)", () => {
+    const field = createDamageField(1, 0);
+    expect(igniteTree(field, 0)).toBe(true);
+    tickDamage(field, [{ x: 0, z: 0 }], BURN_DURATION + 0.1, mulberry32(4));
+    expect(field.trees[0]).toBe("smouldering");
+    const res = applyBlastToTrees(field, [{ x: 90, z: 0 }], 0, 0, 100, mulberry32(4));
+    expect(res.flattened).toEqual([0]);
+    expect(isTerminalTree(field.trees[0]!)).toBe(true);
   });
 });
