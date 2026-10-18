@@ -9,6 +9,7 @@ import {
   TILE_PIXELS,
   UNIT_DEFS,
   UNIT_KINDS,
+  VETERAN_RANK_NAMES,
   composeMinimap,
   generateMap,
   type HoverInfo,
@@ -45,7 +46,7 @@ export default function App() {
   const [seed, setSeed] = useState(0xa11ce);
   const [hover, setHover] = useState<HoverInfo | null>(null);
   const [selected, setSelected] = useState<number[]>([]);
-  const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean }[]>([]);
+  const [liveUnits, setLiveUnits] = useState<{ x: number; z: number; alive: boolean; rank: number }[]>([]);
   const [hqs, setHqs] = useState<HqStatus[]>([]);
   // Territory paint for the minimap overlay (~4 Hz while the toggle is on,
   // null while off). Drawn into the overlay canvas by the effect below.
@@ -245,24 +246,39 @@ export default function App() {
 
         {selectedGroups.length > 0 && (
           <div className="selection-tray" role="region" aria-label="Selected units">
-            {selectedGroups.map((g) => (
-              <div
-                key={`${g.kind}-${g.team}`}
-                className="hud-panel relative w-[68px] p-1.5"
-                title={`${UNIT_DEFS[g.kind].name} · Team ${TEAM_DEFS[g.team]?.name ?? g.team} ×${g.count}`}
-                style={{ borderTop: `3px solid ${selectionGroupColor(g.team)}` }}
-              >
-                <img
-                  src={getUnitIconDataUrl(g.kind)}
-                  alt={UNIT_DEFS[g.kind].name}
-                  className="h-11 w-11 rounded-sm"
-                  draggable={false}
-                />
-                <span className="absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">
-                  ×{g.count}
-                </span>
-              </div>
-            ))}
+            {selectedGroups.map((g) => {
+              // Highest veterancy rank in the box (pre-broadcast slots read
+              // rookie): gold chevrons echoing the overhead badge.
+              const maxRank = Math.max(0, ...g.indices.map((i) => liveUnits[i]?.rank ?? 0));
+              const rankName = VETERAN_RANK_NAMES[maxRank] ?? VETERAN_RANK_NAMES[0];
+              return (
+                <div
+                  key={`${g.kind}-${g.team}`}
+                  className="hud-panel relative w-[68px] p-1.5"
+                  title={`${UNIT_DEFS[g.kind].name} · Team ${TEAM_DEFS[g.team]?.name ?? g.team} ×${g.count}${maxRank > 0 ? ` · ${rankName}` : ""}`}
+                  style={{ borderTop: `3px solid ${selectionGroupColor(g.team)}` }}
+                >
+                  <img
+                    src={getUnitIconDataUrl(g.kind)}
+                    alt={UNIT_DEFS[g.kind].name}
+                    className="h-11 w-11 rounded-sm"
+                    draggable={false}
+                  />
+                  <span className="absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 font-mono text-[10px] text-white">
+                    ×{g.count}
+                  </span>
+                  {maxRank > 0 && (
+                    <span
+                      className="absolute left-1 top-1 font-mono text-[10px] leading-none"
+                      style={{ color: "#fbbf24" }}
+                      aria-label={`${rankName}`}
+                    >
+                      {"▲".repeat(maxRank)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </main>

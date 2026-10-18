@@ -15,6 +15,7 @@ import {
   clampTurret,
   craterDepthForIntensity,
   createUnitDamage,
+  damageMultiplierForRank,
   disperseAim,
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
@@ -50,6 +51,8 @@ import {
   pickHostilePair,
   pickSkirmishPair,
   pickStrategicTarget,
+  rangeMultiplierForRank,
+  rankForKills,
   resolveScorchSeed,
   rollTreeStick,
   scorchAnisotropy,
@@ -863,6 +866,21 @@ export class CombatFx {
   onUnitStunned: ((index: number, damageAdd: number, blastX: number, blastZ: number) => void) | null =
     null;
   /**
+   * Confirmed kills per roster slot, sized with `damage` and persistent
+   * like the kill clock — `clearTransients` never touches it, only
+   * dispose/regen drops it. A kill credits the live enemy shooter whose
+   * hostile round landed the killing splash (see `creditKill`); the count
+   * feeds the core veterancy ranks (`rankForKills`) that scale the gunner's
+   * damage and range.
+   */
+  private kills: number[] = [];
+  /**
+   * Fired once per promotion with the shooter's roster index and its new
+   * rank (1..MAX_VETERAN_RANK) so the canvas can play the chevron flourish
+   * over the promoted hull. Assigned by the canvas; null in headless tests.
+   */
+  onUnitPromoted: ((index: number, rank: number) => void) | null = null;
+  /**
    * Fired once per surviving hull per hostile splash with the shooter's
    * roster index, its live position, the dealt fractional damage, and whether
    * the wound came from an arcing shell (hammer shells and peewee grenade
@@ -1174,6 +1192,16 @@ export class CombatFx {
     return this.deathCount;
   }
 
+  /** Confirmed kills credited to a roster slot (0 for unknown slots). */
+  killsAt(index: number): number {
+    return this.kills[index] ?? 0;
+  }
+
+  /** Veterancy rank 0..MAX_VETERAN_RANK for a roster slot. */
+  rankAt(index: number): number {
+    return rankForKills(this.kills[index] ?? 0);
+  }
+
   /**
    * Seconds since the unit died (0 while alive). Drives the core husk-decay
    * pacing; never resets except on dispose/regen.
@@ -1290,7 +1318,7 @@ export class CombatFx {
     const body = this.units.children[victim]!;
     if (current !== undefined && target && kind && !this.destroyed[current] && hostile(current)) {
       const distance = Math.hypot(target.position.x - body.position.x, target.position.z - body.position.z);
-      if (distance <= this.admissionFor(kind) + STRATEGY_STICKY_ADMISSION_MARGIN) return;
+      if (distance <= this.admissionFor(kind, victim) + STRATEGY_STICKY_ADMISSION_MARGIN) return;
     }
     this.aimPending(victim, attacker);
   }
@@ -1462,7 +1490,7 @@ export class CombatFx {
           hp,
           focusCounts: this.pending.values(),
           sticky: this.pending.get(i) ?? -1,
-          maxDist: this.admissionFor(kind),
+          maxDist: this.admissionFor(kind, i),
         });
         if (target >= 0) this.fireAtUnit(i, target);
       }
@@ -1595,6 +1623,8 @@ export class CombatFx {
     if (this.wreckPosed.length > count) this.wreckPosed.length = count;
     while (this.debris.length < count) this.debris.push(null);
     if (this.debris.length > count) this.debris.length = count;
+    while (this.kills.length < count) this.kills.push(0);
+    if (this.kills.length > count) this.kills.length = count;
   }
 
   /**
@@ -1626,6 +1656,13 @@ export class CombatFx {
     if (this.damage.length === 0) return;
     const bodies = this.units.children as THREE.Group[];
     const before = this.damage.slice();
+    // Veteran gunners hit harder (core `damageMultiplierForRank`): the
+    // scale rides the threaded shooter id, unknown/dead shooters fire at
+    // parity so white-box splashes stay byte-identical.
+    const gunner = shooter ?? null;
+    const gunnerLive =
+      gunner !== null && Number.isInteger(gunner) && gunner >= 0 && !this.destroyed[gunner];
+    const damageScale = gunnerLive ? damageMultiplierForRank(this.rankAt(gunner!)) : 1;
     const touched = applyBlastToUnits(
       this.damage,
       bodies.map((b) => ({ x: b.position.x, z: b.position.z })),
@@ -1634,6 +1671,7 @@ export class CombatFx {
       kind,
       slope ?? undefined,
       attack,
+      damageScale,
     );
     for (const i of touched) {
       const body = bodies[i];
@@ -1657,6 +1695,7 @@ export class CombatFx {
           // same seated hull).
           this.poseWreck(i, wreck);
         }
+        this.creditKill(shooter ?? null, i, hostile);
         this.onUnitKilled?.(i);
       }
       // Survivors recoil: slide the hull away from the hit over a
@@ -1680,6 +1719,30 @@ export class CombatFx {
       // keep the deepened husk char on top (idempotent).
       if (this.destroyed[i] && body) applyWreckChar(body);
     }
+  }
+
+  /**
+   * Credit a hostile killing splash to its shooter: the count feeds the
+   * core veterancy ranks, and a rank crossing fires `onUnitPromoted` so the
+   * canvas can flourish the promoted hull. Only live enemy gunners earn it —
+   * dead shooters (corpses earn no chevrons), self-splashes, same-team
+   * shooters (no friendly-fire medals), non-hostile bursts, and unknown
+   * shooters credit nobody. Legacy headless groups carry no placement, so a
+   * teamless shooter credits like any gunner (the `resolveThreat` legacy
+   * rule); organic fire always threads a live cross-team shooter.
+   */
+  private creditKill(shooter: number | null, victim: number, hostile: boolean): void {
+    if (!hostile || shooter === null) return;
+    if (!Number.isInteger(shooter) || shooter < 0 || shooter >= this.units.children.length) return;
+    if (shooter === victim || this.destroyed[shooter]) return;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const victimSide = placed?.[victim]?.team;
+    const shooterSide = placed?.[shooter]?.team;
+    if (victimSide !== undefined && shooterSide !== undefined && victimSide === shooterSide) return;
+    const before = this.rankAt(shooter);
+    this.kills[shooter] = (this.kills[shooter] ?? 0) + 1;
+    const after = this.rankAt(shooter);
+    if (after > before) this.onUnitPromoted?.(shooter, after);
   }
 
   /**
@@ -2052,7 +2115,7 @@ export class CombatFx {
       const hqTeam = this.pendingHq.get(i);
       const hq = hqTeam === undefined ? null : this.hqTargetOf(hqTeam);
       const near = (point: { x: number; z: number }) =>
-        Math.hypot(point.x - body.position.x, point.z - body.position.z) <= this.admissionFor("peewee");
+        Math.hypot(point.x - body.position.x, point.z - body.position.z) <= this.admissionFor("peewee", i);
       if ((foe && near(foe.position)) || (hq && near(hq))) continue;
       this.pending.delete(i);
       this.pendingHq.delete(i);
@@ -2193,10 +2256,14 @@ export class CombatFx {
    * Gun admission range for `kind`: the doctrine max range plus the
    * scheduler's +50 aim margin — a live enemy inside this is close enough to
    * react to (proactive traverse) and to draw volleys (engaged-first
-   * scheduling). Matches the structure-fire pre-gate scale.
+   * scheduling). Matches the structure-fire pre-gate scale. Veteran gunners
+   * stretch the doctrine cap (core `rangeMultiplierForRank`) while the +50
+   * scheduler slack never scales; an omitted attacker reads parity so
+   * white-box callers stay byte-identical.
    */
-  private admissionFor(kind: UnitKind): number {
-    return maxRangeFor(kind) + 50;
+  private admissionFor(kind: UnitKind, attacker?: number): number {
+    const scale = attacker === undefined ? 1 : rangeMultiplierForRank(this.rankAt(attacker));
+    return maxRangeFor(kind) * scale + 50;
   }
 
   /**
@@ -2239,7 +2306,7 @@ export class CombatFx {
     if (side === undefined) return false;
     const me = positions[i];
     if (!me) return false;
-    const admission = this.admissionFor(kind);
+    const admission = this.admissionFor(kind, i);
     for (let j = 0; j < positions.length; j++) {
       if (j === i || live[j] === false) continue;
       const foeSide = teams[j];
@@ -2279,7 +2346,7 @@ export class CombatFx {
       if (this.pending.has(i) || this.pendingHq.has(i)) continue;
       const kind = this.unitKind(i);
       if (!kind) continue;
-      const admission = this.admissionFor(kind);
+      const admission = this.admissionFor(kind, i);
       const me = positions[i]!;
       if (teamed) {
         if (teams[i] === undefined) continue;
@@ -2370,7 +2437,7 @@ export class CombatFx {
       // a separate map keyed by attacker, so only hull-aim values count).
       focusCounts: this.pending.values(),
       sticky: this.pending.get(attacker) ?? -1,
-      maxDist: kind ? this.admissionFor(kind) : undefined,
+      maxDist: kind ? this.admissionFor(kind, attacker) : undefined,
     });
     if (target < 0) return null;
     return { attacker, target };
@@ -2448,7 +2515,7 @@ export class CombatFx {
         // Body-distance pre-gate (the exact muzzle gate runs in `fireAtHq`):
         // guns parked across the map never draw structure fire.
         const d = Math.hypot(body.position.x - t.x, body.position.z - t.z);
-        if (d > this.admissionFor(kind)) continue;
+        if (d > this.admissionFor(kind, i)) continue;
         pairs.push({ attacker: i, team: t.team });
       }
     }
@@ -2540,7 +2607,8 @@ export class CombatFx {
     );
     // Range admission (cf. retail spec 06 §3.3): too close to depress onto
     // or ballistically unreachable — keep traversing, retry on a new pair.
-    if (!inRange(kind, approxDist)) return false;
+    // Veteran gunners stretch the doctrine cap (core `rangeMultiplierForRank`).
+    if (!inRange(kind, approxDist, rangeMultiplierForRank(this.rankAt(attackerIdx)))) return false;
     // Peewee secondary: inside grenade range the hand-cannon lobs a slow
     // ballistic grenade instead of firing its peashooter bolt (see core
     // `peeweeAttackFor` — lobs start where the knife-fight stand-off ends).

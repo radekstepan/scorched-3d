@@ -3927,3 +3927,192 @@ describe("orderAim", () => {
     }
   });
 });
+
+describe("veterancy kill attribution", () => {
+  /** One team-0 gunner plus three team-1 victims, all past hammer reach. */
+  function makeHunt(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 1, cellZ: 1, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: Math.PI, team: 1 },
+      { kind: "flash", cellX: 3, cellZ: 3, rotation: Math.PI, team: 1 },
+      { kind: "flash", cellX: 4, cellZ: 4, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(300, 100, 0),
+      new THREE.Vector3(600, 100, 0),
+      new THREE.Vector3(900, 100, 0),
+    ]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  type SplashFn = (
+    at: THREE.Vector3,
+    kind: UnitKind,
+    slope: null,
+    shooter: number | null,
+    hostile: boolean,
+  ) => void;
+
+  function splashAt(
+    fx: CombatFx,
+    units: THREE.Group,
+    victim: number,
+    shooter: number | null,
+    hostile = true,
+    kind: UnitKind = "hammer",
+  ): void {
+    const body = units.children[victim] as THREE.Group;
+    (fx as unknown as { damageUnits: SplashFn }).damageUnits(
+      body.position.clone(),
+      kind,
+      null,
+      shooter,
+      hostile,
+    );
+  }
+
+  /** Hammer a victim to death through one shooter's hostile rounds. */
+  function killAs(fx: CombatFx, units: THREE.Group, victim: number, shooter: number | null): void {
+    for (let n = 0; n < 12 && !fx.isDestroyedAt(victim); n++) {
+      splashAt(fx, units, victim, shooter);
+    }
+    expect(fx.isDestroyedAt(victim)).toBe(true);
+  }
+
+  function admissionOf(fx: CombatFx, kind: UnitKind, attacker?: number): number {
+    return (fx as unknown as { admissionFor(kind: UnitKind, attacker?: number): number }).admissionFor(
+      kind,
+      attacker,
+    );
+  }
+
+  it("credits the live enemy shooter and promotes on the first kill", () => {
+    const scene = new THREE.Scene();
+    const units = makeHunt();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.update(1 / 60);
+      expect(fx.killsAt(0)).toBe(0);
+      expect(fx.rankAt(0)).toBe(0);
+      const promoted: [number, number][] = [];
+      fx.onUnitPromoted = (index, rank) => promoted.push([index, rank]);
+      killAs(fx, units, 1, 0);
+      expect(fx.killsAt(0)).toBe(1);
+      expect(fx.rankAt(0)).toBe(1);
+      expect(promoted).toEqual([[0, 1]]);
+      // The second kill banks without a second flourish; the third promotes.
+      killAs(fx, units, 2, 0);
+      expect(fx.killsAt(0)).toBe(2);
+      expect(fx.rankAt(0)).toBe(1);
+      expect(promoted).toEqual([[0, 1]]);
+      killAs(fx, units, 3, 0);
+      expect(fx.killsAt(0)).toBe(3);
+      expect(fx.rankAt(0)).toBe(2);
+      expect(promoted).toEqual([
+        [0, 1],
+        [0, 2],
+      ]);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("credits nobody for self, friendly, dead, unknown, or cold kills", () => {
+    const scene = new THREE.Scene();
+    const units = makeHunt();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.update(1 / 60);
+      let promotions = 0;
+      fx.onUnitPromoted = () => promotions++;
+      // Self-splash kill: the victim's own blast earns nothing.
+      killAs(fx, units, 1, 1);
+      expect(fx.killsAt(1)).toBe(0);
+      // Unknown shooter (white-box splash) and cold (non-hostile) bursts.
+      killAs(fx, units, 2, null);
+      expect(fx.killsAt(0)).toBe(0);
+      for (let n = 0; n < 12 && !fx.isDestroyedAt(3); n++) {
+        splashAt(fx, units, 3, 0, false);
+      }
+      expect(fx.isDestroyedAt(3)).toBe(true);
+      expect(fx.killsAt(0)).toBe(0);
+      expect(promotions).toBe(0);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("refuses friendly-fire medals and dead-shooter credit", () => {
+    const scene = new THREE.Scene();
+    const units = makeHunt();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.update(1 / 60);
+      // Same-team shooter (2) killing its own mate (1): no medal.
+      killAs(fx, units, 1, 2);
+      expect(fx.killsAt(2)).toBe(0);
+      expect(fx.rankAt(2)).toBe(0);
+      // Dead shooters earn no chevrons: wreck the gunner first (cold, so
+      // nobody banks the gunner), then land its "killing" round.
+      for (let n = 0; n < 12 && !fx.isDestroyedAt(0); n++) {
+        splashAt(fx, units, 0, null, false);
+      }
+      expect(fx.isDestroyedAt(0)).toBe(true);
+      killAs(fx, units, 2, 0);
+      expect(fx.killsAt(0)).toBe(0);
+      // Out-of-range shooter ids never credit (or crash).
+      expect(fx.killsAt(9)).toBe(0);
+      expect(fx.rankAt(9)).toBe(0);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("scales a veteran's splash damage, rookies stay byte-identical", () => {
+    const scene = new THREE.Scene();
+    const units = makeHunt();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.update(1 / 60);
+      // Rookie baseline: one unthreaded hammer splash at point-blank.
+      splashAt(fx, units, 2, null);
+      expect(fx.unitDamageAt(2)).toBeCloseTo(0.16, 12);
+      // Promote the gunner, then land one of its rounds: ×1.10.
+      killAs(fx, units, 1, 0);
+      expect(fx.rankAt(0)).toBe(1);
+      splashAt(fx, units, 3, 0);
+      expect(fx.unitDamageAt(3)).toBeCloseTo(0.16 * 1.1, 12);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("stretches a veteran's admission range, parity without an attacker", () => {
+    const scene = new THREE.Scene();
+    const units = makeHunt();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.update(1 / 60);
+      // Rookie flash: doctrine 900 + the unscaled +50 scheduler slack.
+      expect(admissionOf(fx, "flash", 0)).toBe(950);
+      expect(admissionOf(fx, "flash")).toBe(950);
+      killAs(fx, units, 1, 0);
+      // Veteran: the doctrine cap stretches ×1.05, the slack never scales.
+      expect(admissionOf(fx, "flash", 0)).toBeCloseTo(900 * 1.05 + 50, 10);
+      // The rest of the roster still reads rookie admission.
+      expect(admissionOf(fx, "flash", 2)).toBe(950);
+    } finally {
+      fx.dispose();
+    }
+  });
+});

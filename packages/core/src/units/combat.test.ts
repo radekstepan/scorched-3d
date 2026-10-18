@@ -345,6 +345,22 @@ describe("ranges", () => {
     expect(inRange("flash", 1000)).toBe(false);
   });
 
+  it("stretches the cap for veteran gunners, never the point-blank floor", () => {
+    // A rookie flash holds fire at 950; a veteran (×1.05 → 945) still
+    // holds, an elite (×1.10 → 990) fires.
+    expect(inRange("flash", 950)).toBe(false);
+    expect(inRange("flash", 950, 1.05)).toBe(false);
+    expect(inRange("flash", 950, 1.1)).toBe(true);
+    // The ace hammer reaches 1150 yet stays under half a map width (2560).
+    expect(inRange("hammer", 1150, 1.15)).toBe(true);
+    expect(inRange("hammer", 1151, 1.15)).toBe(false);
+    expect(maxRangeFor("hammer") * 1.15).toBeLessThan(2560);
+    // Garbage scales read as parity; the floor never moves.
+    expect(inRange("flash", 950, 0)).toBe(false);
+    expect(inRange("flash", 950, -2)).toBe(false);
+    expect(inRange("hammer", MIN_RANGE - 1, 1.15)).toBe(false);
+  });
+
   it("clamps barrel elevation to the per-kind mount limits", () => {
     expect(clampElevation(0.3, "hammer")).toBe(0.3);
     // Artillery mount refuses near-vertical lays (70° howitzer band).

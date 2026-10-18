@@ -196,9 +196,16 @@ export function maxRangeFor(kind: UnitKind): number {
   return Math.min(profile.speed * FLIGHT_MAX_TIME, cap);
 }
 
-/** True when a muzzle-to-impact shot at `distance` may leave the barrel. */
-export function inRange(kind: UnitKind, distance: number): boolean {
-  return distance >= MIN_RANGE && distance <= maxRangeFor(kind);
+/**
+ * True when a muzzle-to-impact shot at `distance` may leave the barrel.
+ * `rangeScale` stretches the doctrine cap for veteran gunners (see
+ * `rangeMultiplierForRank`); the default 1 keeps the legacy gate
+ * byte-identical, and the point-blank floor never scales — veterans shoot
+ * further, not closer.
+ */
+export function inRange(kind: UnitKind, distance: number, rangeScale = 1): boolean {
+  const cap = maxRangeFor(kind) * (rangeScale > 0 ? rangeScale : 1);
+  return distance >= MIN_RANGE && distance <= cap;
 }
 
 /**

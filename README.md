@@ -14,6 +14,8 @@ When a shell lands near a unit, the blast shakes the unit. The unit turns to fac
 
 Each team owns one factory. The factory opens its door. Then it sends a new unit to the battle. Weak units come more often. Strong units take more time to build. Holding more ground speeds up the factory. If enemy fire destroys the factory, it sends no more units.
 
+Units that destroy enemies earn gold chevrons and fight better. Veterans hit harder and shoot further. Selected veterans show their chevrons in the tray.
+
 Every shot changes the field. Each blast burns the ground and leaves a black mark. Trees catch fire and the fire spreads to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
 
 The battle has sound. Guns crack and shells thump, blasts boom, and zooming in makes it louder. The Sound panel holds mute and volume.

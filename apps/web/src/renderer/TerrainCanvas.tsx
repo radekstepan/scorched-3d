@@ -66,6 +66,7 @@ import {
 import { UnitMovement } from "./movement";
 import { TrackTrails } from "./tracks";
 import { HealthBars } from "./healthBars";
+import { VeterancyFx } from "./veterancyFx";
 import { WaypointFx } from "./waypoints";
 import { TerritoryFx, type TerritoryMinimap } from "./territory";
 import {
@@ -136,8 +137,8 @@ interface Props {
   onHover: (info: HoverInfo | null) => void;
   /** Fired when the RTS selection changes (sorted unit indices). */
   onSelection?: (indices: number[]) => void;
-  /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay. */
-  onPositions?: (positions: { x: number; z: number; alive: boolean }[]) => void;
+  /** Live unit X/Z broadcast (~4 Hz) for the minimap overlay + tray ranks. */
+  onPositions?: (positions: { x: number; z: number; alive: boolean; rank: number }[]) => void;
   /** Live HQ status broadcast (~4 Hz) for minimap markers. */
   onHq?: (hqs: HqStatus[]) => void;
   /**
@@ -619,6 +620,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           const staging = hqStagingRoute(exit, hqFacingFor(team), side);
           movement.addUnit(x, z, yaw, staging.loop, kind, staging.leadIn);
           health.setCount(units.children.length);
+          veterans.setCount(units.children.length);
           occlusion.setKinds(placed.map((u) => u.kind));
           waypoints.setRoutes(routes);
           const heard = soundAt(x, groundY(x, z), z);
@@ -668,6 +670,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // live CombatFx damage, re-seated every tick from the body origins.
     const health = new HealthBars(scene, units.children.length);
     health.setVisible(optsRef.current.showHealth);
+    // Ranked hulls wear gold chevrons above their health bars (same toggle).
+    const veterans = new VeterancyFx(scene, units.children.length);
+    veterans.setVisible(optsRef.current.showHealth);
     // Fort spotting: the drive shares a scout's HQ sighting team-wide and
     // marches the side onto the works (live forts only — wrecks drop out of
     // `targets()`, so the push ends when the fort falls).
@@ -746,6 +751,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       if (selection.includes(index)) {
         applySelection(selection.filter((s) => s !== index));
       }
+    };
+    // Promotion: the new rank's chevrons spin briefly over the hull before
+    // the persistent badge takes over (view-only — the combat bonus already
+    // applied in the damage/range math).
+    combat.onUnitPromoted = (index, rank) => {
+      veterans.promote(index, rank, units.children[index]);
     };
     // Hit recoil: a surviving splash recoils that hull away from the blast
     // over a damage-scaled beat (the visible jerk back is the combat nudge
@@ -1158,6 +1169,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         // the damage field persist — just re-seat them.
         combat.clearTransients();
         fire.clearTransients();
+        veterans.clearTransients();
         movement.resnap();
         hq?.resnap();
         fireflies.resnap();
@@ -1358,6 +1370,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const unitVisible = computeUnitVisibility(camera, units.children);
       health.setVisible(opt.showHealth);
       health.update(combat, units.children, camera, unitVisible);
+      veterans.setVisible(opt.showHealth);
+      veterans.update(combat, units.children, camera, dt, unitVisible);
       if (hq) {
         health.updateHq(
           hq,
@@ -1430,7 +1444,11 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         // and the Units-box counts drop them (the battlefield keeps the
         // husk mesh itself as its history).
         positionsRef.current?.(
-          movement.positions().map((p, i) => ({ ...p, alive: !combat.isDestroyedAt(i) })),
+          movement.positions().map((p, i) => ({
+            ...p,
+            alive: !combat.isDestroyedAt(i),
+            rank: combat.rankAt(i),
+          })),
         );
         hqRef.current?.(hq?.status() ?? []);
         // Territory paint for the minimap overlay (null while hidden clears
@@ -1488,6 +1506,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       tracks.dispose();
       waypoints.dispose();
       health.dispose();
+      veterans.dispose();
       occlusion.dispose();
       disposeOcclusionAssets();
       combat.dispose();

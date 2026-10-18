@@ -13,6 +13,7 @@ export * from "./units/influence.js";
 export * from "./units/visibility.js";
 export * from "./units/destruction.js";
 export * from "./units/unitDamage.js";
+export * from "./units/veterancy.js";
 export * from "./units/hq.js";
 export * from "./units/impact.js";
 export * from "./units/facing.js";

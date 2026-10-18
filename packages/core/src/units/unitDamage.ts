@@ -171,10 +171,17 @@ export function applyBlastToUnits(
   attacker: UnitKind,
   slope?: BlastSlope,
   attack: AttackMode = "round",
+  damageScale = 1,
 ): number[] {
   const grenade = attack === "grenade" && attacker === "peewee";
   const radius = grenade ? PEEWEE_GRENADE_BLAST_RADIUS : (BLAST_RADIUS[attacker] ?? 0);
-  const hit = grenade ? PEEWEE_GRENADE_UNIT_DAMAGE : (UNIT_HIT_DAMAGE[attacker] ?? 0);
+  // `damageScale` carries the shooter's veterancy bonus (see
+  // `damageMultiplierForRank`); the default 1 keeps legacy splashes
+  // byte-identical. Only the point-blank hit scales — the blast radius and
+  // falloff shape never change, so veterans hit harder, not wider.
+  const scale = damageScale > 0 ? damageScale : 1;
+  const hit =
+    (grenade ? PEEWEE_GRENADE_UNIT_DAMAGE : (UNIT_HIT_DAMAGE[attacker] ?? 0)) * scale;
   if (!(radius > 0) || !(hit > 0)) return [];
   const scored: { index: number; d: number }[] = [];
   const n = Math.min(damage.length, positions.length);

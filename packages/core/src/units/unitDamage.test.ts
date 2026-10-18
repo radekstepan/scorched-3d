@@ -232,3 +232,22 @@ describe("slope-aware blast splash (gradient wash)", () => {
     expect(a[0]).toBe(b[0]);
   });
 });
+
+describe("veteran damage scale", () => {
+  it("scales the point-blank hit, never the radius or falloff shape", () => {
+    const at = (x: number, scale = 1): number => {
+      const d = createUnitDamage(1);
+      applyBlastToUnits(d, [{ x, z: 0 }], 0, 0, "hammer", undefined, "round", scale);
+      return d[0]!;
+    };
+    // A veteran ace (+30%) lands exactly 1.3× the rookie splash at every
+    // distance inside the radius — harder, not wider.
+    expect(at(0, 1.3)).toBeCloseTo(at(0) * 1.3, 12);
+    expect(at(20, 1.3)).toBeCloseTo(at(20) * 1.3, 12);
+    // Outside the radius the bonus buys nothing: no widening.
+    expect(at(70, 1.3)).toBe(0);
+    // Garbage scales read as parity.
+    expect(at(0, 0)).toBe(at(0));
+    expect(at(0, -3)).toBe(at(0));
+  });
+});
