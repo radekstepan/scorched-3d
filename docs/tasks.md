@@ -16,8 +16,4 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Switching to Unit Folio now takes about 3 seconds or so, slow, locking up the UI. Address.
-
-We STILL have the issue, even in 1:1 combat where a weaker unit can obliterate a stronger one because the defender just "takes it". Something is off in the game loop. Is it that first unit to fire stuns the enemy and they simply can't respond? Fix it, maybe for first hit it makes sense, but from then on the defender needs to be able to fight back.
-
-Sometimes unit just get stuck close to each other, enemies. Nobody shooting unless I move one unit. I am not sure if it's because one unit is close to a tree and "hard to see". If that's the case adjust the logic where maybe the unit is initially harder to see or slower to see, but eventually the "hidden" unit is seen.
+...
