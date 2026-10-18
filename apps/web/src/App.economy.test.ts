@@ -19,16 +19,14 @@ describe("economy-lite spawn clock", () => {
 });
 
 describe("factories panel", () => {
-  it("shows a per-team ground-share and build-pace row", () => {
-    expect(appSource).toContain("<Label>Factories</Label>");
-    expect(appSource).toContain("hq?.share ?? 0.5");
-    expect(appSource).toContain("hq?.pace ?? 1");
-    expect(appSource).toContain("% ground");
-    expect(appSource).toContain("builds");
+  it("is not rendered (removed per user request)", () => {
+    expect(appSource).not.toContain("<Label>Factories</Label>");
+    expect(appSource).not.toContain("% ground");
+    expect(appSource).not.toContain("builds");
   });
 
-  it("marks a destroyed factory instead of a pace", () => {
-    expect(appSource).toContain("destroyed");
-    expect(appSource).toContain("hq?.alive ?? true");
+  it("keeps HQ fort markers on the minimap", () => {
+    expect(appSource).toContain("minimapHq");
+    expect(appSource).toContain("hq-");
   });
 });

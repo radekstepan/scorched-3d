@@ -15,7 +15,7 @@ There is no `packages/ui`: the web app is a single demo shell, so shared React c
 
 | File | Responsibility |
 | --- | --- |
-| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers and HQ fort squares, team + HQ + unit legend, Factories panel (ground share + build pace), probe readout. |
+| `apps/web/src/App.tsx` | HUD composition, preset/seed state, minimap with team-outlined unit markers and HQ fort squares, team + HQ + unit legend, probe readout. |
 | `apps/web/src/renderer/TerrainCanvas.tsx` | Three.js scene: terrain mesh, water, sky, trees/rocks, static units, team HQ forts with reinforcements, hover picking. |
 | `apps/web/src/renderer/units.ts` | Integrates the Commander/Stumpy/Flash/Hammer/Peewee model builders, weapon pivots + muzzle markers, team ground rings, locomotion and exaggeration re-snapping. |
 | `apps/web/src/renderer/vehicleGeometry.ts` | Shared chamfered armor lofts and per-finish geometry batching; individual model builders preserve separate animated assemblies. |

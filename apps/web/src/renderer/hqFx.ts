@@ -101,7 +101,7 @@ export function doorLiftAt(t: number): number {
   return HQ_DOOR_TRAVEL * (1 - k);
 }
 
-/** HUD status of one HQ (minimap marker + Factories-box row). */
+/** HUD status of one HQ (minimap marker). */
 export interface HqStatus {
   x: number;
   z: number;
@@ -215,7 +215,7 @@ export class HqFx {
     return 1 / spawnIntervalScale(this.shares[index] ?? 0.5);
   }
 
-  /** HUD status of every HQ (minimap markers + Factories-box rows). */
+  /** HUD status of every HQ (minimap markers). */
   status(): HqStatus[] {
     return this.groups.map((group, i) => ({
       x: group.position.x,

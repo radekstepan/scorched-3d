@@ -459,34 +459,6 @@ export default function App() {
             })}
           </div>
         </div>
-        <div className="hud-panel mt-3 p-3">
-          <Label>Factories</Label>
-          <div className="mt-2 space-y-1.5">
-            {([0, 1] as const).map((team) => {
-              const hq = hqs.find((h) => h.team === team);
-              const share = hq?.share ?? 0.5;
-              const pace = hq?.pace ?? 1;
-              const alive = hq?.alive ?? true;
-              return (
-                <div key={team} className="flex items-center gap-2 text-[11px]">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-[2px] border border-black/60"
-                    style={{ background: `#${TEAM_DEFS[team].color.toString(16).padStart(6, "0")}` }}
-                  />
-                  <span className="text-stone-200">{TEAM_DEFS[team].name}</span>
-                  <span className="ml-auto font-mono text-[10px] text-stone-400">
-                    {alive
-                      ? `${Math.round(share * 100)}% ground · ×${pace.toFixed(2)} builds`
-                      : "destroyed"}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <p className="mt-2 text-[10px] leading-relaxed text-stone-500">
-            Holding ground speeds up the factory. The Territory toggle shows the claimed map.
-          </p>
-        </div>
         <details className="hud-panel p-3 terrain-diagnostics"><summary>Terrain diagnostics</summary><div className="mt-3 space-y-1">
           <Row k="TNT" v={`0x${map.version.toString(16)}`} />
           <Row k="tileset" v={map.world} />
