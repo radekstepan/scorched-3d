@@ -16,28 +16,4 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-Follow battle should continue working if I zoom in/out or rotate.
-
-Sound should be muted by default
-
-Make the unit rank symbol smaller, centered properly above health bar
-
-I didn't ask you to add "Factories" panel.
-
-Sometimes units struggle to clar an obstacle and "jitter" back and forth. Investigate and fix. Maybe because unit is close to a rock? Trying to clear a hill?a
-
-Be able to toggle a "pan" mode which locks the angle we viewing at and dragging a cursor across the page pans the screen instead just like arrow keys would.
-
-Double clicking a particular unit will select all units of the same type and faction visible on the screen right now.
-
-Remove the "Indexed filter toggle"
-
-Why do the units in Unit Folio look different if Terrain is toggled on /off?
-
-Default Commander in Unit Folio and remove the little arrow.
-
-I have 17 units selected. They destroyed HQ. Back at their own HQ. They do this "dance" driving around. Looks odd. They should create an orderly formation and keep adding to it.
-
-When enemy HQ is destroyed, stop producing units!
-
-Use sounds from kenney_interface-sounds AND kenney_sci-fi-sounds from Downloads directory to completely replace sound effects in the game. Make sure to include the license.
+...
