@@ -126,6 +126,8 @@ export interface ViewOptions {
   showTerritory: boolean;
   /** Follow-battle camera: glide the orbit rig toward recent combat. */
   followBattle: boolean;
+  /** Pan mode: lock the viewing angle; left-drag pans like the arrow keys. */
+  panMode: boolean;
   /** Keyboard + right-drag pan multiplier (1 = default). */
   panSpeed: number;
   /** Scroll-wheel zoom multiplier (1 = default). */

@@ -95,6 +95,11 @@ export class CombatEventTracker {
  * touch contacts. Rotate and zoom contacts never feed this tracker, and
  * the wheel feeds nothing at all — follow glides straight through them.
  *
+ * In pan mode the canvas repoints the orbit gestures at pan (see
+ * `panModeBinding`), so left-button contacts and single touch contacts
+ * pan too — the canvas mirrors the toggle here with `setPanMode` and the
+ * hold follows the live mapping instead of the stock one.
+ *
  * Framework-free (no DOM types) so vitest covers it without WebGL: the
  * canvas feeds raw `button`/`pointerId`/`pointerType` triples.
  */
@@ -103,13 +108,20 @@ export class FollowHoldTracker {
   private panButtons = new Set<number>();
   /** Live touch contacts, by pointer id (two fingers pan). */
   private touches = new Set<number>();
+  /** Pan-mode input mapping: left / single-finger drags pan, so they hold. */
+  private panMode = false;
+
+  /** Mirror the View-menu pan-mode toggle (called every tick). */
+  setPanMode(panMode: boolean): void {
+    this.panMode = panMode;
+  }
 
   pointerDown(button: number, pointerId: number, pointerType: string): void {
     if (pointerType === "touch") {
       this.touches.add(pointerId);
       return;
     }
-    if (button === 2) this.panButtons.add(pointerId);
+    if (button === 2 || (this.panMode && button === 0)) this.panButtons.add(pointerId);
   }
 
   /**
@@ -126,9 +138,10 @@ export class FollowHoldTracker {
     return was && !this.userPanning;
   }
 
-  /** True while a pan gesture owns the camera. */
+  /** True while a pan gesture owns the camera. In pan mode one finger
+   * pans (the orbit gesture is repointed), so a single touch holds too. */
   get userPanning(): boolean {
-    return this.panButtons.size > 0 || this.touches.size >= 2;
+    return this.panButtons.size > 0 || this.touches.size >= (this.panMode ? 1 : 2);
   }
 
   reset(): void {

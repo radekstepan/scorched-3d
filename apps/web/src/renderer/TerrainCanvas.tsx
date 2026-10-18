@@ -85,6 +85,7 @@ import {
   MAX_ZOOM_DISTANCE,
   MIN_ZOOM_DISTANCE,
   panInputFromCodes,
+  panModeBinding,
   panOffset,
   panStepDistance,
   shouldIgnoreKeyEvent,
@@ -912,10 +913,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     };
 
     // Input UX (documented in the HUD footer): left-click selects,
-    // shift-click toggles, shift-drag boxes (plain left-drag keeps orbiting),
-    // right-click without drag orders the selection to move — or to attack
-    // when the click lands on a live enemy unit (right-drag keeps panning),
-    // Esc clears. Click vs drag disambiguates on a pixel threshold.
+    // shift-click toggles, shift-drag boxes (plain left-drag orbits — or
+    // pans in pan mode, where the viewing angle locks and drags translate
+    // the rig like the arrow keys), right-click without drag orders the
+    // selection to move — or to attack when the click lands on a live
+    // enemy unit (right-drag keeps panning), Esc clears. Click vs drag
+    // disambiguates on a pixel threshold.
     let down: { x: number; y: number; button: number; shift: boolean } | null = null;
     let boxing = false;
     const onPointerDown = (ev: PointerEvent) => {
@@ -924,9 +927,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // later calls are a no-op once the device is running.
       sound.unlock();
       // Follow-battle hold: a right-button press (or a second touch
-      // contact) hands the camera to the pan gesture; rotate/zoom contacts
-      // never engage the hold. Fed before the button filter so every
-      // contact is tracked.
+      // contact — a left press or a first touch in pan mode) hands the
+      // camera to the pan gesture; rotate/zoom contacts never engage the
+      // hold. Fed before the button filter so every contact is tracked.
       followHold.pointerDown(ev.button, ev.pointerId, ev.pointerType);
       if (ev.button !== 0 && ev.button !== 2) return;
       down = { x: ev.clientX, y: ev.clientY, button: ev.button, shift: ev.shiftKey };
@@ -967,13 +970,16 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const wasDown = down;
       down = null;
       // Follow-battle hold: releasing the last pan contact stamps the
-      // resume delay — except a right-button click, which is a unit order
-      // (not a drag) and must not pause the glide. Rotate/zoom releases
-      // never reach the tracker. Runs before the suspended return so the
+      // resume delay — except a click, which is a selection (left) or a
+      // unit order (right), not a drag, and must not pause the glide.
+      // Rotate/zoom releases never reach the tracker. The left button can
+      // only hold the camera in pan mode, so selection clicks join the
+      // exclusion only there. Runs before the suspended return so the
       // hold can never stick across a suspend.
       const panEnded = followHold.pointerUp(ev.pointerId);
       const releaseMoved = wasDown ? Math.hypot(ev.clientX - wasDown.x, ev.clientY - wasDown.y) : 0;
-      if (panEnded && !(wasDown?.button === 2 && releaseMoved < CLICK_DRAG_PX)) {
+      const panModeClick = optsRef.current.panMode && wasDown?.button === 0 && releaseMoved < CLICK_DRAG_PX;
+      if (panEnded && !(wasDown?.button === 2 && releaseMoved < CLICK_DRAG_PX) && !panModeClick) {
         followLastManual = followBattleT;
       }
       // Shift-drag may have disabled orbiting mid-gesture: always restore.
@@ -1067,11 +1073,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // actually moves, so a settled camera costs nothing).
     controls.addEventListener("change", markHoverDirty);
     // Follow-battle hold: only pan gestures own the camera (right-drag,
-    // or multi-touch which pans) — rotate and zoom compose with the rigid
-    // follow glide, so they never pause it. OrbitControls' start/end events
-    // carry no gesture type (and fire once per wheel tick), so the hold
-    // tracks the raw pointer buttons instead; the button mapping is the
-    // stock left-rotates / middle-dollies / right-pans default.
+    // or multi-touch which pans — plus left-drag and single-touch in pan
+    // mode, where the orbit gestures are repointed at pan) — rotate and
+    // zoom compose with the rigid follow glide, so they never pause it.
+    // OrbitControls' start/end events carry no gesture type (and fire once
+    // per wheel tick), so the hold tracks the raw pointer buttons instead;
+    // the button mapping is the stock left-rotates / middle-dollies /
+    // right-pans default, or the pan-mode binding while the toggle is on.
     let followBattleT = 0;
     const followHold = new FollowHoldTracker();
     let followLastManual = Number.NEGATIVE_INFINITY;
@@ -1280,9 +1288,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // translation of camera + target, same edge clamps — so yaw/pitch/
       // zoom survive and the mode-off path is untouched. Pan input pauses
       // the glide (see FOLLOW_RESUME_DELAY): keyboard pans, right-drag
-      // pans, and minimap jumps borrow the camera, while rotate and zoom
-      // gestures compose with the glide and never pause it. A quiet field
-      // leaves the camera resting instead of drifting to a stale point.
+      // pans (left-drag pans too in pan mode), and minimap jumps borrow
+      // the camera, while rotate and zoom gestures compose with the glide
+      // and never pause it. A quiet field leaves the camera resting
+      // instead of drifting to a stale point.
       followTracker.tick(dt);
       if (opt.followBattle && !followSuppressed(t, followLastManual, followHold.userPanning)) {
         const centroid = followTracker.centroid();
@@ -1303,6 +1312,18 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // View-menu sliders: OrbitControls reads panSpeed/zoomSpeed live, so
       // re-sync every tick (options arrive via ref, not effect re-runs).
       // The Sound panel rides the same path (mute + master volume).
+      // Pan mode rides it too: lock the viewing angle and repoint the
+      // orbit gestures (left-drag, one-finger drag) at pan, so drags
+      // translate the rig like the arrow keys instead of orbiting. Both
+      // restore on toggle-off; the assignments are idempotent plain-field
+      // writes, and OrbitControls reads the mapping per gesture. The
+      // follow-battle hold mirrors the toggle so pan-mode drags borrow
+      // the camera while clicks still select.
+      const panBinding = panModeBinding(opt.panMode);
+      controls.enableRotate = panBinding.enableRotate;
+      controls.mouseButtons.LEFT = panBinding.left === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+      controls.touches.ONE = panBinding.oneFinger === "pan" ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+      followHold.setPanMode(opt.panMode);
       sound.setMuted(opt.muted);
       sound.setVolume(opt.volume);
       controls.panSpeed = effectiveDragPanSpeed(opt.panSpeed, camera.position.distanceTo(controls.target));

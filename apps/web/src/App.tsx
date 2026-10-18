@@ -72,6 +72,7 @@ export default function App() {
       showHealth: true,
       showTerritory: false,
       followBattle: false,
+      panMode: false,
       panSpeed: 1,
       zoomSpeed: 1,
       nightMode: false,
@@ -410,6 +411,7 @@ export default function App() {
           <Toggle label="Health" on={options.showHealth} onClick={() => patch({ showHealth: !options.showHealth })} />
           <Toggle label="Territory" on={options.showTerritory} onClick={() => patch({ showTerritory: !options.showTerritory })} />
           <Toggle label="Follow battle" on={options.followBattle} onClick={() => patch({ followBattle: !options.followBattle })} />
+          <Toggle label="Pan mode" on={options.panMode} onClick={() => patch({ panMode: !options.panMode })} />
           <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
         </div>
 
@@ -470,7 +472,7 @@ export default function App() {
       </aside>
 
       <footer className="command-footer"><span><i aria-hidden="true" /> {view === "folio" ? "FOLIO / BATTLE SUSPENDED" : "COMMAND LINK ACTIVE"}</span>
-        <p>{view === "folio" ? "DRAG orbit · SCROLL / PINCH zoom · CHOOSE a study angle · RETURN to battlefield to resume command" : "CLICK select · SHIFT+DRAG box · RIGHT-CLICK move/attack · ESC clear · DRAG orbit · SCROLL zoom · WASD pan"}</p>
+        <p>{view === "folio" ? "DRAG orbit · SCROLL / PINCH zoom · CHOOSE a study angle · RETURN to battlefield to resume command" : `CLICK select · SHIFT+DRAG box · RIGHT-CLICK move/attack · ESC clear · DRAG ${options.panMode ? "pan" : "orbit"} · SCROLL zoom · WASD pan`}</p>
         <span>{map.width} × {map.height} GRID</span>
       </footer>
     </div>

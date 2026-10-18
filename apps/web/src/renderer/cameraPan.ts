@@ -162,6 +162,33 @@ export function panOffset(
   };
 }
 
+/** Drag gesture a pan-mode binding assigns to an input. Three-free: the
+ * canvas maps these onto OrbitControls' MOUSE/TOUCH actions. */
+export type PanDragAction = "rotate" | "pan";
+
+export interface PanModeBinding {
+  /** False in pan mode: the viewing angle locks, no gesture may rotate. */
+  enableRotate: boolean;
+  /** Left-drag action: orbit normally, ground-plane pan in pan mode. */
+  left: PanDragAction;
+  /** One-finger-drag action: orbit normally, pan in pan mode. */
+  oneFinger: PanDragAction;
+}
+
+/**
+ * Resolve the OrbitControls input mapping for the View-menu pan mode.
+ * Pan mode locks the viewing angle (`enableRotate: false` blocks every
+ * rotate path, including mid-gesture mapping reads) and repoints the
+ * orbit gestures at pan, so left-drag and one-finger drag translate the
+ * rig like the arrow keys instead of orbiting. Right-drag, two-finger
+ * drag, and the wheel keep their stock pan/zoom meanings in both modes.
+ */
+export function panModeBinding(panMode: boolean): PanModeBinding {
+  return panMode
+    ? { enableRotate: false, left: "pan", oneFinger: "pan" }
+    : { enableRotate: true, left: "rotate", oneFinger: "rotate" };
+}
+
 /** Translate both camera position and orbit target by a ground offset. */
 export function applyPan(position: Vec3, target: Vec3, offset: { x: number; z: number }): void {
   position.x += offset.x;

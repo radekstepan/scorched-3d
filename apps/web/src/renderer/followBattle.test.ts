@@ -175,6 +175,55 @@ describe("FollowHoldTracker", () => {
     expect(hold.pointerUp(1)).toBe(false);
     expect(hold.pointerUp(10)).toBe(false);
   });
+
+  it("holds on left-button contacts in pan mode, ending on release", () => {
+    const hold = new FollowHoldTracker();
+    hold.setPanMode(true);
+    hold.pointerDown(0, 1, "mouse");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(1)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+  });
+
+  it("ignores left-button contacts again once pan mode toggles off", () => {
+    const hold = new FollowHoldTracker();
+    hold.setPanMode(true);
+    hold.setPanMode(false);
+    hold.pointerDown(0, 1, "mouse");
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(1)).toBe(false);
+  });
+
+  it("still ignores middle-button contacts in pan mode (zoom never holds)", () => {
+    const hold = new FollowHoldTracker();
+    hold.setPanMode(true);
+    hold.pointerDown(1, 2, "mouse");
+    expect(hold.userPanning).toBe(false);
+    expect(hold.pointerUp(2)).toBe(false);
+  });
+
+  it("holds on a single touch contact in pan mode (one finger pans)", () => {
+    const hold = new FollowHoldTracker();
+    hold.setPanMode(true);
+    hold.pointerDown(0, 10, "touch");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(10)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+  });
+
+  it("keeps the right-button and two-finger holds in pan mode", () => {
+    const hold = new FollowHoldTracker();
+    hold.setPanMode(true);
+    hold.pointerDown(2, 1, "mouse");
+    hold.pointerDown(0, 10, "touch");
+    hold.pointerDown(0, 11, "touch");
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(1)).toBe(false);
+    expect(hold.pointerUp(10)).toBe(false);
+    expect(hold.userPanning).toBe(true);
+    expect(hold.pointerUp(11)).toBe(true);
+    expect(hold.userPanning).toBe(false);
+  });
 });
 
 describe("followBattleStep", () => {

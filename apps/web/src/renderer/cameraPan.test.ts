@@ -37,6 +37,7 @@ import {
   isPanKey,
   isRigidPan,
   panInputFromCodes,
+  panModeBinding,
   panOffset,
   panStepDistance,
   shouldIgnoreKeyEvent,
@@ -874,5 +875,199 @@ describe("camera wall-time and close-up navigation", () => {
     expect(source).toContain("cameraFrameDelta(wallDelta)");
     expect(source).toContain("panStepDistance(dist, cameraDt, opt.panSpeed)");
     expect(source).toContain("effectiveDragPanSpeed(opt.panSpeed, camera.position.distanceTo(controls.target))");
+  });
+});
+
+describe("panModeBinding", () => {
+  it("keeps the stock orbit mapping with rotation enabled when off", () => {
+    expect(panModeBinding(false)).toEqual({ enableRotate: true, left: "rotate", oneFinger: "rotate" });
+  });
+
+  it("locks rotation and repoints the orbit gestures at pan when on", () => {
+    expect(panModeBinding(true)).toEqual({ enableRotate: false, left: "pan", oneFinger: "pan" });
+  });
+});
+
+describe("pan mode through real OrbitControls", () => {
+  // Synthetic drags through REAL OrbitControls with the canvas settings
+  // (damping, polar clamp, zoom-to-cursor): the stub element only needs a
+  // listener registry — pointerdown lands on the element, while move/up
+  // land on the owner document, exactly like the browser capture path.
+  interface DragEvent {
+    pointerId: number;
+    pointerType: string;
+    button: number;
+    clientX: number;
+    clientY: number;
+    pageX: number;
+    pageY: number;
+  }
+
+  function makeDragRig() {
+    const elListeners = new Map<string, Set<(e: DragEvent) => void>>();
+    const docListeners = new Map<string, Set<(e: DragEvent) => void>>();
+    const track =
+      (map: Map<string, Set<(e: DragEvent) => void>>) =>
+      (type: string, fn: (e: DragEvent) => void): void => {
+        let set = map.get(type);
+        if (!set) {
+          set = new Set();
+          map.set(type, set);
+        }
+        set.add(fn);
+      };
+    const untrack =
+      (map: Map<string, Set<(e: DragEvent) => void>>) =>
+      (type: string, fn: (e: DragEvent) => void): void => {
+        map.get(type)?.delete(fn);
+      };
+    const doc = {
+      addEventListener: track(docListeners),
+      removeEventListener: untrack(docListeners),
+    };
+    const el = {
+      style: {} as Record<string, string>,
+      clientWidth: 1200,
+      clientHeight: 800,
+      ownerDocument: doc,
+      getRootNode: () => doc,
+      addEventListener: track(elListeners),
+      removeEventListener: untrack(elListeners),
+      setPointerCapture() {},
+      releasePointerCapture() {},
+      hasPointerCapture: () => false,
+    };
+    const camera = new THREE.PerspectiveCamera(48, 16 / 9, 2, 14000);
+    camera.position.set(0, 1200, 1000);
+    const controls = new OrbitControls(camera, el as unknown as HTMLElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.minDistance = MIN_ZOOM_DISTANCE;
+    controls.maxDistance = MAX_ZOOM_DISTANCE;
+    controls.zoomToCursor = true;
+    controls.target.set(0, 100, 0);
+    controls.update();
+    const emit = (type: string, e: DragEvent): void => {
+      for (const fn of elListeners.get(type) ?? []) fn(e);
+      for (const fn of docListeners.get(type) ?? []) fn(e);
+    };
+    const applyBinding = (panMode: boolean): void => {
+      // Same translation the canvas tick performs.
+      const binding = panModeBinding(panMode);
+      controls.enableRotate = binding.enableRotate;
+      controls.mouseButtons.LEFT = binding.left === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+      controls.touches.ONE = binding.oneFinger === "pan" ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+    };
+    const drag = (
+      x0: number, y0: number, x1: number, y1: number,
+      opts: { pointerType?: string; button?: number; pointerId?: number } = {},
+    ): void => {
+      const { pointerType = "mouse", button = 0, pointerId = 1 } = opts;
+      camera.updateMatrixWorld();
+      // Touch handlers read pageX/pageY, mouse handlers clientX/clientY.
+      const at = (clientX: number, clientY: number): DragEvent => ({
+        pointerId, pointerType, button, clientX, clientY, pageX: clientX, pageY: clientY,
+      });
+      emit("pointerdown", at(x0, y0));
+      emit("pointermove", at(x1, y1));
+      emit("pointerup", at(x1, y1));
+      controls.update();
+    };
+    return { camera, controls, applyBinding, drag };
+  }
+
+  it("orbits on left-drag by default: the target stays, the camera swings", () => {
+    const { camera, controls, drag } = makeDragRig();
+    const preTarget = controls.target.clone();
+    const prePos = camera.position.clone();
+    drag(600, 400, 700, 400);
+    expect(controls.target.x).toBeCloseTo(preTarget.x, 9);
+    expect(controls.target.y).toBeCloseTo(preTarget.y, 9);
+    expect(controls.target.z).toBeCloseTo(preTarget.z, 9);
+    expect(camera.position.distanceTo(prePos)).toBeGreaterThan(1);
+  });
+
+  it("pans on left-drag in pan mode: a rigid translation, angle locked", () => {
+    const { camera, controls, applyBinding, drag } = makeDragRig();
+    applyBinding(true);
+    const preTarget = controls.target.clone();
+    const preOffset = camera.position.clone().sub(controls.target);
+    drag(600, 400, 700, 400);
+    // The focus travelled with the drag…
+    expect(controls.target.distanceTo(preTarget)).toBeGreaterThan(1);
+    // …while the position→target offset (yaw/pitch/distance) survived.
+    const postOffset = camera.position.clone().sub(controls.target);
+    expect(postOffset.x).toBeCloseTo(preOffset.x, 6);
+    expect(postOffset.y).toBeCloseTo(preOffset.y, 6);
+    expect(postOffset.z).toBeCloseTo(preOffset.z, 6);
+  });
+
+  it("reads a pan-mode left-drag as a rigid pan for the clamp branch", () => {
+    const { camera, controls, applyBinding, drag } = makeDragRig();
+    applyBinding(true);
+    camera.updateMatrixWorld();
+    const preTargetX = controls.target.x;
+    const preTargetZ = controls.target.z;
+    const prePosX = camera.position.x;
+    const prePosZ = camera.position.z;
+    drag(600, 400, 700, 400);
+    expect(
+      isRigidPan(
+        controls.target.x - preTargetX,
+        controls.target.z - preTargetZ,
+        camera.position.x - prePosX,
+        camera.position.z - prePosZ,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps right-drag panning in both modes", () => {
+    for (const panMode of [false, true]) {
+      const { camera, controls, applyBinding, drag } = makeDragRig();
+      applyBinding(panMode);
+      const preTarget = controls.target.clone();
+      const preOffset = camera.position.clone().sub(controls.target);
+      drag(600, 400, 700, 400, { button: 2 });
+      expect(controls.target.distanceTo(preTarget)).toBeGreaterThan(1);
+      const postOffset = camera.position.clone().sub(controls.target);
+      expect(postOffset.x).toBeCloseTo(preOffset.x, 6);
+      expect(postOffset.y).toBeCloseTo(preOffset.y, 6);
+      expect(postOffset.z).toBeCloseTo(preOffset.z, 6);
+    }
+  });
+
+  it("pans on one-finger drag in pan mode, orbits when off", () => {
+    for (const panMode of [false, true]) {
+      const { camera, controls, applyBinding, drag } = makeDragRig();
+      applyBinding(panMode);
+      const preTarget = controls.target.clone();
+      const preOffset = camera.position.clone().sub(controls.target);
+      drag(600, 400, 700, 400, { pointerType: "touch", pointerId: 10 });
+      if (panMode) {
+        expect(controls.target.distanceTo(preTarget)).toBeGreaterThan(1);
+        const postOffset = camera.position.clone().sub(controls.target);
+        expect(postOffset.x).toBeCloseTo(preOffset.x, 6);
+        expect(postOffset.y).toBeCloseTo(preOffset.y, 6);
+        expect(postOffset.z).toBeCloseTo(preOffset.z, 6);
+      } else {
+        expect(controls.target.x).toBeCloseTo(preTarget.x, 9);
+        expect(controls.target.y).toBeCloseTo(preTarget.y, 9);
+        expect(controls.target.z).toBeCloseTo(preTarget.z, 9);
+      }
+    }
+  });
+
+  it("restores orbiting when pan mode toggles back off", () => {
+    const { camera, controls, applyBinding, drag } = makeDragRig();
+    applyBinding(true);
+    applyBinding(false);
+    const preTarget = controls.target.clone();
+    const prePos = camera.position.clone();
+    drag(600, 400, 700, 400);
+    expect(controls.target.x).toBeCloseTo(preTarget.x, 9);
+    expect(controls.target.y).toBeCloseTo(preTarget.y, 9);
+    expect(controls.target.z).toBeCloseTo(preTarget.z, 9);
+    expect(camera.position.distanceTo(prePos)).toBeGreaterThan(1);
   });
 });
