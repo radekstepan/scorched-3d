@@ -141,6 +141,8 @@ interface Props {
   onPositions?: (positions: { x: number; z: number; alive: boolean; rank: number }[]) => void;
   /** Live HQ status broadcast (~4 Hz) for minimap markers. */
   onHq?: (hqs: HqStatus[]) => void;
+  /** Fired when the player presses M (mute toggle shortcut). */
+  onToggleMute?: () => void;
   /**
    * Territory paint broadcast (~4 Hz while the overlay is on, null while
    * off) for the minimap canvas. The 3D terrain reads the same paint
@@ -155,7 +157,7 @@ interface Props {
   jumpTo?: { x: number; z: number; seq: number } | null;
 }
 
-export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, onTerritory, jumpTo, suspended = false }: Props) {
+export default function TerrainCanvas({ map, options, onHover, onSelection, onPositions, onHq, onToggleMute, onTerritory, jumpTo, suspended = false }: Props) {
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const clearInputRef = useRef<(() => void) | null>(null);
@@ -169,6 +171,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
   const selectionRef = useRef(onSelection);
   const positionsRef = useRef(onPositions);
   const hqRef = useRef(onHq);
+  const toggleMuteRef = useRef(onToggleMute);
   const territoryRef = useRef(onTerritory);
   const jumpRef = useRef(jumpTo);
   optsRef.current = options;
@@ -176,6 +179,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
   selectionRef.current = onSelection;
   positionsRef.current = onPositions;
   hqRef.current = onHq;
+  toggleMuteRef.current = onToggleMute;
   territoryRef.current = onTerritory;
   jumpRef.current = jumpTo;
 
@@ -720,6 +724,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // Wrecks are never selectable (belt-and-braces: picks already filter
       // them, but kills can land mid-gesture). Markers are static: pose once
       // here, no per-tick animation.
+      const prevCount = selection.length;
       selection = next.filter((i) => !combat.isDestroyedAt(i));
       const vis = markerVisibility(units.children.length, selection);
       units.children.forEach((child, i) => {
@@ -730,6 +735,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         setTeamRingSelected(child as THREE.Group, vis[i] ?? false);
       });
       selectionRef.current?.([...selection]);
+      // A fresh tick only when the box gains hulls: clears, deselects, and
+      // death-drops stay silent (the death cue already carries those).
+      if (selection.length > prevCount) sound.playSelect();
     };
     // Unit death: freeze the mover as a husk and drop it from the
     // selection (combat sinks, gutters, and finally hides the charred
@@ -1071,6 +1079,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       sound.unlock();
       if (ev.code === "Escape") {
         applySelection([]);
+        return;
+      }
+      // M toggles mute without opening the panel (typing stays silent: the
+      // same focus guard as pan keys keeps chat/input keystrokes out).
+      if (ev.code === "KeyM" && !shouldIgnoreKeyEvent(ev.target)) {
+        toggleMuteRef.current?.();
         return;
       }
       if (!isPanKey(ev.code) || shouldIgnoreKeyEvent(ev.target)) return;

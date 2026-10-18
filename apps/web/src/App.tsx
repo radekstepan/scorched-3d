@@ -35,6 +35,7 @@ import { cn } from "./utils/cn";
 import { countLiveUnitsByKind } from "./utils/liveCounts";
 import { minimapPointToWorld } from "./renderer/minimap";
 import type { TerritoryMinimap } from "./renderer/territory";
+import { loadSoundPrefs, saveSoundPrefs } from "./renderer/sound";
 
 const PRESETS: MapPreset[] = ["greenreach", "archipelago", "highpass", "caldera", "rivercross", "dustplains"];
 
@@ -56,23 +57,36 @@ export default function App() {
   // same spot still retarget the camera. TerrainCanvas consumes it and
   // preserves yaw/pitch/zoom (only the orbit target translates).
   const [jump, setJump] = useState<{ x: number; z: number; seq: number } | null>(null);
-  const [options, setOptions] = useState<ViewOptions>({
-    exaggeration: DEFAULT_EXAGGERATION,
-    showWater: true,
-    showFeatures: true,
-    showWire: false,
-    showContours: false,
-    pixelFilter: true,
-    showWaypoints: false,
-    showHealth: true,
-    showTerritory: false,
-    followBattle: false,
-    panSpeed: 1,
-    zoomSpeed: 1,
-    nightMode: false,
-    muted: false,
-    volume: 0.8,
+  const [options, setOptions] = useState<ViewOptions>(() => {
+    // Stored Sound panel state seeds the mix (mute survives a reload);
+    // missing or corrupt entries fall back to on at 0.8 inside the loader.
+    // Guarded for headless renders with no storage.
+    const sound = loadSoundPrefs(typeof localStorage === "undefined" ? undefined : localStorage);
+    return {
+      exaggeration: DEFAULT_EXAGGERATION,
+      showWater: true,
+      showFeatures: true,
+      showWire: false,
+      showContours: false,
+      pixelFilter: true,
+      showWaypoints: false,
+      showHealth: true,
+      showTerritory: false,
+      followBattle: false,
+      panSpeed: 1,
+      zoomSpeed: 1,
+      nightMode: false,
+      muted: sound.muted,
+      volume: sound.volume,
+    };
   });
+
+  // The Sound panel persists itself: every mute/volume change lands in
+  // localStorage so the next visit opens with the same mix.
+  useEffect(() => {
+    if (typeof localStorage === "undefined") return;
+    saveSoundPrefs({ muted: options.muted, volume: options.volume }, localStorage);
+  }, [options.muted, options.volume]);
 
   // Cache selection-tray thumbnails on load (one idle-chunked 3D render
   // per kind) so the first selection is pure cache hits, never mid-gesture
@@ -238,6 +252,7 @@ export default function App() {
           onSelection={setSelected}
           onPositions={setLiveUnits}
           onHq={setHqs}
+          onToggleMute={() => setOptions((o) => ({ ...o, muted: !o.muted }))}
           onTerritory={setTerritory}
           jumpTo={jump}
         />
@@ -402,7 +417,7 @@ export default function App() {
 
         <div className="hud-panel mt-3 space-y-3 p-3">
           <Label>Sound</Label>
-          <Toggle label="Mute" on={options.muted} onClick={() => patch({ muted: !options.muted })} />
+          <Toggle label="Mute (M)" on={options.muted} onClick={() => patch({ muted: !options.muted })} />
           <Slider
             label="Volume"
             value={options.volume}

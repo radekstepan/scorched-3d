@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  loadSoundPrefs,
+  saveSoundPrefs,
   SoundFx,
+  SOUND_DEFAULT_PREFS,
   SOUND_MAX_VOICES,
+  SOUND_PREFS_KEY,
   SOUND_REF_DISTANCE,
+  soundDullForDistance,
   soundGainForDistance,
   stereoPan,
+  type SoundPrefsStorage,
 } from "./sound";
 
 /** Manual clock (ms) driving the synth's throttle + voice windows. */
@@ -241,5 +247,168 @@ describe("SoundFx", () => {
     sound.playAck();
     expect(sound.played).toHaveLength(1);
     expect(() => sound.unlock()).not.toThrow();
+  });
+
+  it("humanizes pitch: every cue draws 0.94..1.06 from the injected stream", () => {
+    const clock = makeClock();
+    // A fixed draw pins the mapping exactly (0.5 → dead center 1.0).
+    const sound = new SoundFx(clock.now, () => 0.5);
+    sound.playShot("stump", "round", 0, 0);
+    expect(sound.played[0]!.pitch).toBeCloseTo(1.0, 12);
+    sound.dispose();
+    // A cycling stream spreads real cues across the band, never outside it.
+    const draws = [0, 0.25, 0.75, 0.9999];
+    let i = 0;
+    const varied = new SoundFx(clock.now, () => draws[i++ % draws.length]!);
+    for (let n = 0; n < 8; n++) {
+      varied.playShot("stump", "round", 0, 0);
+      clock.advance(50);
+    }
+    const pitches = varied.played.map((p) => p.pitch);
+    expect(pitches).toHaveLength(8);
+    for (const p of pitches) {
+      expect(p).toBeGreaterThanOrEqual(0.94);
+      expect(p).toBeLessThanOrEqual(1.06);
+    }
+    expect(Math.min(...pitches)).toBeCloseTo(0.94, 12);
+    expect(new Set(pitches).size).toBeGreaterThan(1);
+    varied.dispose();
+  });
+
+  it("draws pitch only for admitted cues: drops cost no stream steps", () => {
+    const clock = makeClock();
+    const draws: number[] = [];
+    let n = 0;
+    const sound = new SoundFx(clock.now, () => {
+      draws.push(n);
+      return (n++ % 100) / 100;
+    });
+    sound.setMuted(true);
+    sound.playShot("stump", "round", 0, 0);
+    expect(draws).toHaveLength(0);
+    sound.setMuted(false);
+    sound.playShot("stump", "round", 0, 0);
+    sound.playShot("hammer", "round", 0, 0); // throttled: same tick
+    expect(draws).toHaveLength(1);
+    sound.dispose();
+  });
+
+  it("ticks selections soft: own family, HUD-centered, throttled alone", () => {
+    const clock = makeClock();
+    const sound = new SoundFx(clock.now);
+    sound.playSelect();
+    expect(sound.played[0]).toMatchObject({ type: "select", pan: 0 });
+    expect(sound.played[0]!.gain).toBeCloseTo(0.18 * 0.8, 12);
+    // A repeat inside the window drops, but a shot on the same tick lands.
+    sound.playSelect();
+    sound.playShot("stump", "round", 0, 0);
+    expect(sound.played.map((p) => p.type)).toEqual(["select", "shot"]);
+    clock.advance(80);
+    sound.playSelect();
+    expect(sound.played).toHaveLength(3);
+    sound.dispose();
+  });
+});
+
+describe("soundDullForDistance", () => {
+  it("stays bright up close and halves at twice the gain reference", () => {
+    expect(soundDullForDistance(0)).toBe(0);
+    expect(soundDullForDistance(-50)).toBe(0);
+    expect(soundDullForDistance(SOUND_REF_DISTANCE * 2)).toBeCloseTo(0.5, 12);
+  });
+
+  it("muffles monotonically: far booms duller than near ones", () => {
+    const dists = [100, 600, 1200, 3000, 10000];
+    const dulls = dists.map(soundDullForDistance);
+    for (let i = 1; i < dulls.length; i++) {
+      expect(dulls[i]).toBeGreaterThan(dulls[i - 1]!);
+    }
+    expect(soundDullForDistance(Number.POSITIVE_INFINITY)).toBe(1);
+    expect(soundDullForDistance(Number.NaN)).toBe(0);
+  });
+
+  it("records dull on blasts and deaths, never on dry families", () => {
+    const clock = makeClock();
+    const sound = new SoundFx(clock.now);
+    sound.playExplosion("stump", "round", false, 0, 0);
+    clock.advance(100);
+    sound.playExplosion("stump", "round", false, 5000, 0);
+    clock.advance(130);
+    sound.playDeath(5000, 0);
+    clock.advance(50);
+    sound.playShot("stump", "round", 5000, 0);
+    const [near, far, death, shot] = sound.played;
+    expect(near!.dull).toBe(0);
+    expect(far!.dull).toBeGreaterThan(0.5);
+    expect(death!.dull).toBeCloseTo(far!.dull, 12);
+    expect(shot!.dull).toBe(0);
+    sound.dispose();
+  });
+});
+
+describe("sound prefs", () => {
+  /** In-memory localStorage stand-in (same get/set surface). */
+  function makeStorage(initial?: Record<string, string>): SoundPrefsStorage & { data: Record<string, string> } {
+    const data = { ...(initial ?? {}) };
+    return {
+      data,
+      getItem: (key: string) => (key in data ? data[key]! : null),
+      setItem: (key: string, value: string) => {
+        data[key] = value;
+      },
+    };
+  }
+
+  it("defaults to on at 0.8 with no storage or no entry", () => {
+    expect(SOUND_DEFAULT_PREFS).toEqual({ muted: false, volume: 0.8 });
+    expect(loadSoundPrefs()).toEqual({ muted: false, volume: 0.8 });
+    expect(loadSoundPrefs(null)).toEqual({ muted: false, volume: 0.8 });
+    expect(loadSoundPrefs(makeStorage())).toEqual({ muted: false, volume: 0.8 });
+  });
+
+  it("round-trips mute + volume through storage", () => {
+    const storage = makeStorage();
+    saveSoundPrefs({ muted: true, volume: 0.35 }, storage);
+    expect(storage.data[SOUND_PREFS_KEY]).toBe(JSON.stringify({ muted: true, volume: 0.35 }));
+    expect(loadSoundPrefs(storage)).toEqual({ muted: true, volume: 0.35 });
+  });
+
+  it("heals corrupt entries field-by-field instead of crashing the panel", () => {
+    expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: "not json{" }))).toEqual({
+      muted: false,
+      volume: 0.8,
+    });
+    expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: "null" }))).toEqual({
+      muted: false,
+      volume: 0.8,
+    });
+    // A valid mute survives next to a hand-edited garbage volume.
+    expect(
+      loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"muted":true,"volume":"loud"}' })),
+    ).toEqual({ muted: true, volume: 0.8 });
+    // Out-of-range volumes clamp into 0..1.
+    expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"volume":7}' }))).toEqual({
+      muted: false,
+      volume: 1,
+    });
+    expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"volume":-2}' }))).toEqual({
+      muted: false,
+      volume: 0,
+    });
+  });
+
+  it("never throws on hostile storage (and never writes without one)", () => {
+    const throwing: SoundPrefsStorage = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+      setItem: () => {
+        throw new Error("full");
+      },
+    };
+    expect(() => loadSoundPrefs(throwing)).not.toThrow();
+    expect(loadSoundPrefs(throwing)).toEqual({ muted: false, volume: 0.8 });
+    expect(() => saveSoundPrefs({ muted: true, volume: 0.5 }, throwing)).not.toThrow();
+    expect(() => saveSoundPrefs({ muted: true, volume: 0.5 })).not.toThrow();
   });
 });

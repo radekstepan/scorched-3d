@@ -3,10 +3,12 @@ import type { AttackMode, UnitKind } from "@scorched-3d/core";
 /**
  * Battle sound: WebAudio-synthesized combat effects, no binary assets.
  *
- * Every shot, blast, death, HQ release, and player order plays a small
- * synthesized cue (pitched oscillators + filtered noise through a shared
- * master compressor), attenuated by camera distance so zooming in makes the
- * battle louder, and panned by the camera-relative bearing of the event.
+ * Every shot, blast, death, HQ release, selection, and player order plays
+ * a small synthesized cue (pitched oscillators + filtered noise through a
+ * shared master compressor), attenuated by camera distance so zooming in
+ * makes the battle louder, panned by the camera-relative bearing of the
+ * event, humanized with a per-cue pitch draw, and (for blasts) muffled with
+ * distance so far booms rumble while near ones crack.
  *
  * Nanolathe inspiration (`internal/audio/doc.go`, `positional.go`): sound is
  * presentation-only — it reads committed combat events and never touches the
@@ -24,7 +26,7 @@ import type { AttackMode, UnitKind } from "@scorched-3d/core";
  */
 
 /** Event families, each with its own throttle window (see `THROTTLE_MS`). */
-export type SoundEventType = "shot" | "explosion" | "death" | "spawn" | "ack";
+export type SoundEventType = "shot" | "explosion" | "death" | "spawn" | "ack" | "select";
 
 /** One admitted cue: what sounded (or would have, headless), at what level. */
 export interface SoundPlayed {
@@ -35,6 +37,10 @@ export interface SoundPlayed {
   pan: number;
   /** Clock ms when admitted (the injected `now`, for tests). */
   at: number;
+  /** Per-cue pitch multiplier 0.94..1.06 (humanization draw, applied to voices). */
+  pitch: number;
+  /** Distance dull 0..1 for blasts (0 = full brightness up close). */
+  dull: number;
 }
 
 /**
@@ -83,6 +89,17 @@ export function stereoPan(
   return Math.max(-1, Math.min(1, p));
 }
 
+/**
+ * Distance dull 0..1 for blasts: far booms lose their highs (lows travel,
+ * highs don't), so a distant barrage rumbles instead of crackling. Half-dull
+ * at twice the gain reference, fully dull at infinity, zero up close. Pure.
+ */
+export function soundDullForDistance(distance: number): number {
+  if (!(distance > 0)) return 0;
+  if (!Number.isFinite(distance)) return 1;
+  return distance / (distance + SOUND_REF_DISTANCE * 2);
+}
+
 /** Per-family peak gain (before volume × distance). Deaths hit hardest. */
 const FAMILY_PEAK: Record<SoundEventType, number> = {
   shot: 0.6,
@@ -90,6 +107,7 @@ const FAMILY_PEAK: Record<SoundEventType, number> = {
   death: 1.0,
   spawn: 0.35,
   ack: 0.22,
+  select: 0.18,
 };
 
 /**
@@ -103,6 +121,7 @@ const THROTTLE_MS: Record<SoundEventType, number> = {
   death: 120,
   spawn: 200,
   ack: 120,
+  select: 80,
 };
 
 /** Concurrent voice ceiling: past this, new cues are dropped, never stolen. */
@@ -138,8 +157,65 @@ function audioContextCtor(): (new () => AudioContext) | null {
   return w.AudioContext ?? w.webkitAudioContext ?? null;
 }
 
+/** Persisted Sound panel state (mute + master volume). */
+export interface SoundPrefs {
+  muted: boolean;
+  volume: number;
+}
+
+/** localStorage key for the Sound panel state. */
+export const SOUND_PREFS_KEY = "scorched-3d:sound";
+
+/** Factory sound state: on at 0.8 (mirrors the App panel defaults). */
+export const SOUND_DEFAULT_PREFS: SoundPrefs = { muted: false, volume: 0.8 };
+
+/** Minimal storage surface (localStorage-compatible, fakeable in tests). */
+export interface SoundPrefsStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
+/**
+ * Read persisted sound prefs: missing/corrupt/foreign values fall back to
+ * the factory defaults field-by-field, so a hand-edited entry never breaks
+ * the panel. Pure against the injected storage (none = defaults).
+ */
+export function loadSoundPrefs(storage?: SoundPrefsStorage | null): SoundPrefs {
+  if (!storage) return { ...SOUND_DEFAULT_PREFS };
+  try {
+    const raw = storage.getItem(SOUND_PREFS_KEY);
+    if (!raw) return { ...SOUND_DEFAULT_PREFS };
+    const parsed = JSON.parse(raw) as Partial<SoundPrefs> | null;
+    if (!parsed || typeof parsed !== "object") return { ...SOUND_DEFAULT_PREFS };
+    return {
+      muted: typeof parsed.muted === "boolean" ? parsed.muted : SOUND_DEFAULT_PREFS.muted,
+      volume:
+        typeof parsed.volume === "number" && Number.isFinite(parsed.volume)
+          ? Math.max(0, Math.min(1, parsed.volume))
+          : SOUND_DEFAULT_PREFS.volume,
+    };
+  } catch {
+    return { ...SOUND_DEFAULT_PREFS };
+  }
+}
+
+/** Persist sound prefs; a hostile storage (throws, full) stays silent. */
+export function saveSoundPrefs(prefs: SoundPrefs, storage?: SoundPrefsStorage | null): void {
+  if (!storage) return;
+  try {
+    const volume =
+      typeof prefs.volume === "number" && Number.isFinite(prefs.volume)
+        ? Math.max(0, Math.min(1, prefs.volume))
+        : SOUND_DEFAULT_PREFS.volume;
+    storage.setItem(SOUND_PREFS_KEY, JSON.stringify({ muted: prefs.muted === true, volume }));
+  } catch {
+    /* prefs never break the battle */
+  }
+}
+
 export class SoundFx {
   private now: () => number;
+  private random: () => number;
   private muted = false;
   private volume = 0.8;
   private lastPlayed: Record<SoundEventType, number> = {
@@ -148,6 +224,7 @@ export class SoundFx {
     death: Number.NEGATIVE_INFINITY,
     spawn: Number.NEGATIVE_INFINITY,
     ack: Number.NEGATIVE_INFINITY,
+    select: Number.NEGATIVE_INFINITY,
   };
   /** Live voice expiry stamps (clock ms); pruned on every admission. */
   private voices: number[] = [];
@@ -158,8 +235,9 @@ export class SoundFx {
   private noiseBuf: AudioBuffer | null = null;
   private disposed = false;
 
-  constructor(now: () => number = () => Date.now()) {
+  constructor(now: () => number = () => Date.now(), random: () => number = Math.random) {
     this.now = now;
+    this.random = random;
   }
 
   setMuted(muted: boolean): void {
@@ -233,18 +311,19 @@ export class SoundFx {
     const peak = shotPeak(kind, attack);
     // Shells thump longer than bolts crack (voice slot mirrors the staging).
     const dur = attack === "grenade" ? 0.16 : kind === "hammer" ? 0.3 : 0.11;
-    if (!this.admit("shot", peak, distance, pan, dur)) return;
+    const pitch = this.admit("shot", peak, distance, pan, dur);
+    if (!pitch) return;
     if (!this.ctx) return;
     if (attack === "grenade") {
-      this.blip(280, 130, 0.14, "sine", peak, pan);
+      this.blip(280, 130, 0.14, "sine", peak, pan, 0, pitch);
     } else if (kind === "hammer") {
-      this.blip(120, 38, 0.28, "sine", peak, pan);
-      this.noise(0.22, "lowpass", 1400, 180, peak * 0.8, pan);
+      this.blip(120, 38, 0.28, "sine", peak, pan, 0, pitch);
+      this.noise(0.22, "lowpass", 1400, 180, peak * 0.8, pan, 0, pitch);
     } else if (kind === "peewee") {
-      this.blip(1400, 500, 0.06, "square", peak, pan);
+      this.blip(1400, 500, 0.06, "square", peak, pan, 0, pitch);
     } else {
-      this.blip(700, 160, 0.09, "square", peak, pan);
-      this.noise(0.04, "highpass", 2500, 2500, peak * 0.5, pan);
+      this.blip(700, 160, 0.09, "square", peak, pan, 0, pitch);
+      this.noise(0.04, "highpass", 2500, 2500, peak * 0.5, pan, 0, pitch);
     }
   }
 
@@ -257,37 +336,56 @@ export class SoundFx {
   ): void {
     const peak = explosionPeak(kind, attack, epic);
     const dur = epic ? 1.2 : 0.6;
-    if (!this.admit("explosion", peak, distance, pan, dur)) return;
+    const dull = soundDullForDistance(distance);
+    const pitch = this.admit("explosion", peak, distance, pan, dur, dull);
+    if (!pitch) return;
     if (!this.ctx) return;
-    this.noise(epic ? 1.1 : 0.55, "lowpass", 2600, 90, peak, pan);
-    this.blip(95, 30, epic ? 0.9 : 0.5, "sine", peak * 0.9, pan);
-    if (epic) this.blip(70, 26, 0.9, "sine", peak * 0.7, pan, 0.12);
+    // Distance muffles the crackle but never the sub: the lowpass top melts
+    // toward the floor while both sine drops keep their weight, so far booms
+    // rumble and near ones crack.
+    const bright = 1 - dull * 0.85;
+    this.noise(epic ? 1.1 : 0.55, "lowpass", 2600 * bright, 90, peak, pan, 0, pitch);
+    this.blip(95, 30, epic ? 0.9 : 0.5, "sine", peak * 0.9, pan, 0, pitch);
+    if (epic) this.blip(70, 26, 0.9, "sine", peak * 0.7, pan, 0.12, pitch);
   }
 
   /** Unit-death cue: the epic blast plus a tearing-metal fall. */
   playDeath(distance: number, pan: number): void {
     const peak = FAMILY_PEAK.death;
-    if (!this.admit("death", peak, distance, pan, 1.3)) return;
+    const dull = soundDullForDistance(distance);
+    const pitch = this.admit("death", peak, distance, pan, 1.3, dull);
+    if (!pitch) return;
     if (!this.ctx) return;
-    this.noise(1.1, "lowpass", 2400, 80, peak * 0.9, pan);
-    this.blip(90, 28, 1.0, "sine", peak * 0.9, pan);
-    this.blip(320, 55, 0.45, "sawtooth", peak * 0.35, pan);
+    const bright = 1 - dull * 0.85;
+    this.noise(1.1, "lowpass", 2400 * bright, 80, peak * 0.9, pan, 0, pitch);
+    this.blip(90, 28, 1.0, "sine", peak * 0.9, pan, 0, pitch);
+    this.blip(320, 55, 0.45, "sawtooth", peak * 0.35, pan, 0, pitch);
   }
 
   /** HQ release clank: a soft double-thunk at the factory door. */
   playSpawn(distance: number, pan: number): void {
     const peak = FAMILY_PEAK.spawn;
-    if (!this.admit("spawn", peak, distance, pan, 0.25)) return;
+    const pitch = this.admit("spawn", peak, distance, pan, 0.25);
+    if (!pitch) return;
     if (!this.ctx) return;
-    this.blip(170, 85, 0.12, "square", peak, pan);
-    this.blip(120, 70, 0.1, "square", peak * 0.8, pan, 0.09);
+    this.blip(170, 85, 0.12, "square", peak, pan, 0, pitch);
+    this.blip(120, 70, 0.1, "square", peak * 0.8, pan, 0.09, pitch);
   }
 
   /** UI acknowledge for player move/attack orders (no distance — it's HUD). */
   playAck(): void {
-    if (!this.admit("ack", FAMILY_PEAK.ack, 0, 0, 0.07)) return;
+    const pitch = this.admit("ack", FAMILY_PEAK.ack, 0, 0, 0.07);
+    if (!pitch) return;
     if (!this.ctx) return;
-    this.blip(980, 990, 0.055, "triangle", FAMILY_PEAK.ack, 0);
+    this.blip(980, 990, 0.055, "triangle", FAMILY_PEAK.ack, 0, 0, pitch);
+  }
+
+  /** Selection tick for freshly selected hulls (HUD: no distance, centered). */
+  playSelect(): void {
+    const pitch = this.admit("select", FAMILY_PEAK.select, 0, 0, 0.05);
+    if (!pitch) return;
+    if (!this.ctx) return;
+    this.blip(1400, 1180, 0.04, "triangle", FAMILY_PEAK.select, 0, 0, pitch);
   }
 
   dispose(): void {
@@ -307,8 +405,9 @@ export class SoundFx {
 
   /**
    * Shared admission gate: mute, throttle, voice cap, and audibility each
-   * drop the cue silently; admitted cues take a voice slot and join the
-   * `played` log. `peak` is the family peak before volume × distance.
+   * drop the cue silently (returning 0); admitted cues take a voice slot,
+   * join the `played` log, and return their pitch draw for the voices.
+   * `peak` is the family peak before volume × distance.
    */
   private admit(
     type: SoundEventType,
@@ -316,19 +415,24 @@ export class SoundFx {
     distance: number,
     pan: number,
     voiceSeconds: number,
-  ): boolean {
-    if (this.disposed || this.muted) return false;
+    dull = 0,
+  ): number {
+    if (this.disposed || this.muted) return 0;
     const at = this.now();
-    if (at - this.lastPlayed[type] < THROTTLE_MS[type]) return false;
+    if (at - this.lastPlayed[type] < THROTTLE_MS[type]) return 0;
     this.pruneVoices();
-    if (this.voices.length >= SOUND_MAX_VOICES) return false;
+    if (this.voices.length >= SOUND_MAX_VOICES) return 0;
     const gain = peak * this.volume * soundGainForDistance(distance);
-    if (!(gain >= SOUND_MIN_GAIN)) return false;
+    if (!(gain >= SOUND_MIN_GAIN)) return 0;
+    // Humanization: every admitted cue draws its own pitch (±6%), so a
+    // volley of identical guns reads as several guns, not one sample
+    // retriggered. Dropped cues draw nothing — the stream stays in step.
+    const pitch = 0.94 + this.random() * 0.12;
     this.lastPlayed[type] = at;
     this.voices.push(at + voiceSeconds * 1000);
-    this.played.push({ type, gain, pan: Math.max(-1, Math.min(1, pan)), at });
+    this.played.push({ type, gain, pan: Math.max(-1, Math.min(1, pan)), at, pitch, dull });
     if (this.played.length > PLAYED_CAP) this.played.shift();
-    return true;
+    return pitch;
   }
 
   private pruneVoices(): void {
@@ -356,6 +460,7 @@ export class SoundFx {
     peak: number,
     pan: number,
     delay = 0,
+    rate = 1,
   ): void {
     const ctx = this.ctx;
     const master = this.master;
@@ -364,8 +469,8 @@ export class SoundFx {
       const t = ctx.currentTime + delay;
       const osc = ctx.createOscillator();
       osc.type = wave;
-      osc.frequency.setValueAtTime(Math.max(20, freqA), t);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(20, freqB), t + dur);
+      osc.frequency.setValueAtTime(Math.max(20, freqA * rate), t);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(20, freqB * rate), t + dur);
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.008);
@@ -396,6 +501,7 @@ export class SoundFx {
     peak: number,
     pan: number,
     delay = 0,
+    rate = 1,
   ): void {
     const ctx = this.ctx;
     const master = this.master;
@@ -407,8 +513,8 @@ export class SoundFx {
       const flt = ctx.createBiquadFilter();
       flt.type = filter;
       const t = ctx.currentTime + delay;
-      flt.frequency.setValueAtTime(Math.max(30, fA), t);
-      flt.frequency.exponentialRampToValueAtTime(Math.max(30, fB), t + dur);
+      flt.frequency.setValueAtTime(Math.max(30, fA * rate), t);
+      flt.frequency.exponentialRampToValueAtTime(Math.max(30, fB * rate), t + dur);
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.01);
