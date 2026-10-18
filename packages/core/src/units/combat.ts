@@ -1228,6 +1228,113 @@ export function firingSidestep(
   return null;
 }
 
+/**
+ * Farthest a forest-futility escape looks for a clear firing seat, world
+ * units: five sidestep rings off the firing line. A seat past this is a
+ * flank march, not footwork — the hull closes through the wood instead
+ * (crushing a lane) and the guns fire through on proven futility.
+ */
+export const CLEAR_LANE_MAX_OFFSET = SIDESTEP_OFFSET * 5;
+
+export interface ClearLaneOptions {
+  /** Roster indices, fixing the deterministic ring scan order (no rng). */
+  selfIndex?: number;
+  targetIndex?: number;
+  /** Lateral ring spacing (defaults to `SIDESTEP_OFFSET`). */
+  offset?: number;
+  /**
+   * Farthest ring to scan (defaults to `CLEAR_LANE_MAX_OFFSET`). Non-positive
+   * values scan nothing.
+   */
+  maxOffset?: number;
+  /**
+   * Optional terrain probe (world XZ → blocked): candidates the drive could
+   * never reach lose like blocked lanes do, so the escape never names a seat
+   * across open water. The caller owns the surface; absent, every seat reads
+   * walkable and the drive's slope-pinned hold covers the rest.
+   */
+  blocked?: (x: number, z: number) => boolean;
+}
+
+/**
+ * Clear firing seat around the wood: the nearest lateral point off the
+ * firing line whose lane to the target crosses no standing tree, or null
+ * when no such seat exists inside `CLEAR_LANE_MAX_OFFSET`.
+ *
+ * The wide twin of `firingSidestep`: that evaluator scores one shuffle each
+ * way and holds when neither strictly improves, so a belt wider than one
+ * shuffle reads as hopeless and the hull closes straight through the wood.
+ * This scan keeps looking — rings at 1..5 shuffle-steps off the line,
+ * near to far, the roster-hashed side first — and names the first seat with
+ * a genuinely clear lane, so a gun that keeps hitting trees walks around
+ * the belt instead of feeding the canopy. Only forest-obstructed seeks
+ * attach it (see `attachForestStep`): the routine seat shuffle stays a
+ * single shuffle, and a seat past the bound is a flank the escape refuses.
+ *
+ * A seat qualifies only when its lane crosses zero crowns (capped count, so
+ * the scan stops at the first crossed tree) and the seat itself stands
+ * clear of every crown (a muzzle parked inside the canopy would stick its
+ * first round). Candidate lanes reuse the shooter's height, like the seat
+ * evaluator. Pure; exact ties break on the roster indices.
+ */
+export function clearLaneSeat(
+  self: CombatVec3,
+  target: CombatVec3,
+  trees: readonly TreeStand[],
+  opts?: ClearLaneOptions,
+): { x: number; z: number } | null {
+  if (
+    !self || !target ||
+    !Number.isFinite(self.x) || !Number.isFinite(self.y) || !Number.isFinite(self.z) ||
+    !Number.isFinite(target.x) || !Number.isFinite(target.y) || !Number.isFinite(target.z)
+  ) {
+    return null;
+  }
+  const dx = target.x - self.x;
+  const dz = target.z - self.z;
+  const dist = Math.hypot(dx, dz);
+  if (!(dist > 1e-6)) return null;
+  const offset = opts?.offset ?? SIDESTEP_OFFSET;
+  if (!(offset > 0)) return null;
+  const maxOffset = opts?.maxOffset ?? CLEAR_LANE_MAX_OFFSET;
+  const rings = Math.floor(maxOffset / offset);
+  if (!(rings >= 1)) return null;
+  // A clear lane needs no escape: only a blocked gun walks.
+  if (countTreesOnSegment(self, target, trees, 0) === 0) return null;
+  // Perpendicular of the firing line: +1 reads 90° left of self→target, the
+  // same frame `firingSidestep` scores in.
+  const px = -dz / dist;
+  const pz = dx / dist;
+  const preferPlus = defaultSidestepSide(opts) > 0;
+  const blocked = opts?.blocked;
+  const seatClearOfCrowns = (x: number, z: number): boolean => {
+    const r2 = TREE_CANOPY_RADIUS * TREE_CANOPY_RADIUS;
+    for (const tree of trees) {
+      if (!tree.standing) continue;
+      const cdx = tree.x - x;
+      const cdz = tree.z - z;
+      if (cdx * cdx + cdz * cdz <= r2) return false;
+    }
+    return true;
+  };
+  for (let ring = 1; ring <= rings; ring++) {
+    const step = offset * ring;
+    const first = preferPlus
+      ? { x: self.x + px * step, z: self.z + pz * step }
+      : { x: self.x - px * step, z: self.z - pz * step };
+    const second = preferPlus
+      ? { x: self.x - px * step, z: self.z - pz * step }
+      : { x: self.x + px * step, z: self.z + pz * step };
+    for (const seat of [first, second]) {
+      if (blocked?.(seat.x, seat.z) ?? false) continue;
+      if (!seatClearOfCrowns(seat.x, seat.z)) continue;
+      if (countTreesOnSegment({ x: seat.x, y: self.y, z: seat.z }, target, trees, 0) !== 0) continue;
+      return seat;
+    }
+  }
+  return null;
+}
+
 /** Deterministic tie-break side (+1/-1) from the roster indices. */
 function defaultSidestepSide(opts?: SidestepOptions): number {
   const rawA = opts?.selfIndex;

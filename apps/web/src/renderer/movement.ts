@@ -5,7 +5,9 @@ import {
   advanceMovers,
   canSpot,
   canSpotPoint,
+  clearLaneSeat,
   clearThreat,
+  countTreesOnSegment,
   createSpotCache,
   eyeHeight,
   findWorldPath,
@@ -385,10 +387,11 @@ export class UnitMovement {
    * target — a higher vantage, shorter range, or out of the forest — holds
    * at weapons-range stand-off, and resumes patrol if the fight moves on).
    * When standing wood sits on the muzzle-to-target lane the seek also
-   * carries a lateral `firingSidestep` point (see `attachForestStep`), so
-   * the hull steps off the blocked lane instead of closing straight
-   * through the wood firing into the crown the whole way; ridge-only
-   * blocks keep the plain close (a closer/higher vantage is their cure).
+   * carries a lateral escape point (see `attachForestStep`), so the hull
+   * steps off the blocked lane — around the belt when a clear seat exists —
+   * instead of closing straight through the wood firing into the crown
+   * the whole way; ridge-only blocks keep the plain close (a closer/higher
+   * vantage is their cure).
    * Structure targets (an HQ fort, `target -1`) assault through core
    * `seekStructure` instead: the push survives the hunt sweep (never
    * clobbered by a team advance) and yields to consistent challengers
@@ -418,18 +421,21 @@ export class UnitMovement {
 
   /**
    * Forest-futility cure for an obstructed seek: when live wood blocks the
-   * muzzle-to-target lane, score the two lateral seats (`firingSidestep`,
-   * same evaluator the sweep uses) and carry the better one on the fresh
-   * memory, so the hull steps out of the wood instead of feeding the
-   * canopy. Event-gated (one obstructed report per three consecutive
-   * sticks), so the all-stands lane scan costs nothing per tick; the drive
-   * walks the step first at any range and clears it on arrival, and each
-   * further step needs three more consecutive sticks on a strictly better
-   * seat — bounded, terminating, never a move-shoot-move loop. Returns the
-   * mover untouched when the lane is clear of wood (ridge-only blocks
-   * close), when neither lateral clears it (deep forest: closing through
-   * still crushes a lane), or when the seats cannot be resolved. Pure over
-   * the mover: only the fresh memory is decorated, never the drive.
+   * muzzle-to-target lane, carry a lateral escape on the fresh memory, so
+   * the hull steps out of the wood instead of feeding the canopy. The near
+   * shuffle wins when its lane is fully clear (`firingSidestep`, same
+   * evaluator the sweep uses); otherwise the cure scans wider for the
+   * nearest seat with a clear lane around the belt (`clearLaneSeat`),
+   * falling back to the partial near improvement — and to the plain close
+   * when even that holds (deep forest with no way round: closing through
+   * still crushes a lane). Event-gated (one obstructed report per three
+   * consecutive sticks), so the all-stands lane scans cost nothing per
+   * tick; the drive walks the step first at any range and clears it on
+   * arrival, and each further step needs three more consecutive sticks —
+   * bounded, terminating, never a move-shoot-move loop. Returns the mover
+   * untouched when the lane is clear of wood (ridge-only blocks close) or
+   * when the seats cannot be resolved. Pure over the mover: only the fresh
+   * memory is decorated, never the drive.
    */
   private attachForestStep(
     mover: Mover,
@@ -484,11 +490,26 @@ export class UnitMovement {
         if (Number.isFinite(at.x) && Number.isFinite(at.z)) allies.push({ x: at.x, z: at.z });
       }
     }
-    const spot = firingSidestep(shooter, victim, stands, {
+    const near = firingSidestep(shooter, victim, stands, {
       allies,
       selfIndex: seeker,
       ...(target >= 0 ? { targetIndex: target } : {}),
     });
+    // A near shuffle onto a fully clear lane wins as-is (legacy seats and
+    // flank pressure preserved); otherwise scan wider for a clear seat
+    // around the belt, falling back to the partial near improvement — and
+    // to the plain close when even that holds (no way round: crush through).
+    if (
+      near &&
+      countTreesOnSegment({ x: near.x, y: shooter.y, z: near.z }, victim, stands, 0) === 0
+    ) {
+      return { ...mover, threat: { ...memory, sidestep: { ...near, obstruction: true } } };
+    }
+    const wide = clearLaneSeat(shooter, victim, stands, {
+      selfIndex: seeker,
+      ...(target >= 0 ? { targetIndex: target } : {}),
+    });
+    const spot = wide ?? near;
     if (!spot) return mover;
     return { ...mover, threat: { ...memory, sidestep: { ...spot, obstruction: true } } };
   }

@@ -1753,6 +1753,69 @@ describe("UnitMovement firing footwork", () => {
     movement.dispose();
   });
 
+  it("walks around a tree belt to a clear firing seat on a forest-obstructed seek", () => {
+    // Flash vs hammer 200 apart with a 9-crown belt across the lane: neither
+    // ±48 shuffle clears it (each still crosses wood), so the old cure gave
+    // up and closed straight through the belt. The wide search must name a
+    // farther seat whose lane to the foe crosses no wood at all.
+    const belt = [-64, -48, -32, -16, 0, 16, 32, 48, 64].map((z) => ({
+      x: 100, z, groundY: 104, standing: true,
+    }));
+    const stands = () => belt;
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+      stands,
+    );
+    movement.seekEngage(0, 1, 200, 0);
+    const memory = movement.moverState(0)?.threat;
+    expect(memory?.attacker).toBe(1);
+    expect(memory?.sidestep?.obstruction).toBe(true);
+    // The seat's lane is fully clear, past any single shuffle's reach.
+    const wood = stands();
+    const foe = { x: 200, y: 100 + muzzleHeight("hammer"), z: 0 };
+    const spot = memory!.sidestep!;
+    expect(Math.abs(spot.z)).toBeGreaterThan(48);
+    expect(
+      countTreesOnSegment({ x: spot.x, y: 100 + muzzleHeight("flash"), z: spot.z }, foe, wood),
+    ).toBe(0);
+    // The hull walks there instead of plowing the belt: off the firing line
+    // past shuffle reach, then arrived and cleared.
+    movement.threatenUnit(1, 0, 0, 0);
+    for (let n = 0; n < 600 && movement.moverState(0)?.threat?.sidestep; n++) {
+      movement.update(1 / 60);
+    }
+    expect(movement.moverState(0)?.threat?.sidestep).toBeUndefined();
+    expect(Math.abs(movement.moverState(0)!.z)).toBeGreaterThan(48);
+    movement.dispose();
+  });
+
+  it("closes through the wood when no clear seat exists around the belt", () => {
+    // A 21-crown wall no lateral seat inside the search bound clears: with
+    // no way round, the seek falls back to the plain close (crushing a lane)
+    // instead of naming a still-blocked seat.
+    const wall: { x: number; z: number; groundY: number; standing: boolean }[] = [];
+    for (let z = -160; z <= 160; z += 16) wall.push({ x: 100, z, groundY: 104, standing: true });
+    const { movement } = makeDuelMovement(
+      [
+        { x: 0, z: 0 },
+        { x: 200, z: 0 },
+      ],
+      [0, 1],
+      ["flash", "hammer"],
+      () => wall,
+    );
+    movement.seekEngage(0, 1, 200, 0);
+    const memory = movement.moverState(0)?.threat;
+    expect(memory?.attacker).toBe(1);
+    expect(memory?.sidestep).toBeUndefined();
+    movement.dispose();
+  });
+
   it("strafes an open 1v1 lane instead of holding still", () => {
     const { movement } = makeDuelMovement(
       [

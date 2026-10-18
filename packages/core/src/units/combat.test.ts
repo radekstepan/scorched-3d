@@ -9,6 +9,8 @@ import {
   barrelTouchesTrunk,
   BARREL_MOUNT,
   clampElevation,
+  clearLaneSeat,
+  countTreesOnSegment,
   disperseAim,
   ELEVATION_AIM_TOLERANCE,
   ELEVATION_MAX,
@@ -959,6 +961,73 @@ describe("firingSidestep", () => {
     expect(firingSidestep(self, self, [])).toBeNull();
     expect(firingSidestep(self, target, [], { offset: 0 })).toBeNull();
     expect(firingSidestep(self, target, [], { offset: -5 })).toBeNull();
+  });
+});
+
+describe("clearLaneSeat", () => {
+  const tree = (x: number, z: number, groundY = 8): TreeStand => ({ x, z, groundY, standing: true });
+  // Flat 400-unit firing line at y=30; search rings sit at ±48k off it.
+  const self = { x: 0, y: 30, z: 0 };
+  const target = { x: 400, y: 30, z: 0 };
+
+  it("holds a clear lane (a gun that can see needs no escape)", () => {
+    expect(clearLaneSeat(self, target, [])).toBeNull();
+    expect(clearLaneSeat(self, target, [tree(200, 200)])).toBeNull();
+  });
+
+  it("names the ring-1 seat when one shuffle clears the lane", () => {
+    // One crown centered on the lane; both laterals miss it. Symmetric tie —
+    // the roster indices pick minus (hash (0+17)%2 = 1), like the evaluator.
+    const spot = clearLaneSeat(self, target, [tree(200, 0)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET, 9);
+    expect(countTreesOnSegment({ x: spot.x, y: self.y, z: spot.z }, target, [tree(200, 0)])).toBe(0);
+  });
+
+  it("walks past blocked rings to the nearest clear seat around a belt", () => {
+    // A 9-crown belt no single shuffle clears: ring-1 lanes still clip the
+    // ±16 wood, ring 2 parks on the ±48 crowns, ring 3 clips ±64 — ring 4
+    // (±192, lane midpoint ±96) is the first fully clear seat.
+    const belt = [-64, -48, -32, -16, 0, 16, 32, 48, 64].map((z) => tree(200, z));
+    expect(firingSidestep(self, target, belt, { selfIndex: 0, targetIndex: 1 })).toBeNull();
+    const spot = clearLaneSeat(self, target, belt, { selfIndex: 0, targetIndex: 1 })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(-SIDESTEP_OFFSET * 4, 9);
+    expect(countTreesOnSegment({ x: spot.x, y: self.y, z: spot.z }, target, belt)).toBe(0);
+    // The mirror indices take the mirror seat, deterministically.
+    const mirror = clearLaneSeat(self, target, belt, { selfIndex: 1, targetIndex: 1 })!;
+    expect(mirror.x).toBeCloseTo(0, 9);
+    expect(mirror.z).toBeCloseTo(SIDESTEP_OFFSET * 4, 9);
+    expect(clearLaneSeat(self, target, belt, { selfIndex: 1, targetIndex: 1 })).toEqual(mirror);
+  });
+
+  it("refuses a seat parked inside a crown", () => {
+    // The lane crown plus a second crown on the minus ring-1 seat: minus is
+    // vetoed (a muzzle inside the canopy sticks its first round), so the
+    // escape takes the clear plus seat instead.
+    const spot = clearLaneSeat(self, target, [tree(200, 0), tree(0, -SIDESTEP_OFFSET)], {
+      selfIndex: 0,
+      targetIndex: 1,
+    })!;
+    expect(spot.x).toBeCloseTo(0, 9);
+    expect(spot.z).toBeCloseTo(SIDESTEP_OFFSET, 9);
+  });
+
+  it("gives up past the search bound (no way round, close through)", () => {
+    // A wall wider than the whole search: every ring's midpoint still lands
+    // on wood, so there is no clear seat to walk to.
+    const wall: TreeStand[] = [];
+    for (let z = -160; z <= 160; z += 16) wall.push(tree(200, z));
+    expect(clearLaneSeat(self, target, wall, { selfIndex: 0, targetIndex: 1 })).toBeNull();
+  });
+
+  it("returns null for degenerate inputs", () => {
+    expect(clearLaneSeat(self, self, [tree(200, 0)])).toBeNull();
+    expect(clearLaneSeat(self, target, [tree(200, 0)], { offset: 0 })).toBeNull();
+    expect(clearLaneSeat(self, target, [tree(200, 0)], { maxOffset: 0 })).toBeNull();
   });
 });
 
