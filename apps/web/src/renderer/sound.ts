@@ -163,11 +163,16 @@ export interface SoundPrefs {
   volume: number;
 }
 
-/** localStorage key for the Sound panel state. */
-export const SOUND_PREFS_KEY = "scorched-3d:sound";
+/**
+ * localStorage key for the Sound panel state. Versioned (`:v2`) because the
+ * v1 default was unmuted and the App persist effect auto-saved that default
+ * on every visit — a stored v1 `muted:false` was never an explicit choice,
+ * so it must not override the muted-by-default factory state.
+ */
+export const SOUND_PREFS_KEY = "scorched-3d:sound:v2";
 
-/** Factory sound state: on at 0.8 (mirrors the App panel defaults). */
-export const SOUND_DEFAULT_PREFS: SoundPrefs = { muted: false, volume: 0.8 };
+/** Factory sound state: muted at 0.8 (mirrors the App panel defaults). */
+export const SOUND_DEFAULT_PREFS: SoundPrefs = { muted: true, volume: 0.8 };
 
 /** Minimal storage surface (localStorage-compatible, fakeable in tests). */
 export interface SoundPrefsStorage {

@@ -59,7 +59,7 @@ export default function App() {
   const [jump, setJump] = useState<{ x: number; z: number; seq: number } | null>(null);
   const [options, setOptions] = useState<ViewOptions>(() => {
     // Stored Sound panel state seeds the mix (mute survives a reload);
-    // missing or corrupt entries fall back to on at 0.8 inside the loader.
+    // missing or corrupt entries fall back to muted at 0.8 inside the loader.
     // Guarded for headless renders with no storage.
     const sound = loadSoundPrefs(typeof localStorage === "undefined" ? undefined : localStorage);
     return {

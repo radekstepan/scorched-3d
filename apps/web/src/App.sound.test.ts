@@ -15,9 +15,9 @@ describe("battle sound HUD + wiring", () => {
     expect(app).toContain("options.volume");
     expect(app).toContain("muted: sound.muted");
     expect(app).toContain("volume: sound.volume");
-    // Factory mix (on at 0.8) lives in the prefs loader — see sound.test.ts.
+    // Factory mix (muted at 0.8) lives in the prefs loader — see sound.test.ts.
     const sound = readFileSync(join(here, "renderer", "sound.ts"), "utf8");
-    expect(sound).toContain("muted: false, volume: 0.8");
+    expect(sound).toContain("muted: true, volume: 0.8");
   });
 
   it("canvas voices combat through the positional synth and syncs the panel", () => {

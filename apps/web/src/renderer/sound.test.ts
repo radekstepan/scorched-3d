@@ -359,11 +359,11 @@ describe("sound prefs", () => {
     };
   }
 
-  it("defaults to on at 0.8 with no storage or no entry", () => {
-    expect(SOUND_DEFAULT_PREFS).toEqual({ muted: false, volume: 0.8 });
-    expect(loadSoundPrefs()).toEqual({ muted: false, volume: 0.8 });
-    expect(loadSoundPrefs(null)).toEqual({ muted: false, volume: 0.8 });
-    expect(loadSoundPrefs(makeStorage())).toEqual({ muted: false, volume: 0.8 });
+  it("defaults to muted at 0.8 with no storage or no entry", () => {
+    expect(SOUND_DEFAULT_PREFS).toEqual({ muted: true, volume: 0.8 });
+    expect(loadSoundPrefs()).toEqual({ muted: true, volume: 0.8 });
+    expect(loadSoundPrefs(null)).toEqual({ muted: true, volume: 0.8 });
+    expect(loadSoundPrefs(makeStorage())).toEqual({ muted: true, volume: 0.8 });
   });
 
   it("round-trips mute + volume through storage", () => {
@@ -373,26 +373,40 @@ describe("sound prefs", () => {
     expect(loadSoundPrefs(storage)).toEqual({ muted: true, volume: 0.35 });
   });
 
+  it("respects an explicit unmute: stored muted:false still wins over the default", () => {
+    const storage = makeStorage();
+    saveSoundPrefs({ muted: false, volume: 0.6 }, storage);
+    expect(loadSoundPrefs(storage)).toEqual({ muted: false, volume: 0.6 });
+  });
+
+  it("ignores legacy v1 entries: the old auto-saved unmuted default never unmutes", () => {
+    // The v1 key auto-saved `muted:false` on every visit, so a v1-only
+    // entry is a stale default, not a choice — the loader reads v2 only.
+    expect(SOUND_PREFS_KEY).not.toBe("scorched-3d:sound");
+    const storage = makeStorage({ "scorched-3d:sound": '{"muted":false,"volume":0.8}' });
+    expect(loadSoundPrefs(storage)).toEqual({ muted: true, volume: 0.8 });
+  });
+
   it("heals corrupt entries field-by-field instead of crashing the panel", () => {
     expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: "not json{" }))).toEqual({
-      muted: false,
+      muted: true,
       volume: 0.8,
     });
     expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: "null" }))).toEqual({
-      muted: false,
+      muted: true,
       volume: 0.8,
     });
-    // A valid mute survives next to a hand-edited garbage volume.
+    // A valid unmute survives next to a hand-edited garbage volume.
     expect(
-      loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"muted":true,"volume":"loud"}' })),
-    ).toEqual({ muted: true, volume: 0.8 });
+      loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"muted":false,"volume":"loud"}' })),
+    ).toEqual({ muted: false, volume: 0.8 });
     // Out-of-range volumes clamp into 0..1.
     expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"volume":7}' }))).toEqual({
-      muted: false,
+      muted: true,
       volume: 1,
     });
     expect(loadSoundPrefs(makeStorage({ [SOUND_PREFS_KEY]: '{"volume":-2}' }))).toEqual({
-      muted: false,
+      muted: true,
       volume: 0,
     });
   });
@@ -407,7 +421,7 @@ describe("sound prefs", () => {
       },
     };
     expect(() => loadSoundPrefs(throwing)).not.toThrow();
-    expect(loadSoundPrefs(throwing)).toEqual({ muted: false, volume: 0.8 });
+    expect(loadSoundPrefs(throwing)).toEqual({ muted: true, volume: 0.8 });
     expect(() => saveSoundPrefs({ muted: true, volume: 0.5 }, throwing)).not.toThrow();
     expect(() => saveSoundPrefs({ muted: true, volume: 0.5 })).not.toThrow();
   });
