@@ -3,7 +3,9 @@ import * as THREE from "three";
 import {
   FORMATION_MIN_SEPARATION,
   HULL_TURN_RATE,
+  STOP_RADIUS,
   createDamageField,
+  formationTargets,
   isWalkable,
   pathWorldToCell,
   sampleHeightBilinear,
@@ -197,7 +199,7 @@ describe("UnitMovement", () => {
     movement.dispose();
   });
 
-  it("drives ordered units to their target and resumes patrol on arrival", () => {
+  it("drives ordered units to their target and holds the destination on arrival", () => {
     const units = makeGroup();
     const movement = new UnitMovement(units, routes(), { groundY: () => 100 });
     expect(movement.orderUnit(0, { x: 600, z: 0 })).toBe(true);
@@ -208,17 +210,22 @@ describe("UnitMovement", () => {
     expect(movement.hasOrder(0)).toBe(false);
     const body = units.children[0] as THREE.Group;
     expect(body.position.x).toBeGreaterThan(300);
-    // Arrival rejoins the patrol loop instead of parking: the mover drives
-    // its frozen leg again (leg 1 heads +Z from the route start).
+    // Arrival completes the order into a hold: the mover guards where it
+    // was sent instead of peeling off onto its patrol loop.
     const arrived = movement.moverState(0)!;
-    expect(arrived.hold).not.toBe(true);
+    expect(arrived.hold).toBe(true);
     for (let n = 0; n < 120; n++) movement.update(1 / 60);
-    const resumed = movement.moverState(0)!;
-    expect(Math.hypot(resumed.x - arrived.x, resumed.z - arrived.z)).toBeGreaterThan(0);
-    expect(body.position.x).toBe(resumed.x);
-    expect(body.position.z).toBe(resumed.z);
+    const held = movement.moverState(0)!;
+    expect(held.x).toBe(arrived.x);
+    expect(held.z).toBe(arrived.z);
+    expect(body.position.x).toBe(held.x);
+    expect(body.position.z).toBe(held.z);
     // The unordered unit kept patrolling meanwhile.
     expect(movement.hasOrder(1)).toBe(false);
+    // Only explicit new intent moves the arrived hull again.
+    movement.orderUnit(0, { x: 0, z: 0 });
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.moverState(0)!.hold).not.toBe(true);
     movement.dispose();
   });
 
@@ -303,6 +310,72 @@ describe("UnitMovement", () => {
     for (let n = 0; n < 3600; n++) movement.update(1 / 60);
     expect(movement.hasOrder(0)).toBe(false);
     expect(movement.hasOrder(1)).toBe(false);
+    movement.dispose();
+  });
+
+  it("holds group arrivals in formation as stragglers join", () => {
+    // Six flash hulls ordered home as one group (no heightfield, so raw
+    // fan slots): each arrival posts its slot and holds it while the rest
+    // still drive — the formation keeps adding — and the settled group
+    // guards the fan instead of dancing off onto patrol loops.
+    const starts = [0, 1, 2, 3, 4, 5].map((i) => ({
+      x: -200 - i * 80,
+      z: (i % 2 === 0 ? -1 : 1) * (60 + i * 10),
+    }));
+    const group = new THREE.Group();
+    group.userData.units = starts.map(() => ({ kind: "flash", cellX: 10, cellZ: 10, rotation: 0 }));
+    for (const s of starts) {
+      const body = new THREE.Group();
+      body.rotation.y = 0;
+      body.position.set(s.x, 100, s.z);
+      group.add(body);
+    }
+    const loops: RoutePoint[][] = starts.map((s) => [s, { x: s.x, z: s.z + 800 }]);
+    const movement = new UnitMovement(group, loops, { groundY: () => 100 });
+    const target = { x: 400, z: 0 };
+    expect(movement.orderGroup([0, 1, 2, 3, 4, 5], target)).toBe(6);
+    const slots = formationTargets(target, 6);
+    const arrivedAt: (number | null)[] = starts.map(() => null);
+    for (let n = 0; n < 3600; n++) {
+      movement.update(1 / 60);
+      starts.forEach((_, i) => {
+        if (!movement.hasOrder(i) && arrivedAt[i] === null) {
+          arrivedAt[i] = n;
+          // Arrival posts the slot and holds it immediately.
+          expect(movement.moverState(i)!.hold).toBe(true);
+          expect(movement.moverState(i)!.post).toEqual(slots[i]);
+        }
+      });
+      if (arrivedAt.every((t) => t !== null)) break;
+    }
+    // Vacuity: everyone arrived, staggered (the formation kept adding).
+    expect(arrivedAt.every((t) => t !== null)).toBe(true);
+    const ticks = arrivedAt as number[];
+    expect(Math.max(...ticks) - Math.min(...ticks)).toBeGreaterThan(60);
+    for (let n = 0; n < 300; n++) movement.update(1 / 60);
+    // The settled group guards its slots: all held, each near its fan
+    // slot with the body seated on the mover, nobody stacked.
+    let worstSlot = 0;
+    let closestPair = Infinity;
+    starts.forEach((_, i) => {
+      const m = movement.moverState(i)!;
+      expect(m.hold).toBe(true);
+      // Seeded leg 1, never advanced: no patrol driving happened.
+      expect(m.leg).toBe(1);
+      worstSlot = Math.max(worstSlot, Math.hypot(m.x - slots[i]!.x, m.z - slots[i]!.z));
+      const body = group.children[i] as THREE.Group;
+      expect(body.position.x).toBe(m.x);
+      expect(body.position.z).toBe(m.z);
+    });
+    for (let i = 0; i < starts.length; i++) {
+      for (let j = i + 1; j < starts.length; j++) {
+        const a = movement.moverState(i)!;
+        const b = movement.moverState(j)!;
+        closestPair = Math.min(closestPair, Math.hypot(a.x - b.x, a.z - b.z));
+      }
+    }
+    expect(worstSlot).toBeLessThan(30);
+    expect(closestPair).toBeGreaterThanOrEqual(STOP_RADIUS - 0.5);
     movement.dispose();
   });
 });
@@ -546,8 +619,8 @@ describe("drive locomotion", () => {
     // The walker strides at full amplitude with phase advanced by the road.
     expect((walker.userData as { amp?: number }).amp).toBe(1);
     expect((walker.userData as { gait?: number }).gait).toBeGreaterThan(0);
-    // Freeze both hulls where they stand (wrecks hold forever — arrival
-    // resumes patrol now, so self-orders no longer park a hull).
+    // Freeze both hulls where they stand (wrecks hold forever, like
+    // arrivals now — self-orders park a hull again).
     group.children.forEach((_, i) => movement.markDestroyed(i));
     for (let n = 0; n < 10; n++) movement.update(1 / 60);
     expect(movement.isDestroyed(0)).toBe(true);

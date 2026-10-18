@@ -286,7 +286,7 @@ export class UnitMovement {
     const mover = this.movers[index];
     if (!mover) return;
     this.destroyed[index] = true;
-    const { stun: _dropped, recoil: _absorbed, threat: _calmed, leadIn: _joined, motion: _stopped, ...rest } = mover;
+    const { stun: _dropped, recoil: _absorbed, threat: _calmed, leadIn: _joined, post: _unposted, motion: _stopped, ...rest } = mover;
     this.movers[index] = { ...rest, order: undefined, hold: true };
   }
 
@@ -314,7 +314,8 @@ export class UnitMovement {
    * `notifyThreat` against the patrol anchor, so idle/patrolling hulls
    * with a near, reachable threat pursue — ordered hulls record a
    * self-defense memory the guns answer without steering the march
-   * (converting to a pursuit on arrival), while holding hulls refuse).
+   * (arrival holds the destination, so the memory ticks out in place
+   * instead of converting to a pursuit), while holding hulls refuse).
    * Arcing shell wounds (`shell`) investigate past the retaliation gates on
    * the hunt leash instead of staying silent, so a tank being shelled turns
    * toward the firing position. Wrecks refuse the memory (they hold

@@ -374,7 +374,7 @@ describe("pursuit driving", () => {
     expect(hasOrder(expired)).toBe(true);
   });
 
-  it("resumes the patrol loop on arrival, pursuing a live self-defense memory first", () => {
+  it("holds the destination on arrival, ticking a live self-defense memory out in place", () => {
     const route = flatRoute();
     // Ordered hull under fire reaches its destination with the memory live.
     const ordered = orderMover({ ...initMover(route, 0), hull: 0 }, [{ x: 200, z: 0 }]);
@@ -385,21 +385,24 @@ describe("pursuit driving", () => {
       threat: { attacker: 1, x: 500, z: 0, ttl: THREAT_MEMORY_DURATION },
     };
     const arrived = advanceMover("stump", defending, route, 0.05);
-    // Arrival clears the order AND the hold: patrol (and pursuit) resume.
+    // Arrival completes the order into a posted hold: the hull guards its
+    // destination instead of pursuing, with the memory ticking underneath.
     expect(hasOrder(arrived)).toBe(false);
-    expect(arrived.hold).not.toBe(true);
+    expect(arrived.hold).toBe(true);
+    expect(arrived.post).toEqual({ x: 200, z: 0 });
     expect(hasThreat(arrived)).toBe(true);
-    // Next tick the live memory steers like any patrol pursuit — toward the
-    // attacker (past stand-off, inside disengage and the anchor leash), with
-    // the patrol leg frozen.
+    // Next tick the memory steers nothing: the hull rests on its post (the
+    // attacker sits past stand-off, inside disengage and the anchor leash —
+    // a patrolling hull would chase, a holder just keeps answering its gun).
     const foes = [
       { x: arrived.x, z: arrived.z },
       { x: 500, z: 0 },
     ];
-    const chasing = advanceMover("stump", arrived, route, 1, 1, null, null, foes);
-    expect(hasThreat(chasing)).toBe(true);
-    expect(chasing.x).toBeGreaterThan(arrived.x);
-    expect(chasing.leg).toBe(arrived.leg);
+    const holding = advanceMover("stump", arrived, route, 1, 1, null, null, foes);
+    expect(hasThreat(holding)).toBe(true);
+    expect(holding.x).toBe(arrived.x);
+    expect(holding.z).toBe(arrived.z);
+    expect(holding.leg).toBe(arrived.leg);
   });
 
   it("is deterministic: the same hit sequence replays the same drive", () => {

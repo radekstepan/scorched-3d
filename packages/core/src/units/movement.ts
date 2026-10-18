@@ -89,8 +89,11 @@ import type { UnitField } from "./place.js";
  *   order (or hold) clears any live memory, but hits taken while ordered
  *   record a self-defense memory the guns answer without steering the hull
  *   (a blocked move prevents a chase, not weapon fire — retail TA); holds
- *   still record nothing. On arrival the order clears without holding, so
- *   the hull rejoins its patrol loop (pursuing a live memory first); stun
+ *   still record nothing. On arrival the order completes into a hold, so
+ *   the hull guards its destination (a live memory ticks out but never
+ *   steers a held hull — the guns keep answering it); the destination
+ *   posts the guard, so a shoved arrival steps back onto its slot once
+ *   its drive is unblocked and the formation re-forms. Stun
  *   only pauses the drive, the threat clock keeps ticking underneath.
  */
 
@@ -282,16 +285,28 @@ export interface Mover {
   /**
    * Player-issued move order: a smoothed world-space waypoint list with a
    * cursor. Present while the unit drives to an ordered destination;
-   * patrol is suspended until the order completes — arrival rejoins the
-   * loop — or is replaced.
+   * patrol is suspended until the order completes — arrival holds the
+   * destination (guarding it, not resuming the loop) — or is replaced.
    */
   order?: MoveOrder;
   /**
-   * Set via `holdMover` (or by an empty order, or on a wreck): the unit
-   * holds position instead of patrolling. Cleared by a new order; arrivals
-   * no longer hold — the patrol loop resumes past the destination.
+   * Set via `holdMover` (or by an empty order, on arrival, or on a wreck):
+   * the unit holds position instead of patrolling. Cleared by a new order;
+   * only explicit new intent moves a held hull again.
    */
   hold?: boolean;
+  /**
+   * Guard post: the ordered destination the hull holds (set on arrival to
+   * the order's final point). A held hull shoved off its post — the crowd
+   * parts arrivals for late stragglers streaming in — steps back onto it
+   * once its drive is unblocked (see `advanceMover`), so a group order
+   * settles into its formation fan and re-forms instead of scattering.
+   * Inside arrival slop the hull rests exactly; explicit holds, wrecks,
+   * and new orders carry no post (a new order strips it like the
+   * departure lead-in). Absent — never stale — otherwise, matching the
+   * `stuck`/`stun` convention.
+   */
+  post?: RoutePoint;
   /**
    * Retaliation threat memory (core `retaliation.ts`): who last hit this
    * hull, from where, and for how much longer. Present while a hull is
@@ -491,15 +506,16 @@ export function initMover(route: RoutePoint[], hull: number): Mover {
  * A new order cancels any in-progress pursuit (its live threat memory is
  * cleared), but hits taken while ordered record a fresh self-defense
  * memory the guns answer (see `notifyThreat`) without steering the hull —
- * and arrival rejoins the patrol loop instead of holding. Pass `groupSpeed`
+ * and arrival holds the destination instead of resuming patrol. Pass `groupSpeed`
  * (see `groupSpeedCap`) for orders issued together as a group: faster
  * members cap at the slowest member's pace instead of cutting ahead; single
  * orders omit it and drive at full kind speed.
  */
 export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: number): Mover {
-  // A player order supersedes any departure and any separation coast: the
-  // hull never resumes either — explicit new intent wins over a glide.
-  const { leadIn: _superseded, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
+  // A player order supersedes any departure, guard post, and separation
+  // coast: the hull never resumes any of them — explicit new intent wins
+  // over a glide (arrival posts the new guard).
+  const { leadIn: _superseded, post: _unposted, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
   const calm = rest;
   if (points.length === 0) return { ...calm, order: undefined, hold: true };
   const order: MoveOrder =
@@ -511,9 +527,10 @@ export function orderMover(mover: Mover, points: RoutePoint[], groupSpeed?: numb
 
 /** Hold in place: drop any order and stop patrolling until ordered again. */
 export function holdMover(mover: Mover): Mover {
-  // A hold supersedes any departure and any separation coast like an order
-  // does: nothing resumes them, so a held hull stops crisply.
-  const { leadIn: _superseded, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
+  // A hold supersedes any departure, guard post, and separation coast like
+  // an order does: nothing resumes them, so a held hull stops crisply
+  // where it stands instead of stepping back to an old arrival.
+  const { leadIn: _superseded, post: _unposted, sep: _glide, motion: _motion, detour: _detour, ...rest } = clearThreat(mover);
   return { ...rest, order: undefined, hold: true };
 }
 
@@ -807,10 +824,13 @@ export interface PursuitTactics {
 /**
  * Advance one mover by `dt` seconds. A live move order takes precedence:
  * arrive (advance the order cursor, skipping waypoints already reached),
- * and on the final waypoint arrive → patrol resumes (order cleared, no
- * hold). A self-defense memory ticks underneath an order but never steers
+ * and on the final waypoint arrive → hold (order cleared, destination
+ * guarded — the hull stays instead of resuming patrol). A self-defense
+ * memory ticks underneath an order but never steers
  * (the hull keeps driving where it was sent). Without an order a holding
- * mover stays put; otherwise a departure lead-in drives first with the leg
+ * mover rests — except a posted arrival shoved off its guard slot, which
+ * steps back once its drive is unblocked (see the hold branch); otherwise
+ * a departure lead-in drives first with the leg
  * frozen (via past the mouth, then the join leg onto the loop; arrival at
  * the loop clears it and joins the same tick; slope-pinned past patience
  * it abandons to patrol) — ahead of pursuit, so a fresh release walks all
@@ -867,10 +887,19 @@ export function advanceMover(
     if (dx0 * dx0 + dz0 * dz0 <= ARRIVE_RADIUS * ARRIVE_RADIUS) {
       at += 1;
       if (at >= order.points.length) {
-        // Arrival: the order is done and the hull rejoins its patrol loop
-        // (no hold) — with a live self-defense memory intact, so a hull
-        // under fire pursues like a normal patrol hull on the next tick.
-        return { ...tickThreat(mover, dt), order: undefined, hold: false };
+        // Arrival: the order completes and the hull holds its destination
+        // (retail MOVE arrival is code 5 complete — only PATROL arrival
+        // rotates to the next point; nanolathe
+        // `04-units-orders-scripts-and-movement.md` outcome table §8) — so
+        // a group ordered home fans into its formation slots and stays
+        // there, each arrival adding to the formation, instead of every
+        // hull peeling off onto its own patrol loop and dancing around
+        // the base. The destination posts the guard: shoved off it later,
+        // the hull steps back (see the hold branch below). A live
+        // self-defense memory ticks out intact but never steers a held
+        // hull (the guns keep answering it while it lasts).
+        const post = order.points[order.points.length - 1]!;
+        return { ...tickThreat(mover, dt), order: undefined, hold: true, post: { ...post } };
       }
       target = order.points[at]!;
     }
@@ -882,7 +911,46 @@ export function advanceMover(
     const { threat } = tickThreat(mover, dt);
     return threat ? { ...driven.mover, threat } : driven.mover;
   }
-  if (mover.hold) return tickThreat(mover, dt);
+  if (mover.hold) {
+    // Guard-post return: a hull holding its arrival slot steps back onto
+    // it when shoved off — the crowd parts arrivals for late stragglers,
+    // then the formation re-forms — but only while the drive is unblocked
+    // (spacing 0 means a neighbour is inside the stop radius: the hold
+    // stands and separation owns the contact, so the return can never
+    // chatter against a shove). Inside arrival slop of the post, or with
+    // no post (explicit holds, wrecks), the hull rests exactly. Pinned
+    // against a slope the return holds facing the post and retries — the
+    // post is never skipped (shoves are terrain-gated, so it stays
+    // escapable; wet corners just wait out the traffic).
+    const post = mover.post;
+    // A non-finite post strips instead of lingering: fail clean, never fail
+    // stuck (mirrors the departure strip below).
+    if (post !== undefined && (!Number.isFinite(post.x) || !Number.isFinite(post.z))) {
+      const { post: _dropped, ...rest } = mover;
+      return tickThreat(rest, dt);
+    }
+    if (
+      post !== undefined && Number.isFinite(post.x) && Number.isFinite(post.z) &&
+      spacing > 0 &&
+      (post.x - mover.x) * (post.x - mover.x) + (post.z - mover.z) * (post.z - mover.z) >
+        ARRIVE_RADIUS * ARRIVE_RADIUS
+    ) {
+      const back = driveToward(kind, mover, post, dt, spacing, terrain, undefined, crush);
+      // `driveToward` rebuilds without the post (and carries an unticked
+      // threat on pinned steps) — re-attach the post and the ticked
+      // threat; expiry drops the key. Patience resets on a pin: the post
+      // is home, never skipped.
+      const { threat } = tickThreat(mover, dt);
+      const { threat: _unticked, ...stepped } = back.mover;
+      const returned: Mover = {
+        ...stepped,
+        post: { ...post },
+        ...(back.skipped ? { stuck: 0 } : {}),
+      };
+      return threat ? { ...returned, threat } : returned;
+    }
+    return tickThreat(mover, dt);
+  }
   if (route.length < 2) return tickThreat(mover, dt);
   const leg = ((mover.leg % route.length) + route.length) % route.length;
   // Departure lead-in FIRST: a one-shot via point ahead of the patrol loop
@@ -1681,7 +1749,7 @@ export const PREDICT_STEP = 0.25;
  * Simulation cap per prediction: 80 s of drive at the default step, enough
  * for a full patrol loop on live maps. Longer loops truncate (the faint
  * static loop still shows the full context); reached destinations stop
- * early (patrol resumes past them, off the trail), so orders rarely run
+ * early (arrivals hold there, off the trail), so orders rarely run
  * the whole budget.
  */
 export const PREDICT_MAX_STEPS = 320;
@@ -1701,7 +1769,7 @@ export const PREDICT_PROGRESS = 0.5;
  * forward from the live state — hull turn-rate caps, alignment grip, rough
  * drag, and terrain gating included — so corners read as arcs and walls
  * read as stops instead of straight waypoint chords. Orders run to
- * arrival (patrol resumes past it, off the trail); patrols run until the
+ * arrival (the hull holds there, off the trail); patrols run until the
  * leg wraps once around the loop.
  * Spacing/separation from other hulls is deliberately excluded (spacing 1):
  * this is intent, not traffic. Wood crush is excluded too (it would mutate
@@ -1767,7 +1835,7 @@ export function predictDrivenPath(
       break;
     }
     if (hasOrder(sim)) continue;
-    if (ordered) break; // Arrival: the driven path ends at the destination (patrol resumes past it).
+    if (ordered) break; // Arrival: the driven path ends at the destination (the hull holds there).
     const leg = ((sim.leg % n) + n) % n;
     if (leg !== startLeg) looped = true;
     else if (looped) break;
@@ -1897,6 +1965,27 @@ export function steerGoalDir(
   return { x: dx / d, z: dz / d };
 }
 
+/**
+ * Post-steering direction for a held arrival shoved off its guard slot
+ * (see the hold branch in `advanceMover`): the unit vector toward `post`
+ * while displaced past arrival slop, else null. Backs the goal-opposed
+ * strip below so a returner slides around settled mates instead of losing
+ * ground — the same lane-opening ordered hulls keep. Explicit holds,
+ * at-post arrivals, and non-finite posts read null (full push). The slop
+ * deadband doubles as the cycle breaker: a sliding pass drifts its victim
+ * a few units (measured ~5), absorbed without tripping a counter-return.
+ */
+function postGoalDir(mover: Mover): { x: number; z: number } | null {
+  if (mover.hold !== true) return null;
+  const post = mover.post;
+  if (!post || !Number.isFinite(post.x) || !Number.isFinite(post.z)) return null;
+  const dx = post.x - mover.x;
+  const dz = post.z - mover.z;
+  const d = Math.hypot(dx, dz);
+  if (!(d > ARRIVE_RADIUS)) return null;
+  return { x: dx / d, z: dz / d };
+}
+
 /** First live steering point in drive priority order (see `steerGoalDir`). */
 function pickSteerTarget(mover: Mover, route?: readonly RoutePoint[]): RoutePoint | null {
   const live = (p: { x: number; z: number } | undefined): p is RoutePoint =>
@@ -1939,8 +2028,20 @@ function resolveSeparation(
   const unstacked = movers.map((mover, i) => {
     const kind = kinds[i] ?? "flash";
     const { radial, side, coincident } = separationComponents(i, movers, SEPARATION_RADIUS);
-    let pushX = radial.x + side.x;
-    let pushZ = radial.z + side.z;
+    // Static holders (explicit holds and arrivals resting on their guard
+    // posts — but not posted returners stepping home, and never recoiling
+    // hulls) take the radial push only, never the sidestep: a holder has
+    // no drive to open a lane for, while every passing straggler's lateral
+    // shove would walk it off its slot (~5u a pass, 100u+ over a 17-hull
+    // arrival stream). Radial passes cancel — the approach shove reverses
+    // as the straggler recedes — so holders wobble in place instead of
+    // drifting, and radial unstacking still opens piled-up arrivals along
+    // the pair axis. Returners keep the full push (plus the strip below)
+    // so they can still slide around settled mates on the way home.
+    const staticHold =
+      mover.hold === true && !((mover.stun ?? 0) > 0) && postGoalDir(mover) === null;
+    let pushX = radial.x + (staticHold ? 0 : side.x);
+    let pushZ = radial.z + (staticHold ? 0 : side.z);
     // Crowd leaders take no separation at all: their priority creep is the
     // drain, and any push — radial shove, sidestep, or strip remainder —
     // would deflect them into the orbit the creep exists to break (a stale
@@ -1952,7 +2053,10 @@ function resolveSeparation(
       pushX = 0;
       pushZ = 0;
     }
-    const goal = coincident ? null : steerGoalDir(mover, routes[i]);
+    // Held arrivals read their guard post here (`steerGoalDir` stays null
+    // for holds — see `postGoalDir`): only the strip below looks at it, so
+    // pair-tangent convoy checks keep reading holders as beacons.
+    const goal = coincident ? null : (steerGoalDir(mover, routes[i]) ?? postGoalDir(mover));
     if (pushX !== 0 || pushZ !== 0) {
       // Ordered hulls keep the lane-opening shove but never the radial part
       // of the immediate push that points back away from their goal: a
@@ -1961,13 +2065,18 @@ function resolveSeparation(
       // of letting them mirror in lockstep), it just never loses ground.
       // The strip judges the live steering point (see `steerGoalDir`), so
       // a detour round a rock steers the strip, not the far order cursor.
-      // Unordered hulls keep the full divergent push: stopped inside the
-      // radius with no floor drive, the immediate shove is their only
-      // in-radius motion, and stripping it would neuter wall-slides and
-      // unstacking. Coincident splits are exempt: with no pair axis "away
-      // from the goal" is meaningless, so the deterministic split stays
-      // whole and drive still opens the pair. Arrival still closes.
-      if (goal && hasOrder(mover)) {
+      // Posted returners (held arrivals stepping back onto a shoved-off
+      // guard slot) strip the same way: without it the homing drive and
+      // the radial push equilibrate into a static pocket hover around a
+      // settled mate, while the kept sidestep slides the returner around
+      // the shell until the post clears. Every other unordered hull keeps
+      // the full divergent push: stopped inside the radius with no floor
+      // drive, the immediate shove is their only in-radius motion, and
+      // stripping it would neuter wall-slides and unstacking. Coincident
+      // splits are exempt: with no pair axis "away from the goal" is
+      // meaningless, so the deterministic split stays whole and drive
+      // still opens the pair. Arrival still closes.
+      if (goal && (hasOrder(mover) || mover.hold === true)) {
         const along = radial.x * goal.x + radial.z * goal.z;
         if (along < 0) {
           pushX -= along * goal.x;

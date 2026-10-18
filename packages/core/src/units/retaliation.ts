@@ -40,8 +40,9 @@ import { canSpot, type SightContext } from "./visibility.js";
  *   answer (turret traverse, the ambient scheduler, the HQ-fire hold, and
  *   squad focus all read it) while the hull keeps driving where it was
  *   sent. Retail TA parallel: a blocked move prevents a chase, not weapon
- *   fire. Holds still record nothing, and on arrival the memory converts
- *   to a normal pursuit (or the patrol loop resumes).
+ *   fire. Holds still record nothing, and on arrival the hull guards its
+ *   destination instead of pursuing: the order completes into a hold, so
+ *   the memory ticks out in place while the guns keep answering it.
  * - Movers never teleport: pursuit drives through the same turn-rate caps,
  *   alignment grip, rough-terrain drag, slope gating, spacing, and
  *   separation as patrol and orders — it only swaps the *target*.

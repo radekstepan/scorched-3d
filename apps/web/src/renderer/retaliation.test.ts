@@ -568,10 +568,12 @@ describe("UnitMovement team advance", () => {
     movement.dispose();
   });
 
-  it("answers fire while ordered, then pursues on arrival and patrols after", () => {
+  it("answers fire while ordered, then holds the destination on arrival", () => {
     // A (team 0) ordered across the pocket while E (team 1) sits near the
     // destination: the hit records a self-defense memory that never steers
-    // the march, converts to a pursuit on arrival, and expires into patrol.
+    // the march, and arrival holds the destination — the memory ticks out
+    // in place (the guns keep answering it) instead of converting to a
+    // pursuit, and the hull never peels off onto its patrol loop.
     const group = new THREE.Group();
     group.userData.units = [
       { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
@@ -619,21 +621,26 @@ describe("UnitMovement team advance", () => {
     expect(movement.hasOrder(0)).toBe(false);
     const arrived = movement.moverState(0)!;
     expect(arrived.x).toBeGreaterThan(200);
-    expect(arrived.hold).not.toBe(true);
-    // On arrival the memory converts to a normal pursuit: the leg stays
-    // frozen while the grudge steers instead of the patrol loop.
+    expect(arrived.hold).toBe(true);
+    // On arrival the memory stays live but never steers a held hull: the
+    // leg stays frozen and the guns keep answering the attacker.
     expect(movement.hasThreat(0)).toBe(true);
+    expect(movement.isFighting(0)).toBe(true);
     expect(arrived.leg).toBe(1);
     for (let n = 0; n < 30; n++) movement.update(1 / 60);
-    expect(movement.moverState(0)!.leg).toBe(1);
-    // Once the attacker is wrecked the grudge clears and the patrol loop
-    // resumes: the hull leaves for its frozen leg (north toward waypoint 1).
+    const held = movement.moverState(0)!;
+    expect(held.leg).toBe(1);
+    expect(held.x).toBe(arrived.x);
+    expect(held.z).toBe(arrived.z);
+    // The memory ticks out in place (no re-hits) and the hull stays held —
+    // wrecking the attacker changes nothing about the guard.
     movement.markDestroyed(1);
     for (let n = 0; n < 600; n++) movement.update(1 / 60);
     expect(movement.hasThreat(0)).toBe(false);
-    const resumed = movement.moverState(0)!;
-    expect(resumed.z).toBeGreaterThan(arrived.z);
-    expect(resumed.x).toBeLessThan(arrived.x);
+    const stayed = movement.moverState(0)!;
+    expect(stayed.hold).toBe(true);
+    expect(stayed.x).toBe(arrived.x);
+    expect(stayed.z).toBe(arrived.z);
     movement.dispose();
   });
 

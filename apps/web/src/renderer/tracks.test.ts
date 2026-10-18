@@ -262,8 +262,8 @@ describe("TrackTrails", () => {
     for (let n = 0; n < 600; n++) step(movement, tracks);
     expect(movement.moverState(0)!.stun).toBeUndefined();
     expect(tracks.count).toBeGreaterThan(0);
-    // Freeze it as a wreck (wrecks hold forever — arrival resumes patrol
-    // now, so a zero-length order no longer parks a hull; the hold gate
+    // Freeze it as a wreck (wrecks hold forever — arrivals hold again too,
+    // so a zero-length order would park a hull; the hold gate
     // itself is pinned by the `isDriving` unit test above): silence again,
     // fading out.
     movement.markDestroyed(0);

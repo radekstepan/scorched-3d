@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateMap } from "../terrain/generate.js";
+import { THREAT_MEMORY_DURATION } from "./retaliation.js";
 import {
   advanceMover,
   ARRIVE_RADIUS,
@@ -367,7 +368,7 @@ describe("move orders in advanceMover", () => {
     expect(next.leg).toBe(before.leg);
   });
 
-  it("advances the cursor on waypoint arrival and resumes patrol at the end", () => {
+  it("advances the cursor on waypoint arrival and holds the destination at the end", () => {
     let mover: Mover = { x: 0, z: 0, hull: 0, leg: 1 };
     mover = orderMover(mover, [
       { x: ARRIVE_RADIUS / 2, z: 0 },
@@ -376,16 +377,32 @@ describe("move orders in advanceMover", () => {
     mover = advanceMover("flash", mover, route, 0.05);
     expect(mover.order?.at).toBe(1);
     expect(hasOrder(mover)).toBe(true);
-    // Arrival clears the order without holding: the hull rejoins its patrol
-    // loop instead of parking where it was sent.
-    mover = { ...mover, x: 400, z: 0 };
+    // Arrival completes the order into a hold: the hull guards where it was
+    // sent instead of peeling off onto its patrol loop — posted on the
+    // order's final point, with a live self-defense memory ticking but
+    // never steering.
+    mover = {
+      ...mover,
+      x: 400,
+      z: 0,
+      threat: { attacker: 3, x: 0, z: 500, ttl: THREAT_MEMORY_DURATION },
+    };
     mover = advanceMover("flash", mover, route, 0.05);
     expect(hasOrder(mover)).toBe(false);
-    expect(mover.hold).not.toBe(true);
-    // Next tick it drives its frozen patrol leg again (leg 1 heads +Z).
-    const resumed = advanceMover("flash", mover, route, 1);
-    expect(resumed.z).toBeGreaterThan(mover.z);
-    expect(resumed.leg).toBe(1);
+    expect(mover.hold).toBe(true);
+    expect(mover.post).toEqual({ x: 400, z: 0 });
+    expect(mover.threat?.attacker).toBe(3);
+    expect(mover.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+    // Next tick it stays put (leg 1 heads +Z and the grudge points south,
+    // but a held hull drives at neither).
+    const held = advanceMover("flash", mover, route, 1);
+    expect(held.x).toBe(mover.x);
+    expect(held.z).toBe(mover.z);
+    expect(held.leg).toBe(1);
+    // Only explicit new intent moves it again.
+    const reordered = advanceMover("flash", orderMover(held, [{ x: 400, z: 200 }]), route, 0.5);
+    expect(reordered.hold).not.toBe(true);
+    expect(Math.hypot(reordered.x - held.x, reordered.z - held.z)).toBeGreaterThan(0);
   });
 
   it("holds patrol while held and resumes only on a new order", () => {

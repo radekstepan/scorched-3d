@@ -45,7 +45,7 @@ import {
   STUN_MAX_DURATION,
   STUN_PER_DAMAGE,
 } from "./impact.js";
-import { findWorldPath, isWalkable } from "./pathfinding.js";
+import { findWorldPath, formationTargets, isWalkable } from "./pathfinding.js";
 import type { SeatField } from "./terrain.js";
 import { CRUSH_DRAG, TREE_DRAG, featureDrag, trunkBlockedAt } from "./terrain.js";
 import { UNIT_KINDS } from "./types.js";
@@ -1529,34 +1529,42 @@ function outcropField(): SeatField {
 
 describe("obstacle jitter", () => {
   /**
-   * Run an ordered column past the rock and split the metrics by phase:
-   * order-completion ticks, windowed-heading flips before completion (travel
-   * direction over a trailing 10-tick window must reverse — immune to the
-   * micro steps that dominate per-tick dots at every turnaround), leg laps
-   * after completion, and flips during the patrol phase. The ordered phase
-   * ends at arrival (fast hulls complete in hundreds of ticks), so long runs
-   * mostly measure post-arrival patrol ping-pong back across the rock.
+   * Run a patrolling column past the rock and split the metrics by phase:
+   * first-crossing ticks, windowed-heading flips before the first crossing
+   * (travel direction over a trailing 10-tick window must reverse — immune
+   * to the micro steps that dominate per-tick dots at every turnaround),
+   * leg laps after the crossing, and flips during the lapping phase. Long
+   * runs mostly measure patrol ping-pong back across the rock. Pure patrol
+   * on purpose: orders complete into a hold now, so an ordered phase could
+   * never deliver hulls into the lapping phase — and the machinery under
+   * test (detour recovery plus pair-tangent arcing) is patrol-leg drive.
+   * Completion reads hull-to-goal proximity rather than the order cursor
+   * (or a leg change, which a blocked-leg skip could fake): the first tick
+   * a hull stands on the far side ends its approach phase.
    */
   function runPhases(
     starts: { x: number; z: number }[],
     goals: { x: number; z: number }[],
     ticks: number,
-  ): { completedAt: (number | null)[]; orderedFlips: number; laps: number; patrolFlips: number } {
+  ): { completedAt: (number | null)[]; approachFlips: number; laps: number; patrolFlips: number } {
     const field = outcropField();
-    let movers: Mover[] = starts.map((s, i) => orderMover({ ...s, hull: Math.PI / 2, leg: 1 }, [goals[i]!]));
+    let movers: Mover[] = starts.map((s) => ({ ...s, hull: Math.PI / 2, leg: 1 }));
     const routes: RoutePoint[][] = starts.map((s, i) => [s, goals[i]!]);
     const kinds = starts.map(() => "stump" as const);
     const hist: { x: number; z: number }[][] = movers.map((m) => [{ x: m.x, z: m.z }]);
     const prevHead = movers.map(() => ({ x: 0, z: 0, set: false }));
     const completedAt: (number | null)[] = movers.map(() => null);
     const legs = movers.map(() => 1);
-    let orderedFlips = 0;
+    let approachFlips = 0;
     let patrolFlips = 0;
     let laps = 0;
     for (let n = 0; n < ticks; n++) {
       movers = advanceMovers([...kinds], movers, routes, 1 / 60, field);
       movers.forEach((m, i) => {
-        if (!m.order && completedAt[i] === null) completedAt[i] = n;
+        const goal = goals[i]!;
+        if (completedAt[i] === null && Math.hypot(m.x - goal.x, m.z - goal.z) <= ARRIVE_RADIUS) {
+          completedAt[i] = n;
+        }
         if (m.leg !== legs[i]) {
           laps++;
           legs[i] = m.leg;
@@ -1568,24 +1576,26 @@ describe("obstacle jitter", () => {
           const head = { x: m.x - old.x, z: m.z - old.z };
           const p = prevHead[i]!;
           if (Math.hypot(head.x, head.z) > 1 && p.set && head.x * p.x + head.z * p.z < 0) {
-            if (completedAt[i] === null) orderedFlips++;
+            if (completedAt[i] === null) approachFlips++;
             else patrolFlips++;
           }
           if (Math.hypot(head.x, head.z) > 1) prevHead[i] = { ...head, set: true };
         }
       });
     }
-    return { completedAt, orderedFlips, laps, patrolFlips };
+    return { completedAt, approachFlips, laps, patrolFlips };
   }
 
   it("crossing pair clears the rock without sustained oscillation", () => {
-    // Two hulls crossing past the pillar on opposite lanes: the ordered
-    // phase is clean in both trees (0 flips), and the patrol phase must not
-    // pin into the boundary-hover shuttle (base: 181 patrol flips with 2
-    // laps — a sustained back-and-forth at a frozen detour point). Tangent
-    // arcs carry the pair through instead (64 flips, 3 laps — transient
-    // rounding corners plus slow loitering at the sheer pillar, a known
-    // residual, not a shuttle). Completions guard against freezing green.
+    // Two hulls crossing past the pillar on opposite lanes: the approach
+    // negotiates the head-on meeting plus the pillar nose (measured 5
+    // flips, all in the first 810 ticks — transient encounter rounding,
+    // not a shuttle), and the lapping phase must not pin into the
+    // boundary-hover shuttle (base: 181 patrol flips with 2 laps — a
+    // sustained back-and-forth at a frozen detour point). Tangent arcs
+    // carry the pair through instead (measured 16 flips over 8 laps —
+    // turnaround corners, not a hover). Completions guard against
+    // freezing green.
     const phases = runPhases(
       [
         { x: -112, z: -30 },
@@ -1601,16 +1611,18 @@ describe("obstacle jitter", () => {
       expect(at).not.toBeNull();
       expect(at!).toBeLessThan(1500);
     }
-    expect(phases.orderedFlips).toBeLessThanOrEqual(2);
+    expect(phases.approachFlips).toBeLessThanOrEqual(8);
     expect(phases.patrolFlips).toBeLessThan(100);
     expect(phases.laps).toBeGreaterThanOrEqual(2);
   });
 
   it("file of four keeps marching past the rock", () => {
-    // Four hulls on parallel lanes: ordered completions stay prompt, and
-    // neither phase oscillate (bases: 2 ordered flips, 26 patrol flips over
-    // 7 laps; now 2 and 5 over 5 — the pair arcs round encounters instead
-    // of shuttling through them).
+    // Four hulls on parallel lanes 40 apart (inside the mutual stop, so
+    // the file serializes through the leader drain instead of flowing):
+    // every crossing still completes — the pillar-grazing lane takes
+    // longest (measured slowest 1812 ticks) — and neither phase
+    // oscillates (measured: 5 approach flips, 48 patrol flips over 9
+    // laps — nose-rounding corners, not a shuttle).
     const phases = runPhases(
       [
         { x: -140, z: -60 },
@@ -1624,24 +1636,24 @@ describe("obstacle jitter", () => {
         { x: 140, z: 20 },
         { x: 140, z: 60 },
       ],
-      1800,
+      3600,
     );
     for (const at of phases.completedAt) {
       expect(at).not.toBeNull();
-      expect(at!).toBeLessThan(1500);
+      expect(at!).toBeLessThan(2400);
     }
-    expect(phases.orderedFlips).toBeLessThanOrEqual(4);
-    expect(phases.patrolFlips).toBeLessThan(15);
+    expect(phases.approachFlips).toBeLessThanOrEqual(8);
+    expect(phases.patrolFlips).toBeLessThan(70);
   });
 
   it("pack of five clears without stalling", () => {
-    // Five hulls converging past the pillar: every order completes and the
-    // patrol keeps lapping (bases 1525/1592 slowest completion, 10/15 laps).
-    // No patrol-flip bound here by design: arcs trade a few rounding corners
-    // for pin-freedom (39 vs 32, both transient), and the dense ping-pong
-    // taxes laps on this torture fixture only — real-map patrols hold
-    // travel, lap, and flip parity — so this test locks prompt completion
-    // and continued lapping, not the corner count.
+    // Five hulls converging past the pillar: every crossing completes
+    // (measured slowest 1738 ticks) and the patrol keeps lapping
+    // (measured 14 laps). No patrol-flip bound here by design: arcs
+    // trade a few rounding corners for pin-freedom (both transient), and
+    // the dense ping-pong taxes laps on this torture fixture only —
+    // real-map patrols hold travel, lap, and flip parity — so this test
+    // locks prompt completion and continued lapping, not the corner count.
     const phases = runPhases(
       [
         { x: -140, z: -60 },
@@ -1663,7 +1675,7 @@ describe("obstacle jitter", () => {
       expect(at).not.toBeNull();
       expect(at!).toBeLessThan(2400);
     }
-    expect(phases.orderedFlips).toBeLessThanOrEqual(10);
+    expect(phases.approachFlips).toBeLessThanOrEqual(10);
     expect(phases.laps).toBeGreaterThanOrEqual(8);
   });
 });
@@ -1958,9 +1970,9 @@ describe("shore slide", () => {
     };
     const { mover, excursion } = drive();
     expect(hasOrder(mover)).toBe(false);
-    // Arrival rejoins patrol instead of holding (no legs here, so it rests
-    // unheld where the slide rounded the pond).
-    expect(mover.hold).not.toBe(true);
+    // Arrival holds the destination (no legs here either way — it guards
+    // where the slide rounded the pond).
+    expect(mover.hold).toBe(true);
     // It rounded the pond (more than a cell off the lane), not through it.
     expect(excursion).toBeGreaterThan(CELL_PIXELS);
     // Deterministic: the same slide replays exactly.
@@ -2397,6 +2409,249 @@ describe("group cohesion", () => {
     const freePath = predictDrivenPath("peewee", free, []);
     const cappedPath = predictDrivenPath("peewee", capped, [], null);
     expect(cappedPath.length).toBeGreaterThan(freePath.length);
+  });
+});
+
+describe("arrival formation", () => {
+  /**
+   * Drive a group order onto its fan slots and report the settle: arrival
+   * ticks (staggered — the formation keeps adding), worst slot miss, and
+   * closest pair. Patrol legs lead far off-lane on purpose: any patrol
+   * resume would march a hull hundreds of units off its slot.
+   */
+  function settleFormation(
+    starts: { x: number; z: number }[],
+    center: { x: number; z: number },
+    settleTicks: number,
+  ): { arrivedAt: number[]; worstSlot: number; closestPair: number; movers: Mover[] } {
+    const count = starts.length;
+    const slots = formationTargets(center, count);
+    const kinds = Array.from({ length: count }, () => "flash" as const);
+    const cap = groupSpeedCap([...kinds])!;
+    let movers: Mover[] = starts.map((s, i) =>
+      orderMover({ ...s, hull: Math.PI / 2, leg: 0 }, [slots[i]!], cap),
+    );
+    const routes: RoutePoint[][] = starts.map((s) => [s, { x: s.x, z: s.z + 800 }]);
+    const arrivedAt: (number | null)[] = movers.map(() => null);
+    const dt = 1 / 60;
+    for (let n = 0; n < 3600; n++) {
+      movers = advanceMovers([...kinds], movers, routes, dt);
+      movers.forEach((m, i) => {
+        if (!hasOrder(m) && arrivedAt[i] === null) {
+          arrivedAt[i] = n;
+          // Arrival completes into a hold immediately.
+          expect(m.hold).toBe(true);
+        }
+      });
+      if (arrivedAt.every((t) => t !== null)) break;
+    }
+    expect(arrivedAt.every((t) => t !== null)).toBe(true);
+    for (let k = 0; k < settleTicks; k++) movers = advanceMovers([...kinds], movers, routes, dt);
+    let worstSlot = 0;
+    let closestPair = Infinity;
+    movers.forEach((m, i) => {
+      expect(m.hold).toBe(true);
+      expect(m.leg).toBe(0);
+      worstSlot = Math.max(worstSlot, Math.hypot(m.x - slots[i]!.x, m.z - slots[i]!.z));
+    });
+    for (let i = 0; i < count; i++) {
+      for (let j = i + 1; j < count; j++) {
+        closestPair = Math.min(
+          closestPair,
+          Math.hypot(movers[i]!.x - movers[j]!.x, movers[i]!.z - movers[j]!.z),
+        );
+      }
+    }
+    return { arrivedAt: arrivedAt as number[], worstSlot, closestPair, movers };
+  }
+
+  it("settles a group order into a held formation, arrivals joining one by one", () => {
+    // Six flash hulls weave in from alternating sides (every lane crosses
+    // the core): early arrivals hold their slots while stragglers still
+    // drive, and the settled group guards its fan — nobody peels off onto
+    // a patrol loop or stacks onto a mate (measured worst 14, closest 49).
+    const starts = [0, 1, 2, 3, 4, 5].map((i) => ({
+      x: -200 - i * 80,
+      z: (i % 2 === 0 ? -1 : 1) * (60 + i * 10),
+    }));
+    const { arrivedAt, worstSlot, closestPair } = settleFormation(starts, { x: 400, z: 0 }, 300);
+    // Vacuity: everyone arrived, staggered (the formation kept adding).
+    expect(Math.max(...arrivedAt) - Math.min(...arrivedAt)).toBeGreaterThan(60);
+    expect(worstSlot).toBeLessThan(30);
+    expect(closestPair).toBeGreaterThanOrEqual(STOP_RADIUS - 0.5);
+  });
+
+  it("forms up seventeen hulls without dancing or stacking", () => {
+    // The reported scenario: a full selected group ordered home together
+    // from a clustered start. The fan absorbs all seventeen (measured
+    // worst 15, closest 48): each arrival adds to the formation and the
+    // settled group rests exactly — no patrol peel-off, no orbit.
+    const starts: { x: number; z: number }[] = [];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 3 && starts.length < 17; c++) {
+        starts.push({ x: -300 - c * 60, z: -150 + r * 60 });
+      }
+    }
+    const { arrivedAt, worstSlot, closestPair, movers } = settleFormation(starts, { x: 400, z: 0 }, 600);
+    expect(Math.max(...arrivedAt) - Math.min(...arrivedAt)).toBeGreaterThan(60);
+    expect(worstSlot).toBeLessThan(30);
+    expect(closestPair).toBeGreaterThanOrEqual(STOP_RADIUS - 0.5);
+    // And resting means resting: a further 300 ticks move nobody at all.
+    const routes: RoutePoint[][] = starts.map((s) => [s, { x: s.x, z: s.z + 800 }]);
+    const kinds = starts.map(() => "flash" as const);
+    const frozen = movers.map((m) => ({ x: m.x, z: m.z }));
+    let rest: Mover[] = movers;
+    for (let k = 0; k < 300; k++) rest = advanceMovers([...kinds], rest, routes, 1 / 60);
+    rest.forEach((m, i) => {
+      expect(m.x).toBe(frozen[i]!.x);
+      expect(m.z).toBe(frozen[i]!.z);
+    });
+  });
+});
+
+describe("guard post", () => {
+  it("steps a shoved arrival back onto its post once unblocked", () => {
+    // Held 100 short of its guard slot with a clear drive: the hull walks
+    // home and rests inside arrival slop, hold and post intact throughout.
+    let mover: Mover = { x: 0, z: 0, hull: 0, leg: 0, hold: true, post: { x: 0, z: 100 } };
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -800 },
+    ];
+    let stepped = false;
+    for (let n = 0; n < 600; n++) {
+      const before = Math.hypot(mover.x - 0, mover.z - 100);
+      mover = advanceMover("flash", mover, route, 1 / 60, 1);
+      expect(mover.hold).toBe(true);
+      expect(mover.post).toEqual({ x: 0, z: 100 });
+      // Never patrols: the leg behind it leads 800 south, the post is north.
+      expect(mover.leg).toBe(0);
+      if (Math.hypot(mover.x - 0, mover.z - 100) < before) stepped = true;
+      if (Math.hypot(mover.x - 0, mover.z - 100) <= ARRIVE_RADIUS) break;
+    }
+    expect(stepped).toBe(true);
+    expect(Math.hypot(mover.x - 0, mover.z - 100)).toBeLessThanOrEqual(ARRIVE_RADIUS);
+    // Home means rest: further ticks move nothing.
+    const home = { ...mover };
+    mover = advanceMover("flash", mover, route, 1);
+    expect(mover.x).toBe(home.x);
+    expect(mover.z).toBe(home.z);
+  });
+
+  it("stands the hold while blocked instead of chattering against a shove", () => {
+    // Same displacement, but a neighbour inside the stop radius (spacing
+    // 0): the hold stands — no drive into the contact — and the post
+    // survives for the step home once the contact clears.
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 0, hold: true, post: { x: 0, z: 100 } };
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -800 },
+    ];
+    const stood = advanceMover("flash", mover, route, 1 / 60, 0);
+    expect(stood.x).toBe(0);
+    expect(stood.z).toBe(0);
+    expect(stood.hold).toBe(true);
+    expect(stood.post).toEqual({ x: 0, z: 100 });
+    // The contact clears: the very next tick steps home.
+    const freed = advanceMover("flash", stood, route, 1 / 60, 1);
+    expect(Math.hypot(freed.x - 0, freed.z - 100)).toBeLessThan(100);
+  });
+
+  it("rests explicit holds and on-post arrivals exactly", () => {
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -800 },
+    ];
+    // An explicit hold (no post) never steps, however clear the drive.
+    const explicit = advanceMover("flash", { x: 10, z: 20, hull: 0, leg: 0, hold: true }, route, 1, 1);
+    expect(explicit.x).toBe(10);
+    expect(explicit.z).toBe(20);
+    // An arrival inside slop of its post rests too (no sub-slop dither).
+    const posted = advanceMover(
+      "flash",
+      { x: 5, z: 5, hull: 0, leg: 0, hold: true, post: { x: 0, z: 0 } },
+      route,
+      1,
+      1,
+    );
+    expect(posted.x).toBe(5);
+    expect(posted.z).toBe(5);
+    expect(posted.post).toEqual({ x: 0, z: 0 });
+  });
+
+  it("strips a non-finite post instead of steering by it", () => {
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -800 },
+    ];
+    const mover: Mover = { x: 0, z: 0, hull: 0, leg: 0, hold: true, post: { x: NaN, z: 0 } };
+    const stripped = advanceMover("flash", mover, route, 1, 1);
+    expect(stripped.post).toBeUndefined();
+    expect(stripped.x).toBe(0);
+    expect(stripped.z).toBe(0);
+  });
+
+  it("drops the post on new orders and holds", () => {
+    const posted: Mover = { x: 0, z: 0, hull: 0, leg: 0, hold: true, post: { x: 0, z: 100 } };
+    // A new order retires the old guard (arrival posts the new one).
+    expect(orderMover(posted, [{ x: 50, z: 50 }]).post).toBeUndefined();
+    // An explicit hold stops where it stands instead of stepping back.
+    const held = holdMover({ ...posted, hold: false });
+    expect(held.post).toBeUndefined();
+    const stood = advanceMover("flash", held, [{ x: 0, z: 0 }, { x: 0, z: -800 }], 1, 1);
+    expect(stood.x).toBe(0);
+    expect(stood.z).toBe(0);
+  });
+
+  it("keeps a live memory ticking (never steering) on the step home", () => {
+    // Arrival under fire carries its self-defense memory onto the post
+    // return: the clock ticks, the guns keep answering it — but the hull
+    // walks to its slot, never toward the attacker.
+    let mover: Mover = {
+      x: 0,
+      z: 0,
+      hull: 0,
+      leg: 0,
+      hold: true,
+      post: { x: 0, z: 100 },
+      threat: { attacker: 3, x: 0, z: -500, ttl: THREAT_MEMORY_DURATION },
+    };
+    const route: RoutePoint[] = [
+      { x: 0, z: 0 },
+      { x: 0, z: -800 },
+    ];
+    mover = advanceMover("flash", mover, route, 1, 1);
+    expect(mover.threat?.attacker).toBe(3);
+    expect(mover.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+    expect(mover.z).toBeGreaterThan(0);
+    expect(mover.hold).toBe(true);
+    expect(mover.post).toEqual({ x: 0, z: 100 });
+  });
+
+  it("unstacks static holders along the pair axis with no lateral walk", () => {
+    // Two explicitly held hulls 20 apart (no posts, so no step home to
+    // mask the push): radial separation opens them to the stop radius
+    // along the pair axis — z stays exactly 0, since static holders take
+    // no sidestep. (A driving pair would spiral apart with lateral
+    // circulation; holders must not inherit that walk onto their slots.)
+    let movers: Mover[] = [
+      { x: 0, z: 0, hull: 0, leg: 0, hold: true },
+      { x: 20, z: 0, hull: 0, leg: 0, hold: true },
+    ];
+    const routes: RoutePoint[][] = [[], []];
+    const kinds = ["flash", "flash"] as const;
+    for (let n = 0; n < 600; n++) movers = advanceMovers([...kinds], movers, routes, 1 / 60);
+    const gap = Math.hypot(movers[0]!.x - movers[1]!.x, movers[0]!.z - movers[1]!.z);
+    expect(gap).toBeGreaterThanOrEqual(STOP_RADIUS);
+    expect(movers[0]!.z).toBe(0);
+    expect(movers[1]!.z).toBe(0);
+    // Open means rest: no circulation, no orbit, no drift.
+    const frozen = movers.map((m) => ({ x: m.x, z: m.z }));
+    for (let n = 0; n < 300; n++) movers = advanceMovers([...kinds], movers, routes, 1 / 60);
+    movers.forEach((m, i) => {
+      expect(m.x).toBe(frozen[i]!.x);
+      expect(m.z).toBe(frozen[i]!.z);
+    });
   });
 });
 
