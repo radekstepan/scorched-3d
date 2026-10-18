@@ -56,13 +56,13 @@ export default function UnitFolio() {
     scene.add(field);
     const hemi = new THREE.HemisphereLight(0xdbe7cf, 0x34372c, 0.85);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffedcd, 2.6);
+    const sun = new THREE.DirectionalLight(0xffedcd, 1.8);
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, far: 250 });
     sun.shadow.normalBias = 0.15;
-    sun.position.set(-50, 90, 60);
-    const rim = new THREE.DirectionalLight(0xb9d8ff, 1.3);
+    sun.position.set(-35, 65, 40);
+    const rim = new THREE.DirectionalLight(0xb9d8ff, 0.8);
     rim.position.set(50, 30, -50);
     scene.add(sun, rim);
     const frame = (study: StudyView) => {

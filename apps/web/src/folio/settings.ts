@@ -50,14 +50,23 @@ export class InspectionModel {
   }
 }
 
+/**
+ * The study light rig follows night mode only. The Terrain toggle swaps the
+ * backdrop (textured field vs measure grid) and must never re-light the unit:
+ * sun/hemi/rim intensities, sun position, and tone-mapping exposure are
+ * identical with terrain on or off. Only the backdrop (background + fog)
+ * follows `terrain`, and the fog starts past the farthest studio camera stop
+ * (size * 8 zoom-out plus half a hull) so it depths the field without ever
+ * hazing the subject.
+ */
 export function applyStudyLighting(scene: THREE.Scene, sun: THREE.DirectionalLight, hemi: THREE.HemisphereLight, rim: THREE.DirectionalLight, terrain: boolean, night: boolean): number {
-  sun.intensity = (terrain ? 1.15 : 1.8) * (night ? 0.5 : 1);
-  hemi.intensity = (terrain ? 0.45 : 0.85) * (night ? 0.6 : 1);
-  rim.intensity = terrain ? 0 : 0.8;
-  sun.position.set(...(terrain ? [-48, 60, 15] : [-35, 65, 40]) as [number, number, number]);
+  sun.intensity = 1.8 * (night ? 0.5 : 1);
+  hemi.intensity = 0.85 * (night ? 0.6 : 1);
+  rim.intensity = 0.8;
+  sun.position.set(-35, 65, 40);
   sun.color.setHex(night ? 0xa6c7e0 : 0xfff0d0);
   rim.color.setHex(night ? 0x84a5c8 : 0xc5dab3);
   scene.background = new THREE.Color(terrain ? (night ? 0x252f39 : 0x6a7a60) : 0x20271c);
-  scene.fog = terrain ? new THREE.Fog(night ? 0x35414b : 0x899780, 260, 1150) : null;
-  return terrain ? 1.05 : 1.15;
+  scene.fog = terrain ? new THREE.Fog(night ? 0x35414b : 0x899780, 500, 1150) : null;
+  return 1.15;
 }

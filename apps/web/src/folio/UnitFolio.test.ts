@@ -25,6 +25,8 @@ describe("folio / battlefield integration contracts", () => {
     expect(folio).toContain('sub.animation.update(dt, current.motion && live, current.shooting && live, current.selection && !current.inspection.wreck)');
     expect(folio).toContain('field.visible = preview.current.terrain');
     expect(folio).toContain('sub.grid.visible = !preview.current.terrain');
+    // The toggle still re-applies the backdrop (background + fog); unit lighting itself is terrain-independent.
+    expect(folio).toContain('applyStudyLighting(scene, sun, hemi, rim, current.terrain, current.inspection.night)');
     expect(folio).toContain('sun.shadow.dispose()');
   });
   it("exposes all reference workshop settings with explicit unsupported states", () => {

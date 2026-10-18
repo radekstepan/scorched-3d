@@ -60,20 +60,60 @@ describe("workshop inspection controls", () => {
     disposeStudioObject(body);
   });
 
-  it("changes terrain lighting and restores daylight without accumulating dimming", () => {
+  it("keeps the study light rig identical with terrain on or off and only swaps the backdrop", () => {
+    const rig = (terrain: boolean, night: boolean) => {
+      const scene = new THREE.Scene(), sun = new THREE.DirectionalLight(), hemi = new THREE.HemisphereLight(), rim = new THREE.DirectionalLight();
+      const exposure = applyStudyLighting(scene, sun, hemi, rim, terrain, night);
+      return {
+        exposure,
+        sun: sun.intensity, hemi: hemi.intensity, rim: rim.intensity,
+        position: sun.position.toArray(),
+        sunColor: sun.color.getHex(), rimColor: rim.color.getHex(),
+        background: (scene.background as THREE.Color).getHex(),
+        fog: scene.fog ? { near: (scene.fog as THREE.Fog).near, color: (scene.fog as THREE.Fog).color.getHex() } : null,
+      };
+    };
+    for (const night of [false, true]) {
+      const on = rig(true, night), off = rig(false, night);
+      // Everything that lights the unit is terrain-independent ...
+      expect({ ...on, background: 0, fog: null }).toEqual({ ...off, background: 0, fog: null });
+      // ... only the backdrop follows the toggle.
+      expect(on.background).not.toBe(off.background);
+      expect(on.fog).not.toBeNull();
+      expect(off.fog).toBeNull();
+    }
+    // Pinned rig values (daylight): the studio setup, never the dimmed outdoor one.
+    expect(rig(true, false)).toMatchObject({ exposure: 1.15, sun: 1.8, hemi: 0.85, rim: 0.8, position: [-35, 65, 40] });
+    const night = rig(false, true);
+    expect(night.sun).toBeCloseTo(0.9);
+    expect(night.hemi).toBeCloseTo(0.51);
+    expect(night.rim).toBe(0.8);
+  });
+
+  it("restores daylight without accumulating dimming", () => {
     const scene = new THREE.Scene(), sun = new THREE.DirectionalLight(), hemi = new THREE.HemisphereLight(), rim = new THREE.DirectionalLight();
-    expect(applyStudyLighting(scene, sun, hemi, rim, true, false)).toBe(1.05);
-    expect(scene.fog).toBeInstanceOf(THREE.Fog);
-    expect(rim.intensity).toBe(0);
     applyStudyLighting(scene, sun, hemi, rim, true, true);
-    const night = sun.intensity;
+    const dimmed = sun.intensity;
     applyStudyLighting(scene, sun, hemi, rim, true, true);
-    expect(sun.intensity).toBe(night);
-    applyStudyLighting(scene, sun, hemi, rim, true, false);
-    expect(sun.intensity).toBe(1.15);
+    expect(sun.intensity).toBe(dimmed);
+    applyStudyLighting(scene, sun, hemi, rim, false, false);
+    expect(sun.intensity).toBe(1.8);
     expect(sun.color.getHex()).toBe(0xfff0d0);
-    expect(applyStudyLighting(scene, sun, hemi, rim, false, false)).toBe(1.15);
-    expect(scene.fog).toBeNull(); expect(rim.intensity).toBe(0.8);
+    expect(applyStudyLighting(scene, sun, hemi, rim, true, false)).toBe(1.15);
+  });
+
+  it("starts studio fog past the farthest camera stop so it never hazes the subject", () => {
+    const scene = new THREE.Scene();
+    applyStudyLighting(scene, new THREE.DirectionalLight(), new THREE.HemisphereLight(), new THREE.DirectionalLight(), true, false);
+    const near = (scene.fog as THREE.Fog).near;
+    expect(scene.fog).toBeInstanceOf(THREE.Fog);
+    for (const kind of UNIT_KINDS) {
+      const body = buildStudioBody(kind);
+      const size = new THREE.Box3().setFromObject(body).getSize(new THREE.Vector3()).length();
+      // UnitFolio clamps zoom-out to size * 8; the farthest hull pixel sits ~size/2 past the target.
+      expect(near).toBeGreaterThan(size * 8 + size / 2);
+      disposeStudioObject(body);
+    }
   });
 
   it("articulates the original Stumpy comparison and supports reversible damage", () => {
