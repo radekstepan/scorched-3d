@@ -117,7 +117,6 @@ export interface ViewOptions {
   showFeatures: boolean;
   showWire: boolean;
   showContours: boolean;
-  pixelFilter: boolean;
   /** Overlay each unit's patrol loop + live move-order path. */
   showWaypoints: boolean;
   /** Overhead health bars above each live unit. */

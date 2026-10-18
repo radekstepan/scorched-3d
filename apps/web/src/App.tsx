@@ -67,7 +67,6 @@ export default function App() {
       showFeatures: true,
       showWire: false,
       showContours: false,
-      pixelFilter: true,
       showWaypoints: false,
       showHealth: true,
       showTerritory: false,
@@ -412,7 +411,6 @@ export default function App() {
           <Toggle label="Territory" on={options.showTerritory} onClick={() => patch({ showTerritory: !options.showTerritory })} />
           <Toggle label="Follow battle" on={options.followBattle} onClick={() => patch({ followBattle: !options.followBattle })} />
           <Toggle label="Pan mode" on={options.panMode} onClick={() => patch({ panMode: !options.panMode })} />
-          <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
         </div>
 
         <div className="hud-panel mt-3 space-y-3 p-3">

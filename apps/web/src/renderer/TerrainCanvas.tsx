@@ -237,7 +237,12 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     const albedoData = composeAlbedo(map);
     const heightData = composeHeight(map);
-    const albedoTex = imageDataTexture(albedoData, true);
+    // Indexed look is fixed, not a toggle: nearest sampling keeps the TNT
+    // pixels crisp at every zoom (the old toggle-on default), so no mipmaps
+    // are generated and nothing re-switches the filters per tick.
+    const albedoTex = imageDataTexture(albedoData, false);
+    albedoTex.minFilter = THREE.NearestFilter;
+    albedoTex.magFilter = THREE.NearestFilter;
     const heightTex = imageDataTexture(heightData, false);
     heightTex.minFilter = THREE.LinearFilter;
     heightTex.magFilter = THREE.LinearFilter;
@@ -1271,12 +1276,6 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const glowU = terrainMat.uniforms.fireflyGlows!.value as number[];
       fireflies.writeField(poolU, glowU, opt.nightMode);
       terrainMat.wireframe = opt.showWire;
-      const mag = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearFilter;
-      const min = opt.pixelFilter ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
-      if (albedoTex.magFilter !== mag || albedoTex.minFilter !== min) {
-        albedoTex.magFilter = mag;
-        albedoTex.minFilter = min;
-      }
 
       if (pressed.size > 0) {
         const input = panInputFromCodes(pressed);
