@@ -23,6 +23,7 @@ import {
   clearThreat,
   hasThreat,
   notifyThreat,
+  orderAttack,
   pursueStandOff,
   seekEngage,
   seekStructure,
@@ -886,5 +887,128 @@ describe("obstructed firing-seat memory", () => {
     const next = notifyThreat(mover, mover, 2, 200, 100);
     expect(next.threat?.attacker).toBe(2);
     expect(next.threat?.sidestep).toBeUndefined();
+  });
+});
+
+describe("orderAttack", () => {
+  it("points the mover at a roster enemy with an ordered wide-leash memory", () => {
+    const mover = initMover(flatRoute(), 0);
+    const next = orderAttack(mover, 1, 1800, 0);
+    expect(next.threat).toEqual({
+      attacker: 1,
+      x: 1800,
+      z: 0,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: TEAM_ADVANCE_LEASH_RADIUS,
+      ordered: true,
+    });
+    // Pure: the input mover is untouched.
+    expect(mover.threat).toBeUndefined();
+  });
+
+  it("clears any move order and lifts the hold, but keeps the HQ walk-out", () => {
+    const route = flatRoute();
+    const ordered = orderMover(initMover(route, 0), [{ x: 500, z: 500 }]);
+    const next = orderAttack(ordered, 1, 300, 0);
+    expect(hasOrder(next)).toBe(false);
+    expect(next.order).toBeUndefined();
+    expect(next.hold).toBe(false);
+    // A release mid-walkout finishes leaving the hall before the pursuit
+    // steers (a direct chase would grind through the curb wall).
+    const departing: Mover = { ...initMover(route, 0), leadIn: { x: 100, z: 0 } };
+    expect(orderAttack(departing, 1, 300, 0).leadIn).toEqual({ x: 100, z: 0 });
+  });
+
+  it("rejects positions, invalid attackers, and non-finite points", () => {
+    const mover = initMover(flatRoute(), 0);
+    expect(orderAttack(mover, -1, 300, 0)).toBe(mover);
+    expect(orderAttack(mover, 1.5, 300, 0)).toBe(mover);
+    expect(orderAttack(mover, 1, Number.NaN, 0)).toBe(mover);
+    expect(orderAttack(mover, 1, 300, Number.POSITIVE_INFINITY)).toBe(mover);
+    expect(mover.threat).toBeUndefined();
+  });
+
+  it("is never stolen by new hits, however close", () => {
+    const ordered = orderAttack(initMover(flatRoute(), 0), 1, 300, 0);
+    // A close hit from a new gun would steal any ordinary grudge.
+    expect(notifyThreat(ordered, ordered, 2, 100, 50)).toBe(ordered);
+    // Even the quarry's own far hit neither refreshes nor drops the order —
+    // the renderer refreshes the clock against the live target every sweep.
+    expect(notifyThreat(ordered, ordered, 1, THREAT_DISENGAGE_RADIUS + 500, 0)).toBe(ordered);
+  });
+
+  it("is never repointed by an obstructed seek", () => {
+    const ordered = orderAttack(initMover(flatRoute(), 0), 1, 300, 0);
+    expect(seekEngage(ordered, ordered, 2, 100, 50)).toBe(ordered);
+  });
+
+  it("chases past the disengage bound where a plain grudge lets go", () => {
+    const route = flatRoute();
+    const far = THREAT_DISENGAGE_RADIUS + 500;
+    const foes = [
+      { x: 0, z: 0 },
+      { x: far, z: 0 },
+    ];
+    const plain: Mover = {
+      ...initMover(route, 0),
+      threat: { attacker: 1, x: far, z: 0, ttl: THREAT_MEMORY_DURATION },
+    };
+    expect(hasThreat(advanceMover("flash", plain, route, 1, 1, null, null, foes))).toBe(false);
+    const ordered = orderAttack(initMover(route, 0), 1, far, 0);
+    const chasing = advanceMover("flash", ordered, route, 1, 1, null, null, foes);
+    expect(hasThreat(chasing)).toBe(true);
+    expect(chasing.threat?.ordered).toBe(true);
+    expect(chasing.x).toBeGreaterThan(0);
+  });
+
+  it("keeps the ordered flag across drive ticks while the clock runs down", () => {
+    const route = flatRoute();
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 600, z: 0 },
+    ];
+    let mover = orderAttack(initMover(route, 0), 1, 600, 0);
+    for (let n = 0; n < 10; n++) {
+      mover = advanceMover("flash", mover, route, 0.5, 1, null, null, foes);
+    }
+    expect(mover.threat?.ordered).toBe(true);
+    expect(mover.threat?.ttl).toBeLessThan(THREAT_MEMORY_DURATION);
+    expect(mover.threat?.leash).toBe(TEAM_ADVANCE_LEASH_RADIUS);
+  });
+
+  it("charges while outnumbered where a plain pursuit holds for backup", () => {
+    const route = flatRoute();
+    const foes = [
+      { x: 0, z: 0 },
+      { x: 600, z: 0 },
+      { x: 650, z: 0 },
+    ];
+    const tactics = { self: 0, teams: [0, 1, 1], alive: [true, true, true] };
+    const plain: Mover = {
+      ...initMover(route, 0),
+      threat: { attacker: 1, x: 600, z: 0, ttl: THREAT_MEMORY_DURATION },
+    };
+    const waiting = advanceMover("flash", plain, route, 1, 1, null, null, foes, tactics);
+    expect(waiting.x).toBe(0);
+    expect(waiting.z).toBe(0);
+    const ordered = orderAttack(initMover(route, 0), 1, 600, 0);
+    const charging = advanceMover("flash", ordered, route, 1, 1, null, null, foes, tactics);
+    expect(charging.x).toBeGreaterThan(0);
+    expect(hasThreat(charging)).toBe(true);
+  });
+
+  it("still honors the carried leash and memory expiry", () => {
+    const route = flatRoute();
+    const beyond = TEAM_ADVANCE_LEASH_RADIUS + 200;
+    const foes = [
+      { x: 0, z: 0 },
+      { x: beyond, z: 0 },
+    ];
+    const ordered = orderAttack(initMover(route, 0), 1, beyond, 0);
+    expect(hasThreat(advanceMover("flash", ordered, route, 1, 1, null, null, foes))).toBe(false);
+    const stale = orderAttack(initMover(flatRoute(), 0), 1, 600, 0);
+    const expired = advanceMover("flash", stale, route, THREAT_MEMORY_DURATION + 1);
+    expect(hasThreat(expired)).toBe(false);
+    expect("threat" in expired).toBe(false);
   });
 });

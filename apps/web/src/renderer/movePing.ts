@@ -27,6 +27,13 @@ export const MOVE_PING_END_SCALE = 3.5;
 export const MOVE_PING_MAX = 8;
 /** Pings composite in the selection band, above scorch decals. */
 export const MOVE_PING_RENDER_ORDER = SELECTION_RENDER_ORDER;
+/**
+ * Attack-order ping tint: the waypoint pursuit rose (`WAYPOINT_PURSUIT_COLOR`
+ * in waypoints.ts, duplicated as a literal so this module stays dependency-
+ * free) — a move pings cyan like its selection ring, an attack pings rose
+ * like the pursuit trail the ordered hulls will draw.
+ */
+export const ATTACK_PING_COLOR = 0xfb7185;
 
 /** Shared flat ring geometry for pings (XZ plane, like the selection rings). */
 export function buildMovePingGeometry(): THREE.RingGeometry {
@@ -36,14 +43,15 @@ export function buildMovePingGeometry(): THREE.RingGeometry {
 }
 
 /**
- * Ping material: cyan core color with the selection compositing policy
- * (transparent, depth-test off so hills never clip it, depth-write off so
- * it never z-fights the terrain). Clone per ping — opacity animates
- * independently as each ring expands and fades.
+ * Ping material: selection-cyan by default (move orders) with the selection
+ * compositing policy (transparent, depth-test off so hills never clip it,
+ * depth-write off so it never z-fights the terrain). Attack orders pass
+ * `ATTACK_PING_COLOR`. Clone per ping — opacity animates independently as
+ * each ring expands and fades.
  */
-export function buildMovePingMaterial(): THREE.MeshBasicMaterial {
+export function buildMovePingMaterial(color: number = SELECTION_CORE): THREE.MeshBasicMaterial {
   return new THREE.MeshBasicMaterial({
-    color: SELECTION_CORE,
+    color,
     transparent: true,
     opacity: 0.9,
     depthTest: false,
@@ -57,8 +65,9 @@ export function buildMovePing(
   x: number,
   z: number,
   groundY: (x: number, z: number) => number,
+  color?: number,
 ): THREE.Mesh {
-  const mesh = new THREE.Mesh(geo, buildMovePingMaterial());
+  const mesh = new THREE.Mesh(geo, buildMovePingMaterial(color));
   mesh.name = "move-ping";
   mesh.position.set(x, groundY(x, z) + MOVE_PING_LIFT, z);
   mesh.renderOrder = MOVE_PING_RENDER_ORDER;

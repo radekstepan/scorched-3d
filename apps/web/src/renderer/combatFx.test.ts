@@ -3787,3 +3787,115 @@ describe("CombatFx retaliation aim retention", () => {
     fx.dispose();
   });
 });
+
+describe("orderAim", () => {
+  function makeSkirmish(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 1, cellZ: 1, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: Math.PI, team: 1 },
+      { kind: "flash", cellX: 3, cellZ: 3, rotation: Math.PI, team: 1 },
+    ];
+    for (const pos of [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(300, 100, 0),
+      new THREE.Vector3(600, 100, 0),
+    ]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    return group;
+  }
+
+  function pendingOf(fx: CombatFx): Map<number, number> {
+    return (fx as unknown as { pending: Map<number, number> }).pending;
+  }
+
+  /** Backdoor into the private splash to wreck a hull deterministically. */
+  function wreck(fx: CombatFx, units: THREE.Group, index: number): void {
+    const body = units.children[index] as THREE.Group;
+    for (let n = 0; n < 12; n++) {
+      (
+        fx as unknown as {
+          damageUnits(at: THREE.Vector3, kind: UnitKind, slope: null, shooter: number | null, hostile: boolean): void;
+        }
+      ).damageUnits(body.position.clone(), "hammer", null, null, true);
+    }
+  }
+
+  it("forces the gun onto the ordered enemy, replacing a live admitted aim", () => {
+    const scene = new THREE.Scene();
+    const units = makeSkirmish();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.trackThreat(0, 1);
+      expect(pendingOf(fx).get(0)).toBe(1);
+      // An explicit order wins where trackThreat would retain the valid goal.
+      fx.orderAim(0, 2);
+      expect(pendingOf(fx).get(0)).toBe(2);
+      // …and a later threat still retains the ordered aim while it is live.
+      fx.trackThreat(0, 1);
+      expect(pendingOf(fx).get(0)).toBe(2);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("refuses self-targets, wrecks, out-of-range indices, and friendlies", () => {
+    const scene = new THREE.Scene();
+    const units = makeSkirmish();
+    const fx = new CombatFx(scene, units, mulberry32(11));
+    try {
+      fx.orderAim(0, 0);
+      fx.orderAim(0, 9);
+      fx.orderAim(9, 1);
+      expect(pendingOf(fx).has(0)).toBe(false);
+      // Same-team pairs never draw fire.
+      (units.userData.units as { team: number }[])[2]!.team = 0;
+      fx.orderAim(0, 2);
+      expect(pendingOf(fx).has(0)).toBe(false);
+      (units.userData.units as { team: number }[])[2]!.team = 1;
+      // Wrecks refuse: size the damage roster first (the splash backdoor
+      // early-returns on an unsized roster), then clear the aims proactive
+      // engagement attached so the refusal reads clean.
+      fx.update(1 / 60);
+      pendingOf(fx).clear();
+      wreck(fx, units, 1);
+      expect(fx.isDestroyedAt(1)).toBe(true);
+      fx.orderAim(0, 1);
+      expect(pendingOf(fx).has(0)).toBe(false);
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("accepts any other live hull in legacy unteamed groups", () => {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 1, cellZ: 1, rotation: 0 },
+      { kind: "flash", cellX: 2, cellZ: 2, rotation: Math.PI },
+    ];
+    for (const pos of [new THREE.Vector3(0, 100, 0), new THREE.Vector3(300, 100, 0)]) {
+      const body = new THREE.Group();
+      body.position.copy(pos);
+      const turret = new THREE.Group();
+      turret.name = "turret";
+      body.add(turret);
+      body.userData.turret = turret;
+      group.add(body);
+    }
+    const fx = new CombatFx(scene, group, mulberry32(11));
+    try {
+      fx.orderAim(0, 1);
+      expect(pendingOf(fx).get(0)).toBe(1);
+    } finally {
+      fx.dispose();
+    }
+  });
+});

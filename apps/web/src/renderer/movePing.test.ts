@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  ATTACK_PING_COLOR,
   MOVE_PING_DURATION,
   MOVE_PING_LIFT,
   MOVE_PING_RENDER_ORDER,
@@ -85,5 +86,26 @@ describe("move-order ping shares the unit circle logic", () => {
     // Monotonic: grows while fading.
     expect(movePingScale(0.5)).toBeGreaterThan(movePingScale(0.25));
     expect(movePingOpacity(0.5)).toBeLessThan(movePingOpacity(0.25));
+  });
+
+  it("pings rose for attack orders, cyan by default", () => {
+    const geo = buildMovePingGeometry();
+    try {
+      const attack = buildMovePing(geo, 0, 0, () => 42, ATTACK_PING_COLOR);
+      try {
+        expect((attack.material as THREE.MeshBasicMaterial).color.getHex()).toBe(ATTACK_PING_COLOR);
+        expect(ATTACK_PING_COLOR).not.toBe(SELECTION_CORE);
+      } finally {
+        (attack.material as THREE.Material).dispose();
+      }
+      const move = buildMovePing(geo, 0, 0, () => 42);
+      try {
+        expect((move.material as THREE.MeshBasicMaterial).color.getHex()).toBe(SELECTION_CORE);
+      } finally {
+        (move.material as THREE.Material).dispose();
+      }
+    } finally {
+      geo.dispose();
+    }
   });
 });

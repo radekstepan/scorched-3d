@@ -91,8 +91,10 @@ import {
   boxPick,
   boxSelect,
   clickSelect,
+  hostileMembers,
   normalizeRect,
   pickNearest,
+  resolveRightClick,
 } from "./selection";
 import {
   buildSelectionMarker,
@@ -101,6 +103,7 @@ import {
   updateSelectionMarker,
 } from "./selectionFx";
 import {
+  ATTACK_PING_COLOR,
   MOVE_PING_DURATION,
   MOVE_PING_MAX,
   buildMovePing,
@@ -739,7 +742,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // cuts the destination circle off — see `movePing.ts`.
     const pingGeo = buildMovePingGeometry();
     const pings: { mesh: THREE.Mesh; t: number }[] = [];
-    const addPing = (x: number, z: number): void => {
+    const addPing = (x: number, z: number, color?: number): void => {
       if (pings.length >= MOVE_PING_MAX) {
         const oldest = pings.shift();
         if (oldest) {
@@ -747,7 +750,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           (oldest.mesh.material as THREE.Material).dispose();
         }
       }
-      const mesh = buildMovePing(pingGeo, x, z, groundY);
+      const mesh = buildMovePing(pingGeo, x, z, groundY, color);
       scene.add(mesh);
       pings.push({ mesh, t: 0 });
     };
@@ -847,8 +850,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
 
     // Input UX (documented in the HUD footer): left-click selects,
     // shift-click toggles, shift-drag boxes (plain left-drag keeps orbiting),
-    // right-click without drag orders the selection to move (right-drag keeps
-    // panning), Esc clears. Click vs drag disambiguates on a pixel threshold.
+    // right-click without drag orders the selection to move — or to attack
+    // when the click lands on a live enemy unit (right-drag keeps panning),
+    // Esc clears. Click vs drag disambiguates on a pixel threshold.
     let down: { x: number; y: number; button: number; shift: boolean } | null = null;
     let boxing = false;
     const onPointerDown = (ev: PointerEvent) => {
@@ -931,10 +935,35 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         const screenHit = screenSlot === null ? null : (sel.indices[screenSlot] ?? null);
         applySelection(clickSelect(selection, meshHit ?? screenHit, ev.shiftKey));
       } else if (wasDown.button === 2 && selection.length > 0) {
-        const point = pickGround(ev.clientX, ev.clientY);
-        if (point) {
-          movement.orderGroup(selection, { x: point.x, z: point.z });
-          addPing(point.x, point.z);
+        // Right-click on a live enemy of the selection orders an attack on
+        // that unit (hostile members pursue it and traverse their guns onto
+        // it); anything else orders a move to the clicked ground. Unit
+        // resolution matches left-click: raycast first, else the nearest
+        // projection within the pick radius (wrecks unpickable either way).
+        const rect = canvasRect();
+        const meshHit = pickBody(ev.clientX, ev.clientY);
+        const sel = projectSelectable();
+        const screenSlot = pickNearest(sel.points, {
+          x: ev.clientX - rect.left,
+          y: ev.clientY - rect.top,
+        });
+        const screenHit = screenSlot === null ? null : (sel.indices[screenSlot] ?? null);
+        const placed = units.userData.units as PlacedUnit[] | undefined;
+        const teamAt = (i: number): number | undefined => placed?.[i]?.team;
+        const order = resolveRightClick(selection, meshHit ?? screenHit, teamAt);
+        if (order.kind === "attack") {
+          movement.attackGroup(selection, order.target);
+          for (const i of hostileMembers(selection, order.target, teamAt)) {
+            combat.orderAim(i, order.target);
+          }
+          const at = movement.positions()[order.target];
+          if (at) addPing(at.x, at.z, ATTACK_PING_COLOR);
+        } else {
+          const point = pickGround(ev.clientX, ev.clientY);
+          if (point) {
+            movement.orderGroup(selection, { x: point.x, z: point.z });
+            addPing(point.x, point.z);
+          }
         }
       }
     };

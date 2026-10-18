@@ -100,6 +100,20 @@ export interface ThreatMemory {
    */
   challenger?: ThreatChallenger;
   /**
+   * Player-issued attack order (see `orderAttack`): the hull was explicitly
+   * told to kill `attacker` and the drive treats the memory as an order, not
+   * a grudge — no disengage give-up (a fleeing quarry is chased, not let go)
+   * and no outnumbered hold (explicit intent charges where a volunteer would
+   * wait for backup). The anchor leash (carried wide, roughly a map width)
+   * and memory expiry still release it; the renderer refreshes the clock
+   * against the live target every sweep, so the order stands until the
+   * target dies, a move order supersedes it, or the hull dies. New hits
+   * never steal it (`notifyThreat` refuses) and obstructed seeks never
+   * repoint it (`seekEngage` refuses) — the guns still answer close threats
+   * through their own traverse goals, but the drive holds its order.
+   */
+  ordered?: true;
+  /**
    * Firing-position sidestep: a nearby lateral point the hull should shuffle
    * to while engaging (see `firingSidestep` in combat.ts, which names it;
    * the renderer sweep attaches it on a cooldown and forest-obstructed
@@ -266,6 +280,9 @@ export interface ThreatAnchor {
  *   first, the fort after. A different attacker restarts the count; distant
  *   chips (past the engage gate or the leash) record nothing, shells
  *   included.
+ * - Player attack orders (`ordered`, see `orderAttack`) are never stolen: a
+ *   hull driving an explicit order keeps it through incoming fire from any
+ *   gun, including its quarry's.
  */
 export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
   mover: M,
@@ -298,6 +315,12 @@ export function notifyThreat<M extends { threat?: ThreatMemory; order?: unknown;
     !(anchor && !ordered && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS);
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
   if (live) {
+    // A player attack order holds its drive through incoming fire: new hits
+    // never steal it (the renderer refreshes the ordered memory against the
+    // live target every sweep, so even the ordered quarry's own hits need no
+    // refresh here). The guns still answer close threats through their own
+    // traverse goals — only the drive keeps its order.
+    if (live.ordered === true) return mover;
     // Finish a bounded escape from a blocked firing lane. Alternating hits
     // must not erase the destination or turn the hull away mid-stride.
     if (live.sidestep?.obstruction && live.attacker >= 0 &&
@@ -394,7 +417,9 @@ function noteAssaultHit<M extends { threat?: ThreatMemory }>(
  * sits past the retaliation notice bound — while the rest of the authority
  * rules hold:
  *
- * - Ordered/holding movers ignore the seek (player orders win).
+ * - Ordered/holding movers ignore the seek (player orders win) — as do movers
+ *   driving a player attack order (`ordered`): the closing pursuit is the
+ *   cure, so the seek never repoints it.
  * - The patrol-anchor leash still applies (local repositioning only, never
  *   a map-wide chase): a target past the leash leaves the mover untouched.
  * - `attacker` is the *target* roster index the hull should close on, or
@@ -425,6 +450,10 @@ export function seekEngage<M extends { threat?: ThreatMemory; order?: unknown; h
   // renderer also refuses seeker === target like the threat pipeline does.
   if (anchor && Math.hypot(ax - anchor.x, az - anchor.z) > THREAT_LEASH_RADIUS) return mover;
   const live = mover.threat && mover.threat.ttl > 0 ? mover.threat : undefined;
+  // A player attack order is never repointed by an obstructed seek: the hull
+  // is already closing on its ordered quarry (which is the cure — a closer
+  // seat), so the drive holds and the gun retries its lane each volley.
+  if (live?.ordered === true) return mover;
   if (live) {
     return {
       ...mover,
@@ -526,6 +555,55 @@ export function advanceMemory(x: number, z: number, leash: number = HUNT_LEASH_R
   if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
   if (!(leash > 0)) return null;
   return { attacker: -1, x, z, ttl: THREAT_MEMORY_DURATION, leash };
+}
+
+/**
+ * Player attack order: point `mover` at the live roster enemy `attacker` at
+ * (`x`, `z`) until the target dies or a newer order supersedes it. Returns a
+ * new mover with any move order cleared (like `orderMover`, the newest
+ * explicit intent wins), the hold lifted, and an `ordered` threat memory on
+ * the wide team-advance leash — so the order ranges map-wide like a move
+ * order instead of dying on the patrol-anchor guard, and the drive closes to
+ * the kind's stand-off, holds facing the quarry, and tracks it live through
+ * the same pursuit pipeline retaliation uses (see `pursueStep`).
+ *
+ * Compared to a retaliation grudge, three deliberate differences:
+ *
+ * - No engage gate and no leash gate at issue: the player clicked the enemy,
+ *   so the order is valid at any range — the carried wide leash still bounds
+ *   the chase, and expiry still releases a hull whose renderer never
+ *   refreshes it.
+ * - The HQ walk-out (`leadIn`) survives: unlike a move order (which repaths
+ *   from the live position), a direct pursuit would grind a release through
+ *   the curb wall — so the departure completes first and the pursuit steers
+ *   the moment it lifts (see the drive order in `movement.ts`).
+ * - Only roster grudges: `attacker` must be a live enemy index (`>= 0`);
+ *   positions ride `advanceMemory` and forts ride `seekStructure` instead.
+ *
+ * Pure: no rng, no clocks. The renderer guards aliveness, hostility, and
+ * self-targeting (a hull never attacks itself) before calling.
+ */
+export function orderAttack<M extends { threat?: ThreatMemory; order?: unknown; hold?: boolean }>(
+  mover: M,
+  attacker: number,
+  x: number,
+  z: number,
+): M {
+  if (!Number.isInteger(attacker) || attacker < 0) return mover;
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return mover;
+  return {
+    ...mover,
+    order: undefined,
+    hold: false,
+    threat: {
+      attacker,
+      x,
+      z,
+      ttl: THREAT_MEMORY_DURATION,
+      leash: TEAM_ADVANCE_LEASH_RADIUS,
+      ordered: true as const,
+    },
+  };
 }
 
 /**

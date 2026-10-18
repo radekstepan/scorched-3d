@@ -26,6 +26,7 @@ import {
   nearestIntel,
   notifyThreat,
   ORBIT_STRAFE_COOLDOWN,
+  orderAttack,
   orderMover,
   orbitStrafe,
   outnumbered,
@@ -544,7 +545,9 @@ export class UnitMovement {
     * Memories pointing at wrecks clear first (survivors stop guarding corpses
     * and may acquire a live enemy the same tick); position memories
     * (attacker -1: HQ seeks and team advances) survive the clear — a
-    * structure is never a dead roster row. Ordered, holding, threatened, and
+    * structure is never a dead roster row — and player attack orders (`ordered`
+    * memories) refresh against the live target instead of expiring, so an
+    * explicit order outlives any 12 s grudge. Ordered, holding, threatened, and
     * wrecked hulls are untouched, and the sweep costs one O(n) scan per hull
     * on a 6-roster, before the drive step so hunts steer same-tick.
     * In-progress pursuits that turn suicidal hold in place inside the drive
@@ -653,6 +656,19 @@ export class UnitMovement {
           (attacker >= 0 && this.destroyed[attacker]))
       ) {
         mover = clearThreat(mover);
+      }
+      // Player attack orders persist: a live `ordered` memory refreshes
+      // against the live target (position + full clock) every sweep, so the
+      // order never expires mid-chase like a 12 s grudge — it ends only when
+      // the target dies (cleared above), a move order supersedes it, or the
+      // hull dies. The refreshed memory keeps its carried leash, flag, and
+      // any footwork the sweep attached below.
+      if (mover.threat?.ordered === true && mover.threat.ttl > 0) {
+        const quarry = foes[mover.threat.attacker];
+        mover =
+          quarry && Number.isFinite(quarry.x) && Number.isFinite(quarry.z)
+            ? { ...mover, threat: { ...mover.threat, x: quarry.x, z: quarry.z, ttl: THREAT_MEMORY_DURATION } }
+            : clearThreat(mover);
       }
       const anchor = this.routes[i]?.[0] ?? null;
       // A hull carrying only an advance still upgrades: clear the position
@@ -1185,6 +1201,48 @@ export class UnitMovement {
     live.forEach((index, i) => {
       if (this.orderUnit(index, slots[i] ?? target, cap)) issued++;
     });
+    return issued;
+  }
+
+  /**
+   * Issue a player attack order: `index` hunts the live roster enemy
+   * `target` until the target dies or a newer order supersedes it (core
+   * `orderAttack`: any move order clears, the hold lifts, and an `ordered`
+   * threat memory on the wide team-advance leash steers the hull to its
+   * kind's stand-off through the same pursuit pipeline retaliation uses —
+   * charging past the disengage bound and through bad odds, where a
+   * volunteer grudge would let go or wait for backup). The sweep refreshes
+   * the memory against the live target every tick, so the order never
+   * expires mid-chase like a 12 s grudge; new hits never steal it
+   * (`notifyThreat` refuses `ordered`), while the guns still answer close
+   * threats through their own traverse goals. Wrecks, self-targets,
+   * same-team targets, unknown sides, and dead/out-of-range targets refuse.
+   * Returns true when the order was issued.
+   */
+  attackUnit(index: number, target: number): boolean {
+    const mover = this.movers[index];
+    const foe = this.movers[target];
+    if (!mover || !foe || this.destroyed[index] || this.destroyed[target]) return false;
+    if (index === target) return false;
+    const side = this.teamAt(index);
+    const foeSide = this.teamAt(target);
+    if (side === undefined || foeSide === undefined || side === foeSide) return false;
+    if (!Number.isFinite(foe.x) || !Number.isFinite(foe.z)) return false;
+    this.movers[index] = orderAttack(mover, target, foe.x, foe.z);
+    return true;
+  }
+
+  /**
+   * Issue a group attack order: every hostile live member of `indices`
+   * hunts `target` (see `attackUnit`). Same-team members and wrecks sit
+   * out — only guns across team lines take the order. Returns how many
+   * orders were issued.
+   */
+  attackGroup(indices: readonly number[], target: number): number {
+    let issued = 0;
+    for (const index of indices) {
+      if (this.attackUnit(index, target)) issued++;
+    }
     return issued;
   }
 

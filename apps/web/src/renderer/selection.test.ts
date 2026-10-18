@@ -3,8 +3,10 @@ import {
   boxPick,
   boxSelect,
   clickSelect,
+  hostileMembers,
   normalizeRect,
   pickNearest,
+  resolveRightClick,
 } from "./selection";
 
 const PTS = [
@@ -65,5 +67,43 @@ describe("boxSelect", () => {
     expect(boxSelect([0], [1, 2], false)).toEqual([1, 2]);
     expect(boxSelect([0], [1, 2], true)).toEqual([0, 1, 2]);
     expect(boxSelect([0, 1], [], false)).toEqual([]);
+  });
+});
+
+describe("hostileMembers", () => {
+  const teams = [0, 0, 1, 1];
+  const teamAt = (i: number): number | undefined => teams[i];
+
+  it("keeps only members across team lines from the target, in order", () => {
+    expect(hostileMembers([0, 1, 2, 3], 2, teamAt)).toEqual([0, 1]);
+    expect(hostileMembers([2, 3, 0], 0, teamAt)).toEqual([2, 3]);
+  });
+
+  it("sits out the target itself, friendlies, and unknown sides", () => {
+    expect(hostileMembers([2], 2, teamAt)).toEqual([]);
+    expect(hostileMembers([1, 2], 2, teamAt)).toEqual([1]);
+    expect(hostileMembers([0, 1], 0, teamAt)).toEqual([]);
+    expect(hostileMembers([0, 1], 9, teamAt)).toEqual([]);
+    expect(hostileMembers([0, 9], 2, () => undefined)).toEqual([]);
+  });
+});
+
+describe("resolveRightClick", () => {
+  const teams = [0, 0, 1];
+  const teamAt = (i: number): number | undefined => teams[i];
+
+  it("attacks a live enemy of the selection", () => {
+    expect(resolveRightClick([0, 1], 2, teamAt)).toEqual({ kind: "attack", target: 2 });
+    // Mixed selections attack through their hostile members alone.
+    expect(resolveRightClick([0, 2], 1, teamAt)).toEqual({ kind: "attack", target: 1 });
+  });
+
+  it("moves on ground, selected units, friendlies, and unknown sides", () => {
+    expect(resolveRightClick([0, 1], null, teamAt)).toEqual({ kind: "move" });
+    expect(resolveRightClick([0, 1], 1, teamAt)).toEqual({ kind: "move" });
+    expect(resolveRightClick([0, 1], 0, teamAt)).toEqual({ kind: "move" });
+    expect(resolveRightClick([0], 1, teamAt)).toEqual({ kind: "move" });
+    expect(resolveRightClick([0], 2, () => undefined)).toEqual({ kind: "move" });
+    expect(resolveRightClick([], 2, teamAt)).toEqual({ kind: "move" });
   });
 });

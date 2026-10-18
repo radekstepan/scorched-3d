@@ -1078,9 +1078,11 @@ function pursueStep(
   // past the regular disengage on its first step.
   // Position memories (attacker -1: a last-known spot or an HQ structure)
   // are exempt — the quarry cannot flee, so distance from the spot is the
-  // reason to advance, not a reason to give up. The anchor leash and the
-  // memory expiry below still release the hull.
-  if (threat.attacker >= 0 && Math.hypot(tx - mover.x, tz - mover.z) > disengageRadiusFor(kind)) return null;
+  // reason to advance, not a reason to give up. Player attack orders
+  // (`ordered`) are exempt too — a fleeing quarry is chased, not let go.
+  // The anchor leash and the memory expiry below still release the hull.
+  if (threat.attacker >= 0 && threat.ordered !== true &&
+      Math.hypot(tx - mover.x, tz - mover.z) > disengageRadiusFor(kind)) return null;
   // Leash to the post: the threat must sit near the patrol anchor (route
   // waypoint 0, the spawn) or the chase would drag the hull across the map.
   // The memory carries its own leash — retaliation holds the tight anchor
@@ -1118,6 +1120,7 @@ function pursueStep(
         }
       : {}),
     ...(threat.sidestep !== undefined ? { sidestep: { ...threat.sidestep } } : {}),
+    ...(threat.ordered === true ? { ordered: true as const } : {}),
   };
   const want = yawToTarget(mover, { x: tx, z: tz });
   // A proven, bounded firing-lane escape may finish even under bad odds.
@@ -1127,9 +1130,10 @@ function pursueStep(
   // reach me), enemies around the threat (what I would drive into). The
   // memory stays fresh so the hull re-engages the moment friends arrive —
   // and the usual expiry/disengage/leash gates still release it if the
-  // fight moves on without it.
+  // fight moves on without it. Player attack orders (`ordered`) never hold:
+  // explicit intent charges where a volunteer would wait.
   if (
-    !memory.sidestep?.obstruction && tactics && foes &&
+    !memory.sidestep?.obstruction && threat.ordered !== true && tactics && foes &&
     outnumbered(
       tactics.self, mover, { x: tx, z: tz },
       foes, tactics.teams, tactics.alive, tactics.hp,

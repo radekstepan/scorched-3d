@@ -1267,6 +1267,30 @@ export class CombatFx {
   }
 
   /**
+   * Player attack order: traverse `attacker`'s gun onto the ordered enemy
+   * `target` now, replacing any live aim — an explicit order wins where
+   * `trackThreat` would retain a valid goal. The turret slews at its capped
+   * rate and the scheduler's sticky scoring holds the aim, so the gun opens
+   * fire the moment the pursuit closes into admitted range (range, wood,
+   * and terrain admission still gate every round). Self-targets, wrecks,
+   * out-of-range indices, and same-team pairs refuse; legacy unteamed
+   * groups accept any other live hull, like `trackThreat`.
+   */
+  orderAim(attacker: number, target: number): void {
+    const count = this.units.children.length;
+    if (!Number.isInteger(attacker) || !Number.isInteger(target)) return;
+    if (attacker < 0 || target < 0 || attacker >= count || target >= count) return;
+    if (attacker === target || this.destroyed[attacker] || this.destroyed[target]) return;
+    const placed = this.units.userData.units as PlacedUnit[] | undefined;
+    const side = placed?.[attacker]?.team;
+    if (side !== undefined) {
+      const foeSide = placed?.[target]?.team;
+      if (foeSide === undefined || foeSide === side) return;
+    }
+    this.aimPending(attacker, target);
+  }
+
+  /**
    * Aim an attacker at a hull, releasing the turret-overshoot latch when the
    * goal changes: the latch belongs to one acquisition, so a re-picked target
    * traverses fresh instead of inheriting the old swing's extra travel.

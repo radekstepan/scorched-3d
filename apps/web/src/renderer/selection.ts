@@ -105,6 +105,42 @@ export function clickSelect(
 }
 
 /**
+ * Selected members hostile to `target`: live across team lines from it, in
+ * selection order. Same-team members, the target itself, and unknown sides
+ * sit out — only guns that may legally fire take an attack order.
+ */
+export function hostileMembers(
+  selection: readonly number[],
+  target: number,
+  teamAt: (index: number) => number | undefined,
+): number[] {
+  const foeSide = teamAt(target);
+  if (foeSide === undefined) return [];
+  return selection.filter((index) => {
+    if (index === target) return false;
+    const side = teamAt(index);
+    return side !== undefined && side !== foeSide;
+  });
+}
+
+/**
+ * Right-click order resolution: a click on a live enemy of the selection is
+ * an attack order on that unit, anything else (empty ground, a selected
+ * unit, a friendly, an unknown side) is a move order to the clicked point.
+ * The canvas resolves the clicked unit first (raycast, else the nearest
+ * projection) and passes its roster index as `hit`, or null for ground.
+ */
+export function resolveRightClick(
+  selection: readonly number[],
+  hit: number | null,
+  teamAt: (index: number) => number | undefined,
+): { kind: "attack"; target: number } | { kind: "move" } {
+  if (hit === null || selection.includes(hit)) return { kind: "move" };
+  if (hostileMembers(selection, hit, teamAt).length === 0) return { kind: "move" };
+  return { kind: "attack", target: hit };
+}
+
+/**
  * Drag-box selection: replace the selection, or union with it when
  * additive (shift-drag). Always returns a sorted list.
  */

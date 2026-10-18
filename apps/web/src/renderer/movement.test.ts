@@ -9,6 +9,7 @@ import {
   sampleHeightBilinear,
   seatHull,
   STUN_MAX_DURATION,
+  THREAT_MEMORY_DURATION,
   worldHeight,
   yawToTarget,
   type RoutePoint,
@@ -1002,6 +1003,139 @@ describe("UnitMovement hull yaw continuity", () => {
     });
     // Vacuity guard: the run actually turned hulls (corners + pursuit).
     expect(Math.max(...worst)).toBeGreaterThan(0);
+    movement.dispose();
+  });
+});
+
+describe("attackGroup", () => {
+  function makeDuel(): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.units = [
+      { kind: "flash", cellX: 10, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "stump", cellX: 12, cellZ: 10, rotation: 0, team: 0 },
+      { kind: "flash", cellX: 40, cellZ: 40, rotation: Math.PI, team: 1 },
+    ];
+    const starts = [
+      new THREE.Vector3(0, 100, 0),
+      new THREE.Vector3(60, 100, 0),
+      new THREE.Vector3(500, 100, 300),
+    ];
+    group.userData.units.forEach((u: { rotation: number }, i: number) => {
+      const body = new THREE.Group();
+      body.rotation.y = u.rotation;
+      body.position.copy(starts[i]!);
+      group.add(body);
+    });
+    return group;
+  }
+
+  function duelRoutes(): RoutePoint[][] {
+    return [
+      [
+        { x: 0, z: 0 },
+        { x: 0, z: 400 },
+        { x: 400, z: 400 },
+        { x: 400, z: 0 },
+      ],
+      [
+        { x: 60, z: 0 },
+        { x: 60, z: 400 },
+        { x: 460, z: 400 },
+        { x: 460, z: 0 },
+      ],
+      [
+        { x: 500, z: 300 },
+        { x: 500, z: 700 },
+        { x: 900, z: 700 },
+        { x: 900, z: 300 },
+      ],
+    ];
+  }
+
+  it("points hostile members at the enemy with ordered memories", () => {
+    const units = makeDuel();
+    const movement = new UnitMovement(units, duelRoutes(), { groundY: () => 100 });
+    expect(movement.attackGroup([0, 1], 2)).toBe(2);
+    for (const i of [0, 1]) {
+      const state = movement.moverState(i)!;
+      expect(state.threat).toMatchObject({ attacker: 2, ordered: true });
+      expect(state.threat?.ttl).toBe(THREAT_MEMORY_DURATION);
+      expect(movement.hasOrder(i)).toBe(false);
+      expect(movement.isFighting(i)).toBe(true);
+    }
+    // The quarry keeps its own counsel — no memory lands on the target.
+    expect(movement.moverState(2)!.threat).toBeUndefined();
+    movement.dispose();
+  });
+
+  it("orders only hostile live members and refuses bad targets", () => {
+    const units = makeDuel();
+    const movement = new UnitMovement(units, duelRoutes(), { groundY: () => 100 });
+    // Same-team members and the target itself sit out.
+    expect(movement.attackGroup([0, 1, 2], 2)).toBe(2);
+    expect(movement.attackGroup([0, 1], 1)).toBe(0);
+    expect(movement.attackUnit(0, 0)).toBe(false);
+    expect(movement.attackUnit(0, 9)).toBe(false);
+    expect(movement.attackUnit(9, 2)).toBe(false);
+    movement.markDestroyed(2);
+    expect(movement.attackUnit(0, 2)).toBe(false);
+    movement.dispose();
+    // Unknown sides (unteamed headless groups) refuse: no team lines, no attack.
+    const plain = makeGroup();
+    const headless = new UnitMovement(plain, routes(), { groundY: () => 100 });
+    expect(headless.attackGroup([0], 1)).toBe(0);
+    headless.dispose();
+  });
+
+  it("clears any move order and is superseded by the next move order", () => {
+    const units = makeDuel();
+    const movement = new UnitMovement(units, duelRoutes(), { groundY: () => 100 });
+    movement.orderUnit(0, { x: -300, z: -300 });
+    expect(movement.hasOrder(0)).toBe(true);
+    movement.attackGroup([0], 2);
+    expect(movement.hasOrder(0)).toBe(false);
+    expect(movement.moverState(0)!.threat?.ordered).toBe(true);
+    movement.orderUnit(0, { x: -300, z: -300 });
+    expect(movement.hasOrder(0)).toBe(true);
+    expect(movement.moverState(0)!.threat).toBeUndefined();
+    movement.dispose();
+  });
+
+  it("refreshes the order every sweep so it never expires mid-chase", () => {
+    const units = makeDuel();
+    // The quarry holds its ground (a single-point route never steps), so the
+    // closing distance reads the pursuit instead of a same-speed footrace.
+    const held = duelRoutes();
+    held[2] = [{ x: 500, z: 300 }];
+    const movement = new UnitMovement(units, held, { groundY: () => 100 });
+    movement.attackGroup([0], 2);
+    // Thirteen sim-seconds: a plain 12 s grudge would have expired.
+    for (let n = 0; n < 13; n++) movement.update(1);
+    const state = movement.moverState(0)!;
+    expect(state.threat?.attacker).toBe(2);
+    expect(state.threat?.ordered).toBe(true);
+    // Refreshed to full by the sweep, then ticked once by the drive.
+    expect(state.threat?.ttl).toBeCloseTo(THREAT_MEMORY_DURATION - 1, 9);
+    // And the hull actually closed on the quarry instead of patrolling.
+    const at = movement.positions()[0]!;
+    const foe = movement.positions()[2]!;
+    expect(Math.hypot(foe.x - at.x, foe.z - at.z)).toBeLessThan(583);
+    movement.dispose();
+  });
+
+  it("ends the order when the target dies and survives the quarry's own hits", () => {
+    const units = makeDuel();
+    const movement = new UnitMovement(units, duelRoutes(), { groundY: () => 100 });
+    movement.attackGroup([0, 1], 2);
+    // The quarry hits back: the drive holds its order through the fire.
+    const foe = movement.positions()[2]!;
+    movement.threatenUnit(0, 2, foe.x, foe.z);
+    expect(movement.moverState(0)!.threat).toMatchObject({ attacker: 2, ordered: true });
+    // The kill ends it: survivors stop guarding the corpse.
+    movement.markDestroyed(2);
+    movement.sweepHunt();
+    expect(movement.moverState(0)!.threat).toBeUndefined();
+    expect(movement.moverState(1)!.threat).toBeUndefined();
     movement.dispose();
   });
 });
