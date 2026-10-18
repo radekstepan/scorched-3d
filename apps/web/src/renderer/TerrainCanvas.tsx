@@ -95,6 +95,7 @@ import {
   boxPick,
   boxSelect,
   clickSelect,
+  doubleClickSelect,
   hostileMembers,
   normalizeRect,
   pickNearest,
@@ -117,7 +118,7 @@ import {
 } from "./movePing";
 import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { StandsCache } from "./stands";
-import { computeUnitVisibility } from "./viewCull";
+import { computeOnScreen, computeUnitVisibility } from "./viewCull";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
 import { CombatEventTracker, FollowHoldTracker, followBattleStep, followSuppressed } from "./followBattle";
 import { jumpCameraTo } from "./minimap";
@@ -912,13 +913,33 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       return hits.length > 0 && hits[0] ? hits[0].point : null;
     };
 
+    /**
+     * Resolve a click to a roster index in screen space too: the raycast
+     * can miss small or partially occluded hulls, while the projected pick
+     * matches what the player sees. Raycast wins when both hit (exact
+     * mesh), else the nearest projection within the pick radius. Shared by
+     * single clicks, right-click orders, and double-click expansion.
+     */
+    const resolveClickHit = (clientX: number, clientY: number): number | null => {
+      const rect = canvasRect();
+      const meshHit = pickBody(clientX, clientY);
+      const sel = projectSelectable();
+      const screenSlot = pickNearest(sel.points, {
+        x: clientX - rect.left,
+        y: clientY - rect.top,
+      });
+      return meshHit ?? (screenSlot === null ? null : (sel.indices[screenSlot] ?? null));
+    };
+
     // Input UX (documented in the HUD footer): left-click selects,
-    // shift-click toggles, shift-drag boxes (plain left-drag orbits — or
-    // pans in pan mode, where the viewing angle locks and drags translate
-    // the rig like the arrow keys), right-click without drag orders the
-    // selection to move — or to attack when the click lands on a live
-    // enemy unit (right-drag keeps panning), Esc clears. Click vs drag
-    // disambiguates on a pixel threshold.
+    // double-click selects every on-screen unit of the clicked unit's kind
+    // and team (replaces, Shift or not), shift-click toggles, shift-drag
+    // boxes (plain left-drag orbits — or pans in pan mode, where the
+    // viewing angle locks and drags translate the rig like the arrow
+    // keys), right-click without drag orders the selection to move — or to
+    // attack when the click lands on a live enemy unit (right-drag keeps
+    // panning), Esc clears. Click vs drag disambiguates on a pixel
+    // threshold.
     let down: { x: number; y: number; button: number; shift: boolean } | null = null;
     let boxing = false;
     const onPointerDown = (ev: PointerEvent) => {
@@ -1008,36 +1029,14 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       }
       if (moved >= CLICK_DRAG_PX) return;
       if (wasDown.button === 0) {
-        // Resolve clicks in screen space too: the raycast can miss small or
-        // partially occluded hulls, while the projected pick matches what the
-        // player sees. Raycast wins when both hit (exact mesh), else the
-        // nearest projection within the pick radius.
-        const rect = canvasRect();
-        const meshHit = pickBody(ev.clientX, ev.clientY);
-        const sel = projectSelectable();
-        const screenSlot = pickNearest(sel.points, {
-          x: ev.clientX - rect.left,
-          y: ev.clientY - rect.top,
-        });
-        const screenHit = screenSlot === null ? null : (sel.indices[screenSlot] ?? null);
-        applySelection(clickSelect(selection, meshHit ?? screenHit, ev.shiftKey));
+        applySelection(clickSelect(selection, resolveClickHit(ev.clientX, ev.clientY), ev.shiftKey));
       } else if (wasDown.button === 2 && selection.length > 0) {
         // Right-click on a live enemy of the selection orders an attack on
         // that unit (hostile members pursue it and traverse their guns onto
-        // it); anything else orders a move to the clicked ground. Unit
-        // resolution matches left-click: raycast first, else the nearest
-        // projection within the pick radius (wrecks unpickable either way).
-        const rect = canvasRect();
-        const meshHit = pickBody(ev.clientX, ev.clientY);
-        const sel = projectSelectable();
-        const screenSlot = pickNearest(sel.points, {
-          x: ev.clientX - rect.left,
-          y: ev.clientY - rect.top,
-        });
-        const screenHit = screenSlot === null ? null : (sel.indices[screenSlot] ?? null);
+        // it); anything else orders a move to the clicked ground.
         const placed = units.userData.units as PlacedUnit[] | undefined;
         const teamAt = (i: number): number | undefined => placed?.[i]?.team;
-        const order = resolveRightClick(selection, meshHit ?? screenHit, teamAt);
+        const order = resolveRightClick(selection, resolveClickHit(ev.clientX, ev.clientY), teamAt);
         if (order.kind === "attack") {
           movement.attackGroup(selection, order.target);
           for (const i of hostileMembers(selection, order.target, teamAt)) {
@@ -1065,9 +1064,28 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         hoverRef.current(null);
       }
     };
+    // Double-click expansion: the two preceding single clicks already
+    // resolved and selected the anchor, so this only widens the selection
+    // to every on-screen roster mate of the anchor's kind and team
+    // (wrecks excluded, always replaces). The strict NDC on-screen test
+    // — not the generous view-sphere gate — keeps hulls just past the
+    // viewport edge out of the group.
+    const onDoubleClick = (ev: MouseEvent) => {
+      if (suspendedRef.current) return;
+      if (ev.button !== 0) return;
+      const anchor = resolveClickHit(ev.clientX, ev.clientY);
+      const placed = units.userData.units as PlacedUnit[] | undefined;
+      if (!placed) return;
+      applySelection(
+        doubleClickSelect(anchor, placed, computeOnScreen(camera, units.children), (i) =>
+          combat.isDestroyedAt(i),
+        ),
+      );
+    };
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerleave", onLeave);
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("dblclick", onDoubleClick);
     // Camera motion under a parked cursor changes the probed cell: re-dirty
     // the hover gate on every orbit/zoom update (fires only while the camera
     // actually moves, so a settled camera costs nothing).
@@ -1579,6 +1597,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("dblclick", onDoubleClick);
       controls.removeEventListener("change", markHoverDirty);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();

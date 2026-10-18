@@ -472,7 +472,7 @@ export default function App() {
       </aside>
 
       <footer className="command-footer"><span><i aria-hidden="true" /> {view === "folio" ? "FOLIO / BATTLE SUSPENDED" : "COMMAND LINK ACTIVE"}</span>
-        <p>{view === "folio" ? "DRAG orbit · SCROLL / PINCH zoom · CHOOSE a study angle · RETURN to battlefield to resume command" : `CLICK select · SHIFT+DRAG box · RIGHT-CLICK move/attack · ESC clear · DRAG ${options.panMode ? "pan" : "orbit"} · SCROLL zoom · WASD pan`}</p>
+        <p>{view === "folio" ? "DRAG orbit · SCROLL / PINCH zoom · CHOOSE a study angle · RETURN to battlefield to resume command" : `CLICK select · DOUBLE-CLICK same type · SHIFT+DRAG box · RIGHT-CLICK move/attack · ESC clear · DRAG ${options.panMode ? "pan" : "orbit"} · SCROLL zoom · WASD pan`}</p>
         <span>{map.width} × {map.height} GRID</span>
       </footer>
     </div>

@@ -141,6 +141,52 @@ export function resolveRightClick(
 }
 
 /**
+ * Minimal roster entry for same-type selection (the `PlacedUnit` shape,
+ * structurally — this module stays import-free).
+ */
+export interface TypedUnit {
+  kind: string;
+  team: number;
+}
+
+/**
+ * Double-click selection: every roster mate matching the anchor's kind
+ * AND team that is on-screen right now, in ascending index order.
+ * Wrecks are excluded through `isDestroyedAt` (live hulls only, like
+ * every other pick path). Always replaces — Shift never makes it
+ * additive. A null or unknown anchor selects nothing.
+ *
+ * Nanolathe parallel (community patch `ExternQuickKey::Message` /
+ * `SelectOnlyInScreenSameTypeUnit`, `community-patch-engine.md` §4:
+ * "replaces selection with on-screen own units matching the definitions
+ * already selected"): same replace-with-visible-matches shape. Two
+ * deliberate deviations: the match key is the double-clicked unit's own
+ * kind + team (per the task text) rather than the definitions already
+ * selected, and any faction may anchor it — single clicks already select
+ * enemy hulls here, so there is no own-unit gate.
+ */
+export function doubleClickSelect(
+  anchor: number | null,
+  roster: readonly (TypedUnit | undefined)[],
+  visible: readonly boolean[],
+  isDestroyedAt: (index: number) => boolean = () => false,
+): number[] {
+  if (anchor === null) return [];
+  const ref = roster[anchor];
+  if (!ref) return [];
+  const out: number[] = [];
+  for (let i = 0; i < roster.length; i++) {
+    const u = roster[i];
+    if (!u) continue;
+    if (u.kind !== ref.kind || u.team !== ref.team) continue;
+    if (!visible[i]) continue;
+    if (isDestroyedAt(i)) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+/**
  * Drag-box selection: replace the selection, or union with it when
  * additive (shift-drag). Always returns a sorted list.
  */

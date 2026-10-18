@@ -13,6 +13,7 @@ export const UNIT_VIEW_RADIUS = 70;
 const _viewMatrix = new THREE.Matrix4();
 const _viewFrustum = new THREE.Frustum();
 const _viewSphere = new THREE.Sphere(new THREE.Vector3(), UNIT_VIEW_RADIUS);
+const _screenV = new THREE.Vector3();
 
 /**
  * Per-unit camera visibility for one tick: true when the unit's view
@@ -38,5 +39,34 @@ export function computeUnitVisibility(
   return bodies.map((body) => {
     _viewSphere.center.copy(body.position);
     return _viewFrustum.intersectsSphere(_viewSphere);
+  });
+}
+
+/**
+ * Strict on-screen test per body: true when the body's world origin
+ * projects inside the viewport NDC box (x/y within ±1, z within ±1).
+ * Unlike `computeUnitVisibility` — whose 70-unit view sphere deliberately
+ * keeps off-screen readouts (health bar, x-ray taps) alive — this is the
+ * "visible on the screen right now" predicate behind double-click
+ * same-type selection: a hull just past the viewport edge stays out.
+ * Bodies behind the camera project with z > 1, so they read off-screen.
+ * Only the returned array allocates; the camera matrices refresh inside.
+ */
+export function computeOnScreen(
+  camera: THREE.Camera,
+  bodies: readonly THREE.Object3D[],
+): boolean[] {
+  camera.updateMatrixWorld();
+  return bodies.map((body) => {
+    body.getWorldPosition(_screenV);
+    _screenV.project(camera);
+    return (
+      _screenV.x >= -1 &&
+      _screenV.x <= 1 &&
+      _screenV.y >= -1 &&
+      _screenV.y <= 1 &&
+      _screenV.z >= -1 &&
+      _screenV.z <= 1
+    );
   });
 }

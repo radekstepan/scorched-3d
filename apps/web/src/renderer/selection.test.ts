@@ -3,10 +3,12 @@ import {
   boxPick,
   boxSelect,
   clickSelect,
+  doubleClickSelect,
   hostileMembers,
   normalizeRect,
   pickNearest,
   resolveRightClick,
+  type TypedUnit,
 } from "./selection";
 
 const PTS = [
@@ -67,6 +69,46 @@ describe("boxSelect", () => {
     expect(boxSelect([0], [1, 2], false)).toEqual([1, 2]);
     expect(boxSelect([0], [1, 2], true)).toEqual([0, 1, 2]);
     expect(boxSelect([0, 1], [], false)).toEqual([]);
+  });
+});
+
+describe("doubleClickSelect", () => {
+  const roster: (TypedUnit | undefined)[] = [
+    { kind: "flash", team: 0 },
+    { kind: "flash", team: 0 },
+    { kind: "flash", team: 1 },
+    { kind: "stump", team: 0 },
+    { kind: "flash", team: 0 },
+    undefined,
+  ];
+  const allVisible = [true, true, true, true, true, true];
+
+  it("selects on-screen mates of the anchor's kind and team, in order", () => {
+    expect(doubleClickSelect(4, roster, allVisible)).toEqual([0, 1, 4]);
+    // The anchor's own faction gates the group: same kind, other team.
+    expect(doubleClickSelect(2, roster, allVisible)).toEqual([2]);
+    expect(doubleClickSelect(3, roster, allVisible)).toEqual([3]);
+  });
+
+  it("skips off-screen mates but keeps the on-screen ones", () => {
+    const visible = [true, false, true, true, true, true];
+    expect(doubleClickSelect(0, roster, visible)).toEqual([0, 4]);
+  });
+
+  it("excludes wrecks like every other pick path", () => {
+    const isDestroyedAt = (i: number): boolean => i === 1;
+    expect(doubleClickSelect(0, roster, allVisible, isDestroyedAt)).toEqual([0, 4]);
+  });
+
+  it("selects nothing for a null, unknown, or off-roster anchor", () => {
+    expect(doubleClickSelect(null, roster, allVisible)).toEqual([]);
+    expect(doubleClickSelect(5, roster, allVisible)).toEqual([]);
+    expect(doubleClickSelect(99, roster, allVisible)).toEqual([]);
+    expect(doubleClickSelect(0, [], [])).toEqual([]);
+  });
+
+  it("treats a short visibility list as off-screen past its end", () => {
+    expect(doubleClickSelect(0, roster, [true])).toEqual([0]);
   });
 });
 
