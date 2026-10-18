@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
-const app = source("../App.tsx"), terrain = source("../renderer/TerrainCanvas.tsx"), folio = source("./UnitFolio.tsx");
+const app = source("../App.tsx"), terrain = source("../renderer/TerrainCanvas.tsx"), folio = source("./UnitFolio.tsx"), css = source("../index.css");
 
 describe("folio / battlefield integration contracts", () => {
   it("keeps the existing battlefield mounted, inert and suspended independently of user pause", () => {
@@ -50,5 +50,12 @@ describe("folio / battlefield integration contracts", () => {
     for (const action of ['cancelAnimationFrame(raf)', 'observer.disconnect()', 'controls.dispose()', 'disposeStudioObject(scene)', 'renderer.dispose()', 'renderer.forceContextLoss()', 'renderer.domElement.remove()']) expect(folio).toContain(action);
     expect(folio).toContain('UNIT_KINDS.map');
     expect(folio).toContain('aria-pressed={kind === unit}');
+  });
+  it("opens on the Commander with no decorative arrow in the roster", () => {
+    expect(folio).toContain('useState<UnitKind>("commander")');
+    expect(folio).not.toContain("↗");
+    expect(folio).not.toContain("aria-hidden");
+    // The old arrow-only rule would now catch the unit-name span, so it must go too.
+    expect(css).not.toContain(".folio-unit-list button > span:last-child");
   });
 });

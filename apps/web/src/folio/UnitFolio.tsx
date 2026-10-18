@@ -9,7 +9,7 @@ import { disposeStudioObject, frameStudioBody, STUDY_VIEWS, type StudyView } fro
 import { buildStudySubject, disposeStudySubject, type StudySubject } from "./subject";
 
 export default function UnitFolio() {
-  const [kind, setKind] = useState<UnitKind>("stump");
+  const [kind, setKind] = useState<UnitKind>("commander");
   const [view, setView] = useState<StudyView>("rts");
   const [inspection, setInspection] = useState({ ...DEFAULT_INSPECTION });
   const [turntable, setTurntable] = useState(false);
@@ -159,7 +159,7 @@ export default function UnitFolio() {
       <div className="folio-unit-list" aria-label="Unit roster">
         {UNIT_KINDS.map((unit, index) => <button key={unit} aria-pressed={kind === unit} onClick={() => setKind(unit)}>
           <span className="folio-number">0{index + 1}</span><img src={getUnitIconDataUrl(unit)} alt="" />
-          <span><strong>{UNIT_DEFS[unit].name}</strong><small>{UNIT_DEFS[unit].unitName}</small></span><span aria-hidden="true">↗</span>
+          <span><strong>{UNIT_DEFS[unit].name}</strong><small>{UNIT_DEFS[unit].unitName}</small></span>
         </button>)}
       </div>
       <p className="folio-note">Battlefield suspended.<br />Return to resume command.</p>
