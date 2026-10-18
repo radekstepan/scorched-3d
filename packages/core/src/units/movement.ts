@@ -1042,9 +1042,10 @@ function tickStunned(
  * below) so the caller drops the memory and resumes patrol.
  * A carried `sidestep` point (see `firingSidestep`) is walked first at any
  * range — through the same drive, cleared on arrival — and only then does
- * the hull hold at weapons-range stand-off facing the threat; pinned
- * against a slope it holds like an ordered hull instead of skipping its
- * frozen leg away. The step is a fresh ~1 s walk, so the hold/close
+ * the hull hold at weapons-range stand-off facing the threat (HQ assaults
+ * hold at the structure floor, outside the works — see `pursueStandOff`);
+ * pinned against a slope it holds like an ordered hull instead of skipping
+ * its frozen leg away. The step is a fresh ~1 s walk, so the hold/close
  * boundary never drops it mid-stride (dropping there self-cancelled the
  * forest-futility cure: every sidestep died the stride the hull crossed
  * stand-off and the gun kept firing into the wood). With `tactics`, a hull
@@ -1101,7 +1102,7 @@ function pursueStep(
   // dropping it on the close would self-cancel the cure the stride the
   // hull crosses stand-off. Arrival clears it below; outnumbered hulls
   // keep it through the wait and walk it when the odds change.
-  const holding = Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind);
+  const holding = Math.hypot(tx - mover.x, tz - mover.z) <= pursueStandOff(kind, threat.structure === true);
   const memory: ThreatMemory = {
     attacker: threat.attacker,
     x: tx,

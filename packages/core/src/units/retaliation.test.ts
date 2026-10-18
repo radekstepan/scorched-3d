@@ -13,6 +13,7 @@ import {
   HUNT_LEASH_RADIUS,
   HQ_DEFENSE_HITS,
   SHELL_ENGAGE_RADIUS,
+  STRUCTURE_ASSAULT_STANDOFF,
   THREAT_DISENGAGE_RADIUS,
   THREAT_ENGAGE_RADIUS,
   THREAT_LEASH_RADIUS,
@@ -29,6 +30,9 @@ import {
   seekStructure,
   tickThreat,
 } from "./retaliation.js";
+import { PEEWEE_GRENADE_RANGE, peeweeAttackFor } from "./combat.js";
+import { HQ_HALL_CELLS, HQ_PAD_FRONT_EXTRA } from "./hq.js";
+import { CELL_PIXELS } from "../terrain/types.js";
 import { wrapAngle, yawToTarget } from "./facing.js";
 
 function flatRoute(len = 400): RoutePoint[] {
@@ -216,6 +220,28 @@ describe("tickThreat / clearThreat / hasThreat", () => {
     // Artillery holds farther out than scouts close in.
     expect(pursueStandOff("hammer")).toBeGreaterThan(pursueStandOff("flash"));
   });
+
+  it("floors HQ-assault stand-off outside the works at grenade range", () => {
+    // The assault floor sits past the leveled pad corridor (hall cells plus
+    // the mouth apron) so the hold is outside the building, not in the hall.
+    expect(STRUCTURE_ASSAULT_STANDOFF).toBeGreaterThan(
+      (HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA) * CELL_PIXELS,
+    );
+    // ... and exactly at grenade range, so an assaulting peewee lobs from
+    // the hold instead of closing to knife-fight.
+    expect(STRUCTURE_ASSAULT_STANDOFF).toBe(PEEWEE_GRENADE_RANGE);
+    expect(peeweeAttackFor(STRUCTURE_ASSAULT_STANDOFF)).toBe("grenade");
+    // Only the peewee's assault moves: its 180 knife-fight hold sat in the
+    // hall mouth. Every other kind already holds at or past the floor.
+    expect(pursueStandOff("peewee", true)).toBe(STRUCTURE_ASSAULT_STANDOFF);
+    expect(pursueStandOff("peewee", true)).toBeGreaterThan(pursueStandOff("peewee"));
+    for (const kind of ["flash", "stump", "commander", "hammer"] as const) {
+      expect(pursueStandOff(kind, true)).toBe(pursueStandOff(kind));
+    }
+    // Hull duels are untouched: the default is still the kind table.
+    expect(pursueStandOff("peewee")).toBe(180);
+    expect(pursueStandOff("peewee", false)).toBe(pursueStandOff("peewee"));
+  });
 });
 
 describe("pursuit driving", () => {
@@ -251,6 +277,40 @@ describe("pursuit driving", () => {
     expect(next.x).toBe(close.x);
     expect(next.z).toBe(close.z);
     expect(hasThreat(next)).toBe(true);
+  });
+
+  it("holds an assaulting peewee outside the HQ instead of closing to knife-fight", () => {
+    const route = flatRoute();
+    // 200 out: inside the assault floor (220) but past knife-fight (180) —
+    // the assault holds, the same memory without the structure flag closes.
+    const assaulting: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: -1, x: 200, z: 0, ttl: THREAT_MEMORY_DURATION, structure: true },
+    };
+    const held = advanceMover("peewee", assaulting, route, 1);
+    expect(held.x).toBe(assaulting.x);
+    expect(held.z).toBe(assaulting.z);
+    expect(hasThreat(held)).toBe(true);
+    const probing: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: -1, x: 200, z: 0, ttl: THREAT_MEMORY_DURATION },
+    };
+    const closed = advanceMover("peewee", probing, route, 1);
+    expect(Math.hypot(closed.x - 200, closed.z - 0)).toBeLessThan(200);
+  });
+
+  it("still marches a distant assault toward the fort", () => {
+    const route = flatRoute();
+    const assaulting: Mover = {
+      ...initMover(route, 0),
+      hull: 0,
+      threat: { attacker: -1, x: 400, z: 0, ttl: THREAT_MEMORY_DURATION, structure: true },
+    };
+    const next = advanceMover("peewee", assaulting, route, 1);
+    expect(hasThreat(next)).toBe(true);
+    expect(Math.hypot(next.x - 400, next.z - 0)).toBeLessThan(400);
   });
 
   it("gives up past the disengage bound and resumes the patrol leg", () => {

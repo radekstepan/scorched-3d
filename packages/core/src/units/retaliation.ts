@@ -224,6 +224,22 @@ export const PURSUE_STANDOFF: Record<UnitKind, number> = {
   peewee: 180,
 };
 
+/**
+ * Assault stand-off floor vs HQ structures, world units: an HQ assault
+ * (`ThreatMemory.structure`) holds at `max(kind stand-off, this)` instead of
+ * the bare kind table. The works reach ~178 out toward the map center (hall
+ * mouth, web `HQ_EXIT_OFFSET`) with the leveled pad corridor running to 208
+ * (core `(HQ_HALL_CELLS + HQ_PAD_FRONT_EXTRA) * CELL_PIXELS`), so the
+ * peewee's 180 knife-fight hold parked it in the doorway — two units of
+ * clearance, and any crowd shove walked it down the hall into the bunker.
+ * The floor keeps the closest brawler ~40 clear of the mouth with margin for
+ * the melee churn, and it equals `PEEWEE_GRENADE_RANGE` on purpose: an
+ * assaulting peewee lobs grenades from the hold instead of closing to
+ * knife-fight. Every other kind already holds at or past it (flash exactly),
+ * so only the peewee's assault moves.
+ */
+export const STRUCTURE_ASSAULT_STANDOFF = 220;
+
 /** True while the mover carries a live (unexpired) threat memory. */
 export function hasThreat(mover: { threat?: ThreatMemory }): boolean {
   return (mover.threat?.ttl ?? 0) > 0;
@@ -232,9 +248,14 @@ export function hasThreat(mover: { threat?: ThreatMemory }): boolean {
 /**
  * Weapons-range stand-off for `kind` (see `PURSUE_STANDOFF`). Falls back to
  * the floor for unknown kinds so headless callers never divide into a NaN.
+ * Structure assaults (`structure`, see `seekStructure`) hold at the assault
+ * floor instead when the kind table would park them inside the works — the
+ * peewee's knife-fight 180 sits in the HQ hall mouth, so assaults hold at
+ * grenade range and lob from outside.
  */
-export function pursueStandOff(kind: UnitKind): number {
-  return PURSUE_STANDOFF[kind] ?? THREAT_MIN_STANDOFF;
+export function pursueStandOff(kind: UnitKind, structure = false): number {
+  const standoff = PURSUE_STANDOFF[kind] ?? THREAT_MIN_STANDOFF;
+  return structure ? Math.max(standoff, STRUCTURE_ASSAULT_STANDOFF) : standoff;
 }
 
 export interface ThreatAnchor {

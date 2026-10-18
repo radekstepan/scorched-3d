@@ -32,7 +32,7 @@ import { HQ_HIT_DAMAGE, HQ_SPAWN_ROSTER, hqHitDamage, PEEWEE_GRENADE_HQ_DAMAGE, 
 import { LEG_STRIDE, WHEEL_RADIUS } from "./locomotion.js";
 import { MOVE_SPEED } from "./movement.js";
 import { placeUnits } from "./place.js";
-import { PURSUE_STANDOFF } from "./retaliation.js";
+import { PURSUE_STANDOFF, pursueStandOff, STRUCTURE_ASSAULT_STANDOFF } from "./retaliation.js";
 import { generateMap } from "../terrain/generate.js";
 import { HULL_FOOTPRINT } from "./terrain.js";
 import { UNIT_DEFS, UNIT_KINDS } from "./types.js";
@@ -214,6 +214,14 @@ describe("peewee infantry kind", () => {
     expect(isPeeweeGrenadeRange(549)).toBe(false);
     // Too close to depress onto: the muzzle gate still holds fire.
     expect(isPeeweeGrenadeRange(10)).toBe(false);
+  });
+
+  it("assaults HQs from grenade range instead of walking into the works", () => {
+    // The 180 knife-fight hold sat in the hall mouth (178 out); assaults
+    // hold at the structure floor outside the building and lob from there.
+    expect(pursueStandOff("peewee", true)).toBe(STRUCTURE_ASSAULT_STANDOFF);
+    expect(STRUCTURE_ASSAULT_STANDOFF).toBe(PEEWEE_GRENADE_RANGE);
+    expect(peeweeAttackFor(pursueStandOff("peewee", true))).toBe("grenade");
   });
 
   it.each([40, 100, 180, PEEWEE_GRENADE_RANGE])("throws a shallow ballistic grenade over %s units", (distance) => {
