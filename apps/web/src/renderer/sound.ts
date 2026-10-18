@@ -1,20 +1,30 @@
 import type { AttackMode, UnitKind } from "@scorched-3d/core";
+import {
+  ACK_ALIAS,
+  SAMPLE_URLS,
+  SELECT_ALIAS,
+  deathLayers,
+  explosionLayers,
+  shotLayers,
+  spawnLayers,
+  type SampleAlias,
+} from "./samples";
 
 /**
- * Battle sound: WebAudio-synthesized combat effects, no binary assets.
+ * Battle sound: Kenney-sampled combat effects over a WebAudio mixer.
  *
  * Every shot, blast, death, HQ release, selection, and player order plays
- * a small synthesized cue (pitched oscillators + filtered noise through a
- * shared master compressor), attenuated by camera distance so zooming in
- * makes the battle louder, panned by the camera-relative bearing of the
- * event, humanized with a per-cue pitch draw, and (for blasts) muffled with
- * distance so far booms rumble while near ones crack.
+ * a cue from the vendored Kenney samples (`./samples.ts`, CC0 — licenses
+ * in `./sfx/`), attenuated by camera distance so zooming in makes the
+ * battle louder, panned by the camera-relative bearing of the event,
+ * humanized with a per-cue pitch draw (sample playback rate), and (for
+ * blasts) muffled with distance so far booms rumble while near ones crack.
  *
- * Nanolathe inspiration (`internal/audio/doc.go`, `positional.go`): sound is
- * presentation-only — it reads committed combat events and never touches the
- * simulation — with positional attenuation and viewport-relative pan. The
- * synth itself is local (nanolathe ships PCM samples; this demo synthesizes
- * so the bundle stays sample-free).
+ * Nanolathe inspiration (`internal/audio/doc.go`, `positional.go`,
+ * `registry.go`, `sample.go`): sound is presentation-only — it reads
+ * committed combat events and never touches the simulation — with positional
+ * attenuation and viewport-relative pan, stable sample aliases decoupled
+ * from file paths, and decoded PCM cached for the session.
  *
  * Headless-safe: the `AudioContext` is created lazily on `unlock()` (called
  * from real input gestures) behind a `window.AudioContext` guard, so node
@@ -237,7 +247,10 @@ export class SoundFx {
   readonly played: SoundPlayed[] = [];
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
-  private noiseBuf: AudioBuffer | null = null;
+  /** Session decode cache: alias → PCM, filled once on `unlock()`. */
+  private samples = new Map<SampleAlias, AudioBuffer>();
+  /** In-flight sample load (one per device; never re-fetched). */
+  private loading: Promise<void> | null = null;
   private disposed = false;
 
   constructor(now: () => number = () => Date.now(), random: () => number = Math.random) {
@@ -301,6 +314,7 @@ export class SoundFx {
       comp.connect(ctx.destination);
       this.ctx = ctx;
       this.master = master;
+      this.loadSamples();
     } catch {
       this.ctx = null;
       this.master = null;
@@ -319,16 +333,9 @@ export class SoundFx {
     const pitch = this.admit("shot", peak, distance, pan, dur);
     if (!pitch) return;
     if (!this.ctx) return;
-    if (attack === "grenade") {
-      this.blip(280, 130, 0.14, "sine", peak, pan, 0, pitch);
-    } else if (kind === "hammer") {
-      this.blip(120, 38, 0.28, "sine", peak, pan, 0, pitch);
-      this.noise(0.22, "lowpass", 1400, 180, peak * 0.8, pan, 0, pitch);
-    } else if (kind === "peewee") {
-      this.blip(1400, 500, 0.06, "square", peak, pan, 0, pitch);
-    } else {
-      this.blip(700, 160, 0.09, "square", peak, pan, 0, pitch);
-      this.noise(0.04, "highpass", 2500, 2500, peak * 0.5, pan, 0, pitch);
+    const level = peak * soundGainForDistance(distance);
+    for (const layer of shotLayers(kind, attack)) {
+      this.voiceSample(layer.alias, level * layer.trim, pan, layer.delay, pitch, 0);
     }
   }
 
@@ -345,26 +352,23 @@ export class SoundFx {
     const pitch = this.admit("explosion", peak, distance, pan, dur, dull);
     if (!pitch) return;
     if (!this.ctx) return;
-    // Distance muffles the crackle but never the sub: the lowpass top melts
-    // toward the floor while both sine drops keep their weight, so far booms
-    // rumble and near ones crack.
-    const bright = 1 - dull * 0.85;
-    this.noise(epic ? 1.1 : 0.55, "lowpass", 2600 * bright, 90, peak, pan, 0, pitch);
-    this.blip(95, 30, epic ? 0.9 : 0.5, "sine", peak * 0.9, pan, 0, pitch);
-    if (epic) this.blip(70, 26, 0.9, "sine", peak * 0.7, pan, 0.12, pitch);
+    const level = peak * soundGainForDistance(distance);
+    for (const layer of explosionLayers(kind, attack, epic)) {
+      this.voiceSample(layer.alias, level * layer.trim, pan, layer.delay, pitch, dull);
+    }
   }
 
-  /** Unit-death cue: the epic blast plus a tearing-metal fall. */
+  /** Unit-death cue: the kill blast plus tearing metal. */
   playDeath(distance: number, pan: number): void {
     const peak = FAMILY_PEAK.death;
     const dull = soundDullForDistance(distance);
     const pitch = this.admit("death", peak, distance, pan, 1.3, dull);
     if (!pitch) return;
     if (!this.ctx) return;
-    const bright = 1 - dull * 0.85;
-    this.noise(1.1, "lowpass", 2400 * bright, 80, peak * 0.9, pan, 0, pitch);
-    this.blip(90, 28, 1.0, "sine", peak * 0.9, pan, 0, pitch);
-    this.blip(320, 55, 0.45, "sawtooth", peak * 0.35, pan, 0, pitch);
+    const level = peak * soundGainForDistance(distance);
+    for (const layer of deathLayers()) {
+      this.voiceSample(layer.alias, level * layer.trim, pan, layer.delay, pitch, dull);
+    }
   }
 
   /** HQ release clank: a soft double-thunk at the factory door. */
@@ -373,8 +377,10 @@ export class SoundFx {
     const pitch = this.admit("spawn", peak, distance, pan, 0.25);
     if (!pitch) return;
     if (!this.ctx) return;
-    this.blip(170, 85, 0.12, "square", peak, pan, 0, pitch);
-    this.blip(120, 70, 0.1, "square", peak * 0.8, pan, 0.09, pitch);
+    const level = peak * soundGainForDistance(distance);
+    for (const layer of spawnLayers()) {
+      this.voiceSample(layer.alias, level * layer.trim, pan, layer.delay, pitch, 0);
+    }
   }
 
   /** UI acknowledge for player move/attack orders (no distance — it's HUD). */
@@ -382,7 +388,7 @@ export class SoundFx {
     const pitch = this.admit("ack", FAMILY_PEAK.ack, 0, 0, 0.07);
     if (!pitch) return;
     if (!this.ctx) return;
-    this.blip(980, 990, 0.055, "triangle", FAMILY_PEAK.ack, 0, 0, pitch);
+    this.voiceSample(ACK_ALIAS, FAMILY_PEAK.ack, 0, 0, pitch, 0);
   }
 
   /** Selection tick for freshly selected hulls (HUD: no distance, centered). */
@@ -390,12 +396,14 @@ export class SoundFx {
     const pitch = this.admit("select", FAMILY_PEAK.select, 0, 0, 0.05);
     if (!pitch) return;
     if (!this.ctx) return;
-    this.blip(1400, 1180, 0.04, "triangle", FAMILY_PEAK.select, 0, 0, pitch);
+    this.voiceSample(SELECT_ALIAS, FAMILY_PEAK.select, 0, 0, pitch, 0);
   }
 
   dispose(): void {
     this.disposed = true;
     this.voices = [];
+    this.samples.clear();
+    this.loading = null;
     if (this.ctx) {
       try {
         void this.ctx.close().catch(() => undefined);
@@ -404,7 +412,6 @@ export class SoundFx {
       }
       this.ctx = null;
       this.master = null;
-      this.noiseBuf = null;
     }
   }
 
@@ -456,83 +463,75 @@ export class SoundFx {
     }
   }
 
-  /** Pitched envelope: `freqA → freqB` exponential over `dur` seconds. */
-  private blip(
-    freqA: number,
-    freqB: number,
-    dur: number,
-    wave: OscillatorType,
-    peak: number,
-    pan: number,
-    delay = 0,
-    rate = 1,
-  ): void {
+  /**
+   * Fetch + decode every registered sample once per device, in the
+   * background: cues voiced before their sample lands stay silent (but
+   * still admitted and logged), and a sample that fails to load simply
+   * never voices. Never called headless (no `AudioContext` → no device).
+   */
+  private loadSamples(): void {
     const ctx = this.ctx;
-    const master = this.master;
-    if (!ctx || !master) return;
-    try {
-      const t = ctx.currentTime + delay;
-      const osc = ctx.createOscillator();
-      osc.type = wave;
-      osc.frequency.setValueAtTime(Math.max(20, freqA * rate), t);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(20, freqB * rate), t + dur);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.008);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(g);
-      this.attachPan(g, pan);
-      osc.start(t);
-      osc.stop(t + dur + 0.02);
-      osc.onended = () => {
-        try {
-          osc.disconnect();
-          g.disconnect();
-        } catch {
-          /* already gone */
-        }
-      };
-    } catch {
-      /* a failed voice never breaks the frame */
-    }
+    if (!ctx || this.loading) return;
+    const aliases = Object.keys(SAMPLE_URLS) as SampleAlias[];
+    this.loading = (async () => {
+      await Promise.all(
+        aliases.map(async (alias) => {
+          try {
+            const res = await fetch(SAMPLE_URLS[alias]);
+            if (!res.ok) return;
+            const raw = await res.arrayBuffer();
+            const decoded = await ctx.decodeAudioData(raw);
+            if (!this.disposed && this.ctx === ctx) this.samples.set(alias, decoded);
+          } catch {
+            /* a missing sample stays silent — visuals carry on */
+          }
+        }),
+      );
+    })();
   }
 
-  /** Filtered-noise burst: `fA → fB` sweep over `dur` seconds. */
-  private noise(
-    dur: number,
-    filter: BiquadFilterType,
-    fA: number,
-    fB: number,
-    peak: number,
+  /**
+   * Voice one sample layer: the admitted `level` (peak × trim × distance;
+   * master volume rides on the shared gain) through pan, with the cue's
+   * pitch draw on the playback rate and distance dull on a lowpass so far
+   * booms rumble while near ones crack. Undecoded aliases stay silent.
+   */
+  private voiceSample(
+    alias: SampleAlias,
+    level: number,
     pan: number,
-    delay = 0,
-    rate = 1,
+    delay: number,
+    rate: number,
+    dull: number,
   ): void {
     const ctx = this.ctx;
     const master = this.master;
-    if (!ctx || !master) return;
+    const buf = this.samples.get(alias);
+    if (!ctx || !master || !buf) return;
     try {
-      const src = ctx.createBufferSource();
-      src.buffer = this.noiseBuffer(ctx);
-      src.loop = true;
-      const flt = ctx.createBiquadFilter();
-      flt.type = filter;
       const t = ctx.currentTime + delay;
-      flt.frequency.setValueAtTime(Math.max(30, fA * rate), t);
-      flt.frequency.exponentialRampToValueAtTime(Math.max(30, fB * rate), t + dur);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = rate;
+      let head: AudioNode = src;
+      if (dull > 0) {
+        // Brightness melts toward the floor with distance: transparent up
+        // close (~20 kHz), telephone-muffled at full dull (~3 kHz).
+        const flt = ctx.createBiquadFilter();
+        flt.type = "lowpass";
+        flt.frequency.value = Math.max(400, 20000 * (1 - dull * 0.85));
+        src.connect(flt);
+        head = flt;
+      }
       const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      src.connect(flt);
-      flt.connect(g);
+      g.gain.value = level;
+      head.connect(g);
       this.attachPan(g, pan);
       src.start(t);
-      src.stop(t + dur + 0.02);
       src.onended = () => {
         try {
           src.disconnect();
-          flt.disconnect();
+          if (head !== src) head.disconnect();
           g.disconnect();
         } catch {
           /* already gone */
@@ -555,25 +554,5 @@ export class SoundFx {
     } else {
       node.connect(master);
     }
-  }
-
-  private noiseBuffer(ctx: AudioContext): AudioBuffer {
-    if (!this.noiseBuf) {
-      const len = Math.max(1, Math.floor(ctx.sampleRate));
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      // Deterministic pseudo-noise (a mulberry-style hash per sample): the
-      // bake is identical every load, so the burst timbre never depends on
-      // Math.random at runtime.
-      let s = 0x9e3779b9;
-      for (let i = 0; i < len; i++) {
-        s = (s + 0x6d2b79f5) | 0;
-        let z = Math.imul(s ^ (s >>> 15), s | 1);
-        z ^= z + Math.imul(z ^ (z >>> 7), z | 61);
-        data[i] = (((z ^ (z >>> 14)) >>> 0) % 2000) / 1000 - 1;
-      }
-      this.noiseBuf = buf;
-    }
-    return this.noiseBuf;
   }
 }

@@ -18,7 +18,7 @@ Units that destroy enemies earn gold chevrons and fight better. Veterans hit har
 
 Every shot changes the field. Each blast burns the ground and leaves a black mark. Trees catch fire and the fire spreads to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
 
-The battle has sound. Guns crack and shells thump, blasts boom, and zooming in makes it louder. The Sound panel holds mute and volume, M toggles mute, and the mix is remembered between visits.
+The battle has sound. Guns crack and shells thump, blasts boom, and zooming in makes it louder. The Sound panel holds mute and volume, M toggles mute, and the mix is remembered between visits. The sound effects come from Kenney's Interface Sounds and Sci-Fi Sounds packs (CC0, licenses in `apps/web/src/renderer/sfx/`).
 
 ## Start the game
 
