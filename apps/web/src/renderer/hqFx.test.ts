@@ -257,6 +257,64 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
+  it("stands the surviving factory down once the enemy HQ falls", () => {
+    // The first wreck ends the war: the survivor stops reinforcing against
+    // a dead enemy instead of producing forever after victory.
+    const scene = new THREE.Scene();
+    const spawns: { team: 0 | 1 }[] = [];
+    const hq = new HqFx(scene, anchors(), {
+      groundY: () => 40,
+      rng: mulberry32(5),
+      onSpawn: (team) => spawns.push({ team }),
+    });
+    // Both forts release on the first interval.
+    hq.update(HQ_SPAWN_INTERVAL);
+    hq.update(HQ_DOOR_OPEN_T);
+    expect(spawns.map((s) => s.team)).toEqual([0, 1]);
+    // Flatten the east fort; the west clock must never fire again.
+    for (let n = 0; n < 40; n++) hq.splash(1000, 0, "hammer", null);
+    expect(hq.isDestroyedAt(1)).toBe(true);
+    expect(hq.isDestroyedAt(0)).toBe(false);
+    // Drain the survivor's door, then run long past several build times
+    // plus a door cycle (a draw only delivers at full-open): no new draws
+    // (spawned frozen) and no new deliveries.
+    hq.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    hq.update(10 * HQ_SPAWN_INTERVAL);
+    hq.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    expect(spawns.map((s) => s.team)).toEqual([0, 1]);
+    expect(hq.spawnedAt(0)).toBe(1);
+    expect(hq.spawnedAt(1)).toBe(1);
+    hq.dispose();
+  });
+
+  it("walks an in-flight release out after the enemy HQ falls", () => {
+    // Both clocks fire on the same tick; the east wreck cancels its own
+    // door (never delivers) but the west door already sliding walks its
+    // release out instead of freezing mid-door — then both stay quiet.
+    const scene = new THREE.Scene();
+    const spawns: { team: 0 | 1 }[] = [];
+    const hq = new HqFx(scene, anchors(), {
+      groundY: () => 40,
+      rng: mulberry32(5),
+      onSpawn: (team) => spawns.push({ team }),
+    });
+    hq.update(HQ_SPAWN_INTERVAL);
+    expect(spawns).toHaveLength(0);
+    for (let n = 0; n < 40; n++) hq.splash(1000, 0, "hammer", null);
+    expect(hq.isDestroyedAt(1)).toBe(true);
+    hq.update(HQ_DOOR_OPEN_T);
+    expect(spawns.map((s) => s.team)).toEqual([0]);
+    // Drain the door, run long past several build times, drain again: the
+    // survivor's clock stays frozen and nothing else walks out.
+    hq.update(10 * HQ_SPAWN_INTERVAL);
+    hq.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    hq.update(10 * HQ_SPAWN_INTERVAL);
+    hq.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    expect(spawns.map((s) => s.team)).toEqual([0]);
+    expect(hq.spawnedAt(0)).toBe(1);
+    hq.dispose();
+  });
+
   it("re-seats on the live surface", () => {
     const scene = new THREE.Scene();
     let ground = 40;

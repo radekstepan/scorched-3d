@@ -12,7 +12,7 @@ Each unit moves on a patrol route. Each unit looks for the enemy. When a unit se
 
 When a shell lands near a unit, the blast shakes the unit. The unit turns to face the shooter. Then it returns fire. It follows the enemy to stay in range. If the enemy force is too strong, the unit holds position and waits for help.
 
-Each team owns one factory. The factory opens its door. Then it sends a new unit to the battle. Weak units come more often. Strong units take more time to build. Holding more ground speeds up the factory. If enemy fire destroys the factory, it sends no more units.
+Each team owns one factory. The factory opens its door. Then it sends a new unit to the battle. Weak units come more often. Strong units take more time to build. Holding more ground speeds up the factory. If enemy fire destroys the factory, it sends no more units. Destroying the enemy factory ends the war, so the surviving factory stands down too.
 
 Units that destroy enemies earn gold chevrons and fight better. Veterans hit harder and shoot further. Selected veterans show their chevrons in the tray.
 

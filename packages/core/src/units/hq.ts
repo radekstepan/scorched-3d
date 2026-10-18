@@ -13,7 +13,9 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  * (see the retuned `WEAPON_MAX_RANGE` caps in `combat.ts`: nothing reaches
  * across the map, so an HQ only takes aimed fire from attackers that push
  * deep into its half). A destroyed HQ stops spawning; its wreck stays as
- * battlefield history like any husk.
+ * battlefield history like any husk. The first wreck ends the war: the
+ * renderer freezes the surviving HQ's clock too, so neither side reinforces
+ * against a dead enemy.
  *
  * Nanolathe inspiration (adapted — retail runs per-player build queues and
  * nanoframes with economy costs; this is a deterministic rAF demo with no
@@ -26,8 +28,9 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  * pipeline. Deviations are deliberate
  * simplifications: continuous per-kind build times instead of build queues and
  * metal/energy costs, and a weighted-random spawn roster instead of player choice.
- * A live HQ produces indefinitely — only destruction stops the clock — so a
- * late battle never stalls with a lone survivor and silent factories.
+ * A live HQ produces indefinitely while both works stand — only destruction
+ * stops the clock (either wreck ends the war) — so a late battle never
+ * stalls with a lone survivor and silent factories.
  */
 
 /** Seconds from battle start to the first reinforcement (also the unknown-kind fallback). */
@@ -710,7 +713,7 @@ export function spawnIntervalScale(share: number): number {
 
 /** Per-HQ spawn clock: countdown to the next release + releases so far. */
 export interface HqSpawnState {
-  /** Seconds until the next reinforcement (counts only while the HQ lives). */
+  /** Seconds until the next reinforcement (counts only while both HQs live). */
   timer: number;
   /** Reinforcements released so far (running total — a live HQ never caps out). */
   spawned: number;
@@ -725,7 +728,8 @@ export function createHqSpawns(): HqSpawnState[] {
  * Tick one HQ's spawn clock by `dt` seconds. Returns the released kind
  * exactly on the tick a reinforcement is due — the HQ lives and the
  * countdown crossed zero — else null. Production is indefinite while the
- * HQ stands: only destruction stops the clock. The kind is a
+ * HQ stands: only destruction stops the clock (callers pass `hqAlive`
+ * false once ANY HQ falls, so the survivor stands down too). The kind is a
  * weighted random draw (`pickNextSpawnUnit`: weaker units more often) and
  * the clock rearms for that kind's own build time (`spawnIntervalFor`: the
  * stronger the unit, the longer the wait), scaled by the side's territory

@@ -43,7 +43,12 @@ import { nightLightScale } from "./night";
  * start) the moment the door seats fully open (facing the map center, so
  * it walks the hall out of the mouth and into the hunt pipeline), the door
  * holds briefly, then slides shut. A destroyed HQ slams its door, poses
- * its wreck, kills its warning beacon, and never releases again.
+ * its wreck, kills its warning beacon, and never releases again — and the
+ * first wreck ends the war: the surviving works stands down and starts no
+ * new releases either (TA-style, killing the key structure decides the
+ * battle, so factories stop reinforcing against a dead enemy). A door
+ * already sliding when the war ends still walks its release out instead of
+ * freezing mid-door; only new clocks stay frozen.
  */
 
 /** Door slides up over this long, seconds. */
@@ -298,6 +303,12 @@ export class HqFx {
   update(dt: number, shares?: readonly [number, number]): void {
     if (this.disposed || !(dt > 0)) return;
     this.beaconT += dt;
+    // War over: the first wrecked fort silences every clock — the survivor
+    // stands down instead of reinforcing against a dead enemy. Gating the
+    // tick (rather than the release) freezes the countdown via `tickHqSpawn`'s
+    // dead gate, while beacons, flags, and in-flight doors below still
+    // advance, so a sliding door walks its release out instead of freezing.
+    const warOver = this.destroyed.some((d) => d);
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
@@ -318,7 +329,7 @@ export class HqFx {
         // build time, scaled by the side's territory share, all inside
         // `tickHqSpawn`).
         const state = this.spawns[i]!;
-        const kind = tickHqSpawn(state, dt, true, this.rng, this.shares[i] ?? 0.5);
+        const kind = tickHqSpawn(state, dt, !warOver, this.rng, this.shares[i] ?? 0.5);
         if (kind !== null) {
           this.anim[i] = 0;
           this.released[i] = false;
