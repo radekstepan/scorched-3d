@@ -5,6 +5,9 @@ import {
   VETERAN_BADGE_COLOR,
   VETERAN_BADGE_LIFT,
   VETERAN_BADGE_RENDER_ORDER,
+  VETERAN_CHEVRON_BAR,
+  VETERAN_CHEVRON_LENGTH,
+  VETERAN_CHEVRON_STACK,
   VETERAN_FLOURISH_DURATION,
   VETERAN_FLOURISH_RISE,
   VETERAN_FLOURISH_SCALE,
@@ -12,7 +15,12 @@ import {
   VeterancyFx,
   type VeterancySource,
 } from "./veterancyFx";
-import { HEALTH_BAR_HEIGHT, HEALTH_BAR_LIFT, HEALTH_BAR_RENDER_ORDER } from "./healthBars";
+import {
+  HEALTH_BAR_HEIGHT,
+  HEALTH_BAR_LIFT,
+  HEALTH_BAR_RENDER_ORDER,
+  HEALTH_BAR_WIDTH,
+} from "./healthBars";
 import { SELECTION_CORE, hueDistance } from "./selectionFx";
 
 function makeBodies(count: number): THREE.Group[] {
@@ -132,6 +140,78 @@ describe("veteran badges", () => {
     // Gold chevrons must never read as the selection beacon.
     expect(hueDistance(VETERAN_BADGE_COLOR, SELECTION_CORE)).toBeGreaterThan(90);
     expect(VETERAN_BADGE_RENDER_ORDER).toBeGreaterThan(HEALTH_BAR_RENDER_ORDER + 1);
+  });
+});
+
+describe("badge size and centering", () => {
+  it("keeps the chevrons small next to the health bar", () => {
+    // ∧ span incl. stripe thickness: (L + T/2)·√2.
+    const span = (VETERAN_CHEVRON_LENGTH + VETERAN_CHEVRON_BAR / 2) * Math.SQRT2;
+    expect(span).toBeLessThan(HEALTH_BAR_WIDTH / 3);
+    expect(VETERAN_CHEVRON_BAR).toBeLessThan(HEALTH_BAR_HEIGHT * 0.35);
+    // Pips still nest: the stack step overlaps each chevron's height.
+    const chevronHeight = (VETERAN_CHEVRON_LENGTH / 2 + VETERAN_CHEVRON_BAR) * Math.SQRT2;
+    expect(VETERAN_CHEVRON_STACK).toBeLessThan(chevronHeight);
+    expect(VETERAN_CHEVRON_STACK).toBeGreaterThan(chevronHeight / 3);
+  });
+
+  it("centers every rank's stack on the bar anchor", () => {
+    const scene = new THREE.Scene();
+    const fx = new VeterancyFx(scene, 1);
+    try {
+      const bodies = makeBodies(1);
+      const camera = makeCamera();
+      for (const rank of [1, 2, 3]) {
+        fx.update(makeSource([rank]), bodies, camera, 1 / 60);
+        const holder = scene.getObjectByName("veteran-badge")!;
+        expect(holder.position.x).toBe(bodies[0]!.position.x);
+        expect(holder.position.z).toBe(bodies[0]!.position.z);
+        // Visible pips balance about the anchor (rank 1 sits on it).
+        const shown = holder.children.filter((c) => c.visible);
+        expect(shown.length).toBe(rank);
+        expect(shown[0]!.position.x).toBe(0);
+        const mean = shown.reduce((sum, c) => sum + c.position.y, 0) / shown.length;
+        expect(mean).toBeCloseTo(0, 12);
+        // Each ∧ centers on its own origin with a meeting apex.
+        for (const chevron of shown) {
+          const left = chevron.children[0]!;
+          const right = chevron.children[1]!;
+          expect(left.position.y).toBe(0);
+          expect(right.position.y).toBe(0);
+          expect(left.position.x).toBeCloseTo(-right.position.x, 12);
+          expect(Math.abs(left.position.x)).toBeCloseTo(
+            (VETERAN_CHEVRON_LENGTH * Math.SQRT1_2) / 2,
+            12,
+          );
+        }
+      }
+      // Even the ace stack clears the bar top.
+      const halfStack =
+        VETERAN_CHEVRON_STACK +
+        (VETERAN_CHEVRON_LENGTH / 2 + VETERAN_CHEVRON_BAR) * Math.SQRT1_2;
+      expect(VETERAN_BADGE_LIFT - halfStack).toBeGreaterThan(
+        HEALTH_BAR_LIFT + HEALTH_BAR_HEIGHT / 2,
+      );
+    } finally {
+      fx.dispose();
+    }
+  });
+
+  it("centers the flourish pips on the promotion anchor", () => {
+    const scene = new THREE.Scene();
+    const fx = new VeterancyFx(scene, 1);
+    try {
+      const bodies = makeBodies(1);
+      fx.promote(0, 3, bodies[0]);
+      const group = scene.getObjectByName("veteran-flourish") as THREE.Group;
+      const ys = group.children.map((c) => c.position.y);
+      expect(ys).toHaveLength(3);
+      expect(ys[0]).toBeCloseTo(-VETERAN_CHEVRON_STACK, 12);
+      expect(ys[1]).toBeCloseTo(0, 12);
+      expect(ys[2]).toBeCloseTo(VETERAN_CHEVRON_STACK, 12);
+    } finally {
+      fx.dispose();
+    }
   });
 });
 

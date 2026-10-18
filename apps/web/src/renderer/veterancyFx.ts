@@ -5,10 +5,12 @@ import { HEALTH_BAR_LIFT, HEALTH_BAR_RENDER_ORDER } from "./healthBars";
 /**
  * Veterancy chevrons: the view half of unit veterancy (see core
  * `veterancy.ts` for the ranks + multipliers and `CombatFx` for the kill
- * counts). Every ranked hull wears a persistent gold chevron badge floating
- * just above its overhead health bar — one ∧ per pip, up to the ace three —
- * and a promotion plays a brief flourish: the new rank's chevrons at a
- * slightly larger scale, spinning in place over the hull before fading.
+ * counts). Every ranked hull wears a small persistent gold chevron badge
+ * centered just above its overhead health bar — one ∧ per pip, up to the
+ * ace three, the visible pips balanced about the anchor so every rank
+ * reads as one emblem — and a promotion plays a brief flourish: the new
+ * rank's chevrons at a slightly larger scale, spinning in place over the
+ * hull before fading.
  *
  * Badges are per-tick views of combat state — they own one `THREE.Group`
  * in the scene, billboard toward the camera, and hide for rookies, wrecks,
@@ -25,12 +27,12 @@ export const VETERAN_BADGE_COLOR = 0xfbbf24;
 export const VETERAN_BADGE_LIFT = HEALTH_BAR_LIFT + 8;
 /** Badge compositing: above the health fill and the occlusion ghost. */
 export const VETERAN_BADGE_RENDER_ORDER = HEALTH_BAR_RENDER_ORDER + 3;
-/** Chevron stripe width (the ∧ spans ~10u, under half the bar width). */
-export const VETERAN_CHEVRON_LENGTH = 7.4;
-/** Chevron stripe thickness. */
-export const VETERAN_CHEVRON_BAR = 1.7;
-/** Vertical stack step between rank pips. */
-export const VETERAN_CHEVRON_STACK = 3.4;
+/** Chevron stripe length (the ∧ spans ~7u, under a third of the bar width). */
+export const VETERAN_CHEVRON_LENGTH = 4.6;
+/** Chevron stripe thickness (a touch over a quarter of the bar height). */
+export const VETERAN_CHEVRON_BAR = 1.0;
+/** Vertical stack step between rank pips (pips nest like service chevrons). */
+export const VETERAN_CHEVRON_STACK = 2.0;
 /** Flourish life, seconds. */
 export const VETERAN_FLOURISH_DURATION = 1.5;
 /** Flourish chevrons run slightly larger than the badge. */
@@ -147,7 +149,12 @@ export class VeterancyFx {
         holder.visible = true;
         holder.position.set(body.position.x, body.position.y + VETERAN_BADGE_LIFT, body.position.z);
         holder.quaternion.copy(camera.quaternion);
-        for (let r = 0; r < badge.length; r++) badge[r]!.visible = r < rank;
+        // Center the visible pips on the anchor so every rank reads as one
+        // emblem above the bar instead of climbing with seniority.
+        for (let r = 0; r < badge.length; r++) {
+          badge[r]!.visible = r < rank;
+          badge[r]!.position.y = (r - (rank - 1) / 2) * VETERAN_CHEVRON_STACK;
+        }
       }
     }
     this.tickFlourishes(dt);
@@ -177,7 +184,7 @@ export class VeterancyFx {
     group.scale.setScalar(VETERAN_FLOURISH_SCALE);
     for (let r = 0; r < pips; r++) {
       const chevron = this.makeChevron(mat);
-      chevron.position.y = r * VETERAN_CHEVRON_STACK;
+      chevron.position.y = (r - (pips - 1) / 2) * VETERAN_CHEVRON_STACK;
       group.add(chevron);
     }
     this.group.add(group);
@@ -228,13 +235,16 @@ export class VeterancyFx {
   private makeChevron(mat: THREE.Material): THREE.Group {
     const chevron = new THREE.Group();
     chevron.name = "veteran-chevron";
+    // Stripe centers sit one half-length projection off the origin so the
+    // bars meet exactly at the apex and the ∧ centers on (0, 0).
+    const s = (VETERAN_CHEVRON_LENGTH * Math.SQRT1_2) / 2;
     const left = new THREE.Mesh(this.stripeGeo, mat);
     left.rotation.z = Math.PI / 4;
-    left.position.set(-2.5, 2.5, 0);
+    left.position.set(-s, 0, 0);
     left.renderOrder = VETERAN_BADGE_RENDER_ORDER;
     const right = new THREE.Mesh(this.stripeGeo, mat);
     right.rotation.z = -Math.PI / 4;
-    right.position.set(2.5, 2.5, 0);
+    right.position.set(s, 0, 0);
     right.renderOrder = VETERAN_BADGE_RENDER_ORDER;
     chevron.add(left, right);
     return chevron;
@@ -248,7 +258,7 @@ export class VeterancyFx {
     const chevrons: THREE.Group[] = [];
     for (let r = 0; r < MAX_VETERAN_RANK; r++) {
       const chevron = this.makeChevron(this.badgeMat);
-      chevron.position.y = r * VETERAN_CHEVRON_STACK;
+      chevron.position.y = (r - (MAX_VETERAN_RANK - 1) / 2) * VETERAN_CHEVRON_STACK;
       chevron.visible = false;
       holder.add(chevron);
       chevrons.push(chevron);
