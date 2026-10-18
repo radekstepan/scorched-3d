@@ -16,4 +16,12 @@ Use sibling `nanolathe` repo for inspiration.
 
 ## List
 
-...
+Right click unit attacks them if 1+ units are selected.
+
+Toggle camera "follow battle" mode. Auto-track the centroid of recent combat. Right now the player must hunt for the action manually.
+
+Sound. Add great sound effects. Zooming in makes the sound louder.
+
+Economy-lite. Factories currently spawn on timers. Tie reinforcements to map control (territory system already exists!): hold more ground → faster spawns. Suddenly positioning matters strategically.
+
+Unit veterancy. Units that survive kills get +damage/range badges. Zero new systems needed (kill attribution + a multiplier), huge emotional attachment payoff. When a unit gets promoted do a rotating slightly larger military chevrons. Unit "gains" it and shows somewhere close to the health and when you select the unit too.
