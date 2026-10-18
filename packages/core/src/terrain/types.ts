@@ -125,6 +125,8 @@ export interface ViewOptions {
   showHealth: boolean;
   /** Territory overlay: each team's recent ground on the map + minimap. */
   showTerritory: boolean;
+  /** Follow-battle camera: glide the orbit rig toward recent combat. */
+  followBattle: boolean;
   /** Keyboard + right-drag pan multiplier (1 = default). */
   panSpeed: number;
   /** Scroll-wheel zoom multiplier (1 = default). */

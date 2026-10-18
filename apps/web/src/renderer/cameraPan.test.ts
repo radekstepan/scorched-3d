@@ -629,17 +629,18 @@ describe("world-bounds wiring in TerrainCanvas", () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const canvasSource = readFileSync(join(here, "TerrainCanvas.tsx"), "utf8");
 
-  it("holds the camera inside the world rectangle on both clamp sites", () => {
+  it("holds the camera inside the world rectangle on every clamp site", () => {
     // Clamping only the orbit target still lets orbiting/zooming swing the
     // camera off the map, so the tick must clamp the camera position too —
-    // once after keyboard pan, once after controls.update() (right-drag pan,
+    // once after keyboard pan, once after the follow-battle glide (the same
+    // rigid-translation path), once after controls.update() (right-drag pan,
     // orbit, cursor-anchored zoom, and minimap jumps all flow through it).
     // Rigid pans carry the target with the clamped camera delta (the
     // pan-back wall); only the orbit/zoom branch reels the camera in alone.
     const carrying =
       canvasSource.match(/clampCameraToWorldWithTarget\(camera\.position/g) ?? [];
     const plain = canvasSource.match(/clampCameraToWorld\(camera\.position/g) ?? [];
-    expect(carrying).toHaveLength(2);
+    expect(carrying).toHaveLength(3);
     expect(plain).toHaveLength(1);
   });
 

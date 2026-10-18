@@ -69,18 +69,20 @@ describe("minimap jump exemption from the camera clamp (task 120)", () => {
     expect(canvasSource).toContain("jumpPlacedCamera = true");
   });
 
-  it("holds the camera clamp at both sites while a jump-placed camera is out", () => {
-    // Both camera-clamp sites (keyboard pan + post-controls.update) must be
-    // conditional on the exemption: an unconditional clamp yanks the fresh
-    // teleport (zoom collapse + angle swing + out-of-frame jump tick on
-    // far-view → HQ clicks). The keyboard site carries the target (the
-    // pan-back wall); the post-update site branches rigid-pan vs
-    // orbit/zoom inside a single exemption block.
+  it("holds the camera clamp at every site while a jump-placed camera is out", () => {
+    // Every camera-clamp site (keyboard pan + follow-battle glide +
+    // post-controls.update) must be conditional on the exemption: an
+    // unconditional clamp yanks the fresh teleport (zoom collapse + angle
+    // swing + out-of-frame jump tick on far-view → HQ clicks). The
+    // keyboard and follow sites carry the target (the pan-back wall); the
+    // post-update site branches rigid-pan vs orbit/zoom inside a single
+    // exemption block.
     const conditionals = canvasSource.match(/if \(!jumpPlacedCamera\)/g) ?? [];
-    expect(conditionals).toHaveLength(2);
-    expect(canvasSource).toMatch(
-      /if \(!jumpPlacedCamera\)\s+clampCameraToWorldWithTarget\(camera\.position/,
-    );
+    expect(conditionals).toHaveLength(3);
+    const carrying =
+      canvasSource.match(/if \(!jumpPlacedCamera\)\s+clampCameraToWorldWithTarget\(camera\.position/g) ??
+      [];
+    expect(carrying).toHaveLength(2);
     expect(canvasSource).toMatch(
       /if \(!jumpPlacedCamera\) \{\s+if \(rigidPan\) clampCameraToWorldWithTarget\(camera\.position/,
     );

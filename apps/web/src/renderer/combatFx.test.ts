@@ -2792,6 +2792,34 @@ describe("CombatFx structure fire (HQ forts)", () => {
     expect(splashes).toHaveLength(1);
     fx.dispose();
   });
+
+  it("fires onCombatEvent once per impact with the blast X/Z", () => {
+    const scene = new THREE.Scene();
+    const group = new THREE.Group();
+    group.userData.units = [{ kind: "flash", team: 0, cellX: 1, cellZ: 1, rotation: 0 }];
+    const body = new THREE.Group();
+    body.position.set(0, 100, 0);
+    group.add(body);
+    const fx = new CombatFx(scene, group, mulberry32(5), {
+      groundY: () => 100,
+      blastFeatures: () => {},
+    });
+    const events: { x: number; z: number }[] = [];
+    fx.onCombatEvent = (x, z) => {
+      events.push({ x, z });
+    };
+    fx.detonateStructure(new THREE.Vector3(600, 110, -40), "hammer");
+    fx.detonateStructure(new THREE.Vector3(-200, 105, 90), "flash");
+    expect(events).toEqual([
+      { x: 600, z: -40 },
+      { x: -200, z: 90 },
+    ]);
+    // Null hook (headless default) never throws.
+    fx.onCombatEvent = null;
+    fx.detonateStructure(new THREE.Vector3(0, 100, 0), "stump");
+    expect(events).toHaveLength(2);
+    fx.dispose();
+  });
 });
 
 describe("CombatFx projectile warp tail", () => {

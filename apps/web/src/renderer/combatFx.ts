@@ -893,6 +893,14 @@ export class CombatFx {
    */
   onObstructedShot: ((attacker: number, target: number, x: number, z: number) => void) | null = null;
   /**
+   * Fired once per impact with the blast's world X/Z so the canvas can
+   * feed the follow-battle centroid (see `CombatEventTracker`). Every
+   * explosion reports — hostile volleys, wreck cook-offs, and structure
+   * detonations alike, since all three are action worth watching. Assigned
+   * by the canvas; null in headless tests.
+   */
+  onCombatEvent: ((x: number, z: number) => void) | null = null;
+  /**
    * Consecutive tree-stuck rounds per attacker: every round live wood
    * swallows increments its gunner's count, every round that reaches its
    * impact clears it. On `FOREST_STICK_REPOSITION_HITS` the gun reports an
@@ -2986,6 +2994,7 @@ export class CombatFx {
       scale: blastScale,
     });
     this.kickLight(at, 0xff8a3c, epic ? EPIC_LIGHT_PEAK : 2600 * blastScale);
+    this.onCombatEvent?.(at.x, at.z);
     this.scarGround(at, kind, slope ?? undefined, attack);
     this.damageUnits(at, kind, slope, shooter, hostile, attack);
     // Structures share every blast: an HQ near the impact takes honest

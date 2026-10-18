@@ -65,6 +65,7 @@ export default function App() {
     showWaypoints: false,
     showHealth: true,
     showTerritory: false,
+    followBattle: false,
     panSpeed: 1,
     zoomSpeed: 1,
     nightMode: false,
@@ -377,6 +378,7 @@ export default function App() {
           <Toggle label="Waypoints" on={options.showWaypoints} onClick={() => patch({ showWaypoints: !options.showWaypoints })} />
           <Toggle label="Health" on={options.showHealth} onClick={() => patch({ showHealth: !options.showHealth })} />
           <Toggle label="Territory" on={options.showTerritory} onClick={() => patch({ showTerritory: !options.showTerritory })} />
+          <Toggle label="Follow battle" on={options.followBattle} onClick={() => patch({ followBattle: !options.followBattle })} />
           <Toggle label="Indexed filter" on={options.pixelFilter} onClick={() => patch({ pixelFilter: !options.pixelFilter })} />
         </div>
 

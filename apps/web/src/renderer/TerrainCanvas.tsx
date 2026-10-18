@@ -115,6 +115,7 @@ import { OcclusionFx, disposeOcclusionAssets } from "./occlusionFx";
 import { StandsCache } from "./stands";
 import { computeUnitVisibility } from "./viewCull";
 import { commanderCameraPose, pickStartUnit, resnapHeightDelta } from "./cameraStart";
+import { CombatEventTracker, followBattleStep, followSuppressed } from "./followBattle";
 import { jumpCameraTo } from "./minimap";
 import { createFpsSampler, formatFps } from "./fps";
 import { createHoverGate, hoverInfoKey, pickTerrainPoint } from "./hoverProbe";
@@ -735,6 +736,13 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     combat.onObstructedShot = (attacker, target, x, z) => {
       movement.seekEngage(attacker, target, x, z);
     };
+    // Follow-battle camera (View menu): every impact stamps the recent-
+    // combat ring whose centroid the tick glides toward while the toggle is
+    // on. Presentation-only — the simulation never reads the ring back.
+    const followTracker = new CombatEventTracker();
+    combat.onCombatEvent = (x, z) => {
+      followTracker.record(x, z);
+    };
 
     // Move-order pings: short-lived expanding rings where an order landed.
     // Same round-circle compositing as the unit selection beacon
@@ -983,6 +991,20 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
     // the hover gate on every orbit/zoom update (fires only while the camera
     // actually moves, so a settled camera costs nothing).
     controls.addEventListener("change", markHoverDirty);
+    // Follow-battle hold: orbit/drag/zoom gestures own the camera while
+    // they run (start/end bracket the whole gesture, however long the drag).
+    let followBattleT = 0;
+    let followUserDriving = false;
+    let followLastManual = Number.NEGATIVE_INFINITY;
+    const onFollowStart = (): void => {
+      followUserDriving = true;
+    };
+    const onFollowEnd = (): void => {
+      followUserDriving = false;
+      followLastManual = followBattleT;
+    };
+    controls.addEventListener("start", onFollowStart);
+    controls.addEventListener("end", onFollowEnd);
     window.addEventListener("pointerup", onPointerUp);
     const onContextMenu = (ev: Event): void => {
       ev.preventDefault();
@@ -1064,6 +1086,7 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       const frame = battleClock.sample(wallDelta, suspendedRef.current);
       if (!frame) return;
       const { dt, t } = frame;
+      followBattleT = t;
       const cameraDt = cameraFrameDelta(wallDelta);
       controls.enabled = !boxing;
       const fps = fpsSampler.frame(performance.now());
@@ -1162,6 +1185,31 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
           if (!jumpPlacedCamera)
             clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
           markHoverDirty();
+          // Keyboard pan borrows the camera from follow-battle (if on).
+          followLastManual = t;
+        }
+      }
+
+      // Follow-battle camera (View menu): glide the orbit rig toward the
+      // centroid of recent impacts through the keyboard-pan path — rigid
+      // translation of camera + target, same edge clamps — so yaw/pitch/
+      // zoom survive and the mode-off path is untouched. Manual input
+      // pauses the glide (see FOLLOW_RESUME_DELAY); a quiet field leaves
+      // the camera resting instead of drifting to a stale point.
+      followTracker.tick(dt);
+      if (opt.followBattle && !followSuppressed(t, followLastManual, followUserDriving)) {
+        const centroid = followTracker.centroid();
+        if (centroid) {
+          const step = followBattleStep(
+            controls.target.x, controls.target.z, centroid.x, centroid.z, cameraDt,
+          );
+          if (step.x !== 0 || step.z !== 0) {
+            applyPan(camera.position, controls.target, step);
+            clampPanTargetWithCamera(controls.target, camera.position, worldW, worldD);
+            if (!jumpPlacedCamera)
+              clampCameraToWorldWithTarget(camera.position, controls.target, worldW, worldD);
+            markHoverDirty();
+          }
         }
       }
 
@@ -1181,6 +1229,9 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
         appliedJumpSeq = jump.seq;
         jumpCameraTo(camera.position, controls.target, jump, worldW, worldD, groundY);
         jumpPlacedCamera = true;
+        // A minimap jump is explicit intent: hold follow-battle off the
+        // fresh framing until the resume delay elapses.
+        followLastManual = t;
         markHoverDirty();
       }
 
@@ -1407,6 +1458,8 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       renderer.domElement.removeEventListener("pointerleave", onLeave);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       controls.removeEventListener("change", markHoverDirty);
+      controls.removeEventListener("start", onFollowStart);
+      controls.removeEventListener("end", onFollowEnd);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       controls.dispose();
       renderer.dispose();
