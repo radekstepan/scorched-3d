@@ -10,6 +10,7 @@ import {
   paintInfluence,
   stampInfluence,
   stampRoster,
+  territoryShare,
   TERRITORY_MAX_ALPHA,
   type InfluenceUnit,
 } from "./influence.js";
@@ -238,5 +239,56 @@ describe("factionColorBytes", () => {
   it("matches the team def colors", () => {
     expect(factionColorBytes(0)).toEqual(BLUE);
     expect(factionColorBytes(1)).toEqual(ORANGE);
+  });
+});
+
+describe("territoryShare", () => {
+  it("splits a cold field 50/50 so the opening plays symmetric", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    expect(territoryShare(field, 10)).toEqual([0.5, 0.5]);
+  });
+
+  it("reads a one-sided hold as the whole map", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    stampInfluence(field, 1, 0, 0, 10);
+    expect(territoryShare(field, 10)).toEqual([0, 1]);
+  });
+
+  it("splits symmetric holds evenly and sums to one", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    stampInfluence(field, 0, -1000, 0, 10);
+    stampInfluence(field, 1, 1000, 0, 10);
+    const [a, b] = territoryShare(field, 10);
+    // Grid alignment may cover a cell more or less per side — near even.
+    expect(Math.abs(a - 0.5)).toBeLessThan(0.1);
+    expect(a + b).toBeCloseTo(1, 9);
+  });
+
+  it("weights by freshness, so stale ground counts for less", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    stampInfluence(field, 0, -1000, 0, 10);
+    stampInfluence(field, 1, 1000, 0, 10);
+    // Both fresh: near even. Then blue's ground ages deep into the fade
+    // while orange restamps — orange must own the larger share.
+    expect(Math.abs(territoryShare(field, 10)[0]! - 0.5)).toBeLessThan(0.1);
+    stampInfluence(field, 1, 1000, 0, 10 + INFLUENCE_STALE_SECONDS - 1);
+    const [a, b] = territoryShare(field, 10 + INFLUENCE_STALE_SECONDS - 1);
+    expect(b).toBeGreaterThan(a);
+    expect(a + b).toBeCloseTo(1, 9);
+  });
+
+  it("credits contested cells to both sides without breaking the sum", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    stampInfluence(field, 0, 0, 0, 10);
+    stampInfluence(field, 1, 0, 0, 10);
+    const [a, b] = territoryShare(field, 10);
+    expect(a).toBeCloseTo(0.5, 9);
+    expect(a + b).toBeCloseTo(1, 9);
+  });
+
+  it("ignores fully stale claims, returning to 50/50", () => {
+    const field = createInfluenceField(WORLD_W, WORLD_D);
+    stampInfluence(field, 0, 0, 0, 10);
+    expect(territoryShare(field, 10 + INFLUENCE_STALE_SECONDS + 1)).toEqual([0.5, 0.5]);
   });
 });

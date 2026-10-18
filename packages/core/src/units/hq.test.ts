@@ -23,6 +23,8 @@ import {
   HQ_SPAWN_MAX_INTERVAL,
   HQ_SPAWN_MIN_INTERVAL,
   HQ_SPAWN_ROSTER,
+  HQ_SPAWN_SHARE_FAST,
+  HQ_SPAWN_SHARE_SLOW,
   gradeHqExits,
   hqAnchor,
   hqCellSlope,
@@ -41,6 +43,7 @@ import {
   pickNextSpawnUnit,
   placeHqs,
   spawnIntervalFor,
+  spawnIntervalScale,
   spawnWeightFor,
   tickHqSpawn,
   HQ_HIT_DAMAGE,
@@ -358,6 +361,26 @@ describe("tickHqSpawn", () => {
     expect(HQ_SPAWN_ROSTER).toEqual(["peewee", "flash", "stump", "hammer"]);
     expect(HQ_SPAWN_ROSTER).not.toContain("commander");
   });
+
+  it("builds faster with more ground, slower with less, legacy at even", () => {
+    const [even] = createHqSpawns();
+    const kind = tickHqSpawn(even!, HQ_SPAWN_INTERVAL, true, mulberry32(21));
+    const base = spawnIntervalFor(kind!);
+    expect(even!.timer).toBeCloseTo(base, 9);
+
+    // Same seed, same kind — only the territory share differs.
+    const [ahead] = createHqSpawns();
+    const kindAhead = tickHqSpawn(ahead!, HQ_SPAWN_INTERVAL, true, mulberry32(21), 1);
+    expect(kindAhead).toBe(kind);
+    expect(ahead!.timer).toBeCloseTo(base * HQ_SPAWN_SHARE_FAST, 9);
+
+    const [behind] = createHqSpawns();
+    const kindBehind = tickHqSpawn(behind!, HQ_SPAWN_INTERVAL, true, mulberry32(21), 0);
+    expect(kindBehind).toBe(kind);
+    expect(behind!.timer).toBeCloseTo(base * HQ_SPAWN_SHARE_SLOW, 9);
+    // A shut-out side still rearms a finite clock — never starved.
+    expect(behind!.timer).toBeLessThan(base * 2);
+  });
 });
 
 describe("hqSpawnStrength", () => {
@@ -393,6 +416,24 @@ describe("spawnIntervalFor", () => {
     // Unknown kinds fall back to the legacy cadence.
     expect(spawnIntervalFor("commander")).toBe(HQ_SPAWN_INTERVAL);
     expect(spawnIntervalFor("bogus" as never)).toBe(HQ_SPAWN_INTERVAL);
+  });
+});
+
+describe("spawnIntervalScale", () => {
+  it("is 1.0 at even ground, fast at full hold, slow at none", () => {
+    expect(spawnIntervalScale(0.5)).toBeCloseTo(1, 9);
+    expect(spawnIntervalScale(1)).toBe(HQ_SPAWN_SHARE_FAST);
+    expect(spawnIntervalScale(0)).toBe(HQ_SPAWN_SHARE_SLOW);
+    // Symmetric: as far below 1.0 ahead as above it behind.
+    expect(1 - spawnIntervalScale(1)).toBeCloseTo(spawnIntervalScale(0) - 1, 9);
+    expect(spawnIntervalScale(0.75)).toBeLessThan(1);
+    expect(spawnIntervalScale(0.25)).toBeGreaterThan(1);
+  });
+
+  it("clamps out-of-range and non-finite shares to the nearest bound", () => {
+    expect(spawnIntervalScale(-2)).toBe(HQ_SPAWN_SHARE_SLOW);
+    expect(spawnIntervalScale(99)).toBe(HQ_SPAWN_SHARE_FAST);
+    expect(spawnIntervalScale(Number.NaN)).toBeCloseTo(1, 9);
   });
 });
 

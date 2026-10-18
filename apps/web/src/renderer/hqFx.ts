@@ -4,6 +4,7 @@ import {
   createHqDamage,
   createHqSpawns,
   isHqDestroyed,
+  spawnIntervalScale,
   tickHqSpawn,
   type HqSpawnState,
   type AttackMode,
@@ -100,13 +101,17 @@ export function doorLiftAt(t: number): number {
   return HQ_DOOR_TRAVEL * (1 - k);
 }
 
-/** HUD status of one HQ (minimap marker + Units-box row). */
+/** HUD status of one HQ (minimap marker + Factories-box row). */
 export interface HqStatus {
   x: number;
   z: number;
   team: 0 | 1;
   alive: boolean;
   spawned: number;
+  /** Share of claimed ground this side holds (0..1, 0.5 before the first tick). */
+  share: number;
+  /** Spawn pace = builds per legacy second (1.0 at even ground, >1 when ahead). */
+  pace: number;
 }
 
 export class HqFx {
@@ -123,6 +128,8 @@ export class HqFx {
   private released: boolean[] = [false, false];
   /** Kind drawn for the running release (set when its clock fires). */
   private pendingKind: (UnitKind | null)[] = [];
+  /** Last territory share per HQ (by team), feeding the clock + HUD readout. */
+  private shares: number[] = [];
   /** Night toggle: live beacons burn at the boosted peak while night. */
   private night = false;
   /** Beacon rotor clock, seconds (both forts sweep; odd forts lead by half a turn). */
@@ -136,6 +143,7 @@ export class HqFx {
     this.env = env;
     this.rng = env.rng ?? Math.random;
     this.pendingKind = anchors.map(() => null);
+    this.shares = anchors.map(() => 0.5);
     for (const a of anchors) {
       const facing = hqFacingFor(a.team);
       const group = buildHq(a.team);
@@ -202,7 +210,12 @@ export class HqFx {
     return { x: group.position.x, y: group.position.y, z: group.position.z };
   }
 
-  /** HUD status of every HQ (minimap markers + Units-box rows). */
+  /** Reinforcements-pace readout of an HQ (builds per legacy second, for tests). */
+  paceAt(index: number): number {
+    return 1 / spawnIntervalScale(this.shares[index] ?? 0.5);
+  }
+
+  /** HUD status of every HQ (minimap markers + Factories-box rows). */
   status(): HqStatus[] {
     return this.groups.map((group, i) => ({
       x: group.position.x,
@@ -210,6 +223,8 @@ export class HqFx {
       team: (group.userData.hqTeam as 0 | 1 | undefined) ?? 0,
       alive: !this.destroyed[i],
       spawned: this.spawns[i]?.spawned ?? 0,
+      share: this.shares[i] ?? 0.5,
+      pace: this.paceAt(i),
     }));
   }
 
@@ -275,13 +290,20 @@ export class HqFx {
     this.night = night;
   }
 
-  update(dt: number): void {
+  /**
+   * Tick clocks, beacons, and door slides. `shares` is the per-team
+   * territory share (TEAM_IDS order) feeding the economy-lite clock —
+   * absent reads even ground, so legacy callers replay bit-identical.
+   */
+  update(dt: number, shares?: readonly [number, number]): void {
     if (this.disposed || !(dt > 0)) return;
     this.beaconT += dt;
     for (let i = 0; i < this.groups.length; i++) {
       if (this.destroyed[i]) continue;
       const group = this.groups[i];
       if (!group) continue;
+      const team = (group.userData.hqTeam as 0 | 1 | undefined) ?? 0;
+      this.shares[i] = shares?.[team] ?? 0.5;
       // Steady diffused burn + circling light-tower sweep: one cheap level
       // write per live HQ (2 lights total, no shadows), so both works'
       // halos hold the same glow while their rotors circle — odd forts
@@ -293,9 +315,10 @@ export class HqFx {
       if (this.anim[i]! < 0) {
         // Idle: tick the reinforcement clock (a due release draws a random
         // kind and starts the door — stronger units also rearm a longer
-        // build time, all inside `tickHqSpawn`).
+        // build time, scaled by the side's territory share, all inside
+        // `tickHqSpawn`).
         const state = this.spawns[i]!;
-        const kind = tickHqSpawn(state, dt, true, this.rng);
+        const kind = tickHqSpawn(state, dt, true, this.rng, this.shares[i] ?? 0.5);
         if (kind !== null) {
           this.anim[i] = 0;
           this.released[i] = false;

@@ -12,7 +12,7 @@ Each unit moves on a patrol route. Each unit looks for the enemy. When a unit se
 
 When a shell lands near a unit, the blast shakes the unit. The unit turns to face the shooter. Then it returns fire. It follows the enemy to stay in range. If the enemy force is too strong, the unit holds position and waits for help.
 
-Each team owns one factory. The factory opens its door at fixed times. Then it sends a new unit to the battle. Weak units come more often. Strong units take more time to build. If enemy fire destroys the factory, it sends no more units.
+Each team owns one factory. The factory opens its door. Then it sends a new unit to the battle. Weak units come more often. Strong units take more time to build. Holding more ground speeds up the factory. If enemy fire destroys the factory, it sends no more units.
 
 Every shot changes the field. Each blast burns the ground and leaves a black mark. Trees catch fire and the fire spreads to near trees. Rocks break to rubble. Wrecked units burn, sink into the ground, and disappear.
 

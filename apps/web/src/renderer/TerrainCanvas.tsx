@@ -24,6 +24,7 @@ import {
   sampleHeightBilinear,
   seatHull,
   THREAT_ENGAGE_RADIUS,
+  territoryShare,
   tickDamage,
   worldHeight,
   worldSize,
@@ -1377,8 +1378,10 @@ export default function TerrainCanvas({ map, options, onHover, onSelection, onPo
       // to wait for backup (one tick stale: movement already ran this tick).
       movement.setDamage(combat.damageList());
       // HQ clocks, door slides, and releases run after combat so a kill and
-      // a due release on the same tick resolve the wreck first.
-      hq?.update(dt);
+      // a due release on the same tick resolve the wreck first. The clock
+      // reads the side's territory share (fresh — the stamps above already
+      // ran this tick), so held ground builds faster and lost ground slower.
+      hq?.update(dt, territoryShare(territory.field, t));
       // Graduated burns: advance core timers, re-pose only transitioned
       // trees (spread ignitions kick the shared light pool), then rebuild
       // the transient flame/smoke views from the persistent field.

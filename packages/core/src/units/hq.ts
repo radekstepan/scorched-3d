@@ -685,6 +685,29 @@ export function applyBlastToHqs(
   return touched;
 }
 
+/**
+ * Economy-lite spawn pacing: build times scale with the territory share
+ * the side holds (see `territoryShare` in `influence.ts`) — hold more
+ * ground, reinforce faster. Full map control builds at 0.6× the listed
+ * time, a shut-out side at 1.4× (slower but never shut out: the clock
+ * always rearms, so even a cornered factory keeps trickling hulls out),
+ * and even ground (0.5) replays the legacy pacing exactly at 1.0×.
+ */
+export const HQ_SPAWN_SHARE_FAST = 0.6;
+export const HQ_SPAWN_SHARE_SLOW = 1.4;
+
+/**
+ * Interval multiplier for one `share` of the map in [0, 1]: linear from
+ * `HQ_SPAWN_SHARE_SLOW` (no ground) through 1.0 at even ground to
+ * `HQ_SPAWN_SHARE_FAST` (the whole map). Clamped, so out-of-range or
+ * non-finite input degrades to the nearest bound instead of stalling or
+ * rushing the clock. Pure — the share itself is sim-time derived.
+ */
+export function spawnIntervalScale(share: number): number {
+  const s = Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 0.5;
+  return HQ_SPAWN_SHARE_SLOW + (HQ_SPAWN_SHARE_FAST - HQ_SPAWN_SHARE_SLOW) * s;
+}
+
 /** Per-HQ spawn clock: countdown to the next release + releases so far. */
 export interface HqSpawnState {
   /** Seconds until the next reinforcement (counts only while the HQ lives). */
@@ -704,22 +727,24 @@ export function createHqSpawns(): HqSpawnState[] {
  * unreached, and the countdown crossed zero — else null. The kind is a
  * weighted random draw (`pickNextSpawnUnit`: weaker units more often) and
  * the clock rearms for that kind's own build time (`spawnIntervalFor`: the
- * stronger the unit, the longer the wait). Consumes one `rng` draw per
- * release only; pass a seeded stream for deterministic replays. Pure apart
- * from the state mutation — the renderer owns the door animation and the
- * body it releases.
+ * stronger the unit, the longer the wait), scaled by the side's territory
+ * share (`spawnIntervalScale`: more ground, faster builds). Consumes one
+ * `rng` draw per release only; pass a seeded stream for deterministic
+ * replays. Pure apart from the state mutation — the renderer owns the
+ * door animation and the body it releases.
  */
 export function tickHqSpawn(
   state: HqSpawnState,
   dt: number,
   hqAlive: boolean,
   rng: () => number = Math.random,
+  share = 0.5,
 ): UnitKind | null {
   if (!hqAlive || state.spawned >= HQ_MAX_SPAWNS) return null;
   state.timer -= dt;
   if (state.timer > 0) return null;
   const kind = pickNextSpawnUnit(rng);
-  state.timer += spawnIntervalFor(kind);
+  state.timer += spawnIntervalFor(kind) * spawnIntervalScale(share);
   state.spawned += 1;
   return kind;
 }

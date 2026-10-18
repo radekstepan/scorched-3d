@@ -148,7 +148,7 @@ describe("Units panel live per-kind counts", () => {
     expect(canvas).toContain("movement.addUnit");
     expect(canvas).toContain("damageStructures");
     expect(canvas).toContain("detonateStructure");
-    expect(canvas).toContain("hq?.update(dt)");
+    expect(canvas).toContain("hq?.update(dt, territoryShare(territory.field, t))");
     expect(canvas).toContain("hq?.resnap()");
     expect(canvas).toContain("hqRef.current?.(hq?.status()");
   });

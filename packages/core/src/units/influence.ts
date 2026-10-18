@@ -162,6 +162,31 @@ export interface RgbBytes {
   b: number;
 }
 
+/**
+ * Per-team share of claimed ground at `now` (TEAM_IDS order, each in
+ * [0, 1], summing to 1): each side's summed cell freshness over the
+ * field total. Contested cells credit both sides' sums, stale ground
+ * credits nobody, and a cold field (no claims yet) splits 50/50 so the
+ * opening plays symmetric. The economy-lite spawn clock reads this to
+ * build faster for the side holding more ground; `now` is sim seconds,
+ * never wall-clock.
+ */
+export function territoryShare(field: InfluenceField, now: number): [number, number] {
+  const [a0, a1] = [field.seen[0]!, field.seen[1]!];
+  const n = Math.min(a0.length, a1.length, field.cols * field.rows);
+  let sa = 0;
+  let sb = 0;
+  for (let i = 0; i < n; i++) {
+    sa += influenceFreshness(a0[i]!, now);
+    sb += influenceFreshness(a1[i]!, now);
+  }
+  const total = sa + sb;
+  if (!(total > 0)) return [0.5, 0.5];
+  const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+  const share = clamp01(sa / total);
+  return [share, clamp01(1 - share)];
+}
+
 /** Faction color as bytes (the same hex the HUD chips and rings use). */
 export function factionColorBytes(team: TeamId): RgbBytes {
   const hex = TEAM_DEFS[team].color;

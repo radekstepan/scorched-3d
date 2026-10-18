@@ -7,6 +7,7 @@ import {
   mulberry32,
   pickNextSpawnUnit,
   spawnIntervalFor,
+  spawnIntervalScale,
   type UnitKind,
 } from "@scorched-3d/core";
 import { doorLiftAt, HqFx, HQ_DOOR_CLOSE_T, HQ_DOOR_HOLD_T, HQ_DOOR_OPEN_T } from "./hqFx";
@@ -171,6 +172,58 @@ describe("HqFx", () => {
       expect(gap).toBeLessThanOrEqual(Math.ceil(build) + Math.ceil(door) + 1);
     }
     hq.dispose();
+  });
+
+  it("reports each side's territory share and spawn pace in its status", () => {
+    const scene = new THREE.Scene();
+    const hq = new HqFx(scene, anchors(), { groundY: () => 40 });
+    // Before the first tick the field is cold: even ground, legacy pace.
+    expect(hq.status().map((s) => s.share)).toEqual([0.5, 0.5]);
+    expect(hq.status().map((s) => s.pace)).toEqual([1, 1]);
+    hq.update(0.5, [0.8, 0.2]);
+    const [blue, orange] = hq.status();
+    expect(blue!.share).toBe(0.8);
+    expect(orange!.share).toBe(0.2);
+    expect(blue!.pace).toBeCloseTo(1 / spawnIntervalScale(0.8), 9);
+    expect(orange!.pace).toBeCloseTo(1 / spawnIntervalScale(0.2), 9);
+    expect(blue!.pace).toBeGreaterThan(1);
+    expect(orange!.pace).toBeLessThan(1);
+    expect(hq.paceAt(0)).toBe(blue!.pace);
+    hq.dispose();
+  });
+
+  it("rebuilds faster for the side holding more ground", () => {
+    const scene = new THREE.Scene();
+    const run = (share: number): { kind: UnitKind; at: number }[] => {
+      const releases: { kind: UnitKind; at: number }[] = [];
+      let clock = 0;
+      const hq = new HqFx(scene, [anchors()[0]!], {
+        groundY: () => 40,
+        rng: mulberry32(99),
+        onSpawn: (_team, kind) => releases.push({ kind, at: clock }),
+      });
+      for (let n = 0; n < 400 && releases.length < 2; n++) {
+        hq.update(1, [share, 1 - share]);
+        clock += 1;
+      }
+      hq.dispose();
+      return releases;
+    };
+    const ahead = run(1);
+    const behind = run(0);
+    expect(ahead).toHaveLength(2);
+    expect(behind).toHaveLength(2);
+    // Same seed, same kinds — the territory share only paces the rearm.
+    expect(ahead.map((r) => r.kind)).toEqual(behind.map((r) => r.kind));
+    const door = HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T;
+    const build = spawnIntervalFor(ahead[0]!.kind);
+    const gapAhead = ahead[1]!.at - ahead[0]!.at;
+    const gapBehind = behind[1]!.at - behind[0]!.at;
+    expect(gapAhead).toBeLessThan(gapBehind);
+    expect(gapAhead).toBeGreaterThanOrEqual(Math.ceil(build * spawnIntervalScale(1)) - 1);
+    expect(gapAhead).toBeLessThanOrEqual(Math.ceil(build * spawnIntervalScale(1)) + Math.ceil(door) + 1);
+    expect(gapBehind).toBeGreaterThanOrEqual(Math.ceil(build * spawnIntervalScale(0)) - 1);
+    expect(gapBehind).toBeLessThanOrEqual(Math.ceil(build * spawnIntervalScale(0)) + Math.ceil(door) + 1);
   });
 
   it("wrecks once under fire and stops spawning", () => {
