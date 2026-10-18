@@ -671,6 +671,93 @@ function yieldsToLeader(
   return false;
 }
 
+/**
+ * Pair-tangent arc target for `self` (see `advanceMovers`): a point 1u ahead
+ * along the fixed-sense tangent around the single close neighbour — the same
+ * rotational sense as the separation sidestep (`(-rz, rx)` of the away
+ * axis), so drive and push always lean the same way and the pair always
+ * counter-arcs. Returns null unless the hull is a pure pair (fewer than two
+ * slow contacts) with motion-pure intent (no order, hold, live threat, or
+ * departure — those keep their pre-existing drive) whose steering intent
+ * opposes the partner's (strictly obtuse — head-on and crossing meetings
+ * arc past each other, while convoys marching in parallel keep the proven
+ * hold-and-part regime instead of weaving). Engages on a live stop-zone
+ * neighbour, and stays engaged while an armed coast budget commits the hull
+ * to the exit (even past the radius — the boundary hover sits just outside
+ * it, so a strict live gate alone would never open): mid-glide the pair
+ * axis comes from the exit heading itself, and the committed arc is never
+ * re-gated (the fresh decision is single-shot deterministic, so nothing
+ * can flap on it). Coincident hulls keep the deterministic split (no pair
+ * axis, no tangent). A partner with no steering intent of its own (held,
+ * or resting on its waypoint) never vetoes the arc. Pure.
+ */
+export function pairTangent(
+  self: number,
+  movers: readonly Mover[],
+  slowCount: number,
+  routes?: readonly (readonly RoutePoint[])[],
+): RoutePoint | null {
+  if (slowCount >= 2) return null;
+  const me = movers[self];
+  if (
+    !me ||
+    hasOrder(me) ||
+    me.hold === true ||
+    (me.threat !== undefined && me.threat.ttl > 0) ||
+    me.leadIn !== undefined
+  ) {
+    return null;
+  }
+  let partner = -1;
+  let best = STOP_RADIUS * STOP_RADIUS;
+  for (let i = 0; i < movers.length; i++) {
+    if (i === self) continue;
+    const other = movers[i];
+    if (!other) continue;
+    const dx = other.x - me.x;
+    const dz = other.z - me.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < best && d2 > 1e-12) {
+      best = d2;
+      partner = i;
+    }
+  }
+  let ax = 0;
+  let az = 0;
+  if (partner >= 0) {
+    const other = movers[partner]!;
+    // Fresh encounter: arc only past oppositely-headed hulls on the same
+    // leg. Convoys (parallel intents) hold and part as before — arcing
+    // would weave the march for no reason and slow arrivals past their
+    // window — and arrival transitions (legs differ because one hull just
+    // arrived) hold too, since the head-on there is momentary and the
+    // outward pass is already smooth.
+    if (me.leg !== other.leg) return null;
+    const mine = steerGoalDir(me, routes?.[self]);
+    const theirs = steerGoalDir(other, routes?.[partner]);
+    if (mine && theirs && mine.x * theirs.x + mine.z * theirs.z >= 0) return null;
+    ax = me.x - other.x;
+    az = me.z - other.z;
+  } else if (slowCount >= 1) {
+    // Committed but outside: hold the arc around the exit heading until the
+    // budget drains instead of flapping the mode on the boundary. Needs a
+    // neighbour still in the slow zone — a solo glide has no pair to arc
+    // around, so it keeps the pause (drive holds, glide carries it).
+    const committed = validSep(me);
+    if (!committed) return null;
+    ax = committed.x;
+    az = committed.z;
+  } else {
+    return null;
+  }
+  const axis = Math.hypot(ax, az);
+  if (!(axis > 1e-6)) return null;
+  // Fixed-sense unit tangent of the away axis (matches the sidestep sense).
+  const tx = -az / axis;
+  const tz = ax / axis;
+  return { x: me.x + tx, z: me.z + tz };
+}
+
 export function spacingScale(
   self: number,
   positions: readonly { x: number; z: number }[],
@@ -761,6 +848,7 @@ export function advanceMover(
   crush?: CrushContext | null,
   foes?: readonly { x: number; z: number }[] | null,
   tactics?: PursuitTactics | null,
+  tangent?: RoutePoint | null,
 ): Mover {
   if (!(dt > 0)) return mover;
   // Hit-stunned: recoil away from the blast while the renderer-side rock
@@ -887,17 +975,49 @@ export function advanceMover(
         ? { ...calm, leg: nextLeg }
         : { ...calm, leg: nextLeg, stuck: 0 };
     }
-    const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
+    // A pair tangent (see `advanceMovers`) overrides the drive target only:
+    // arrival and leg bookkeeping still judge the leg, so arcing around a
+    // neighbour can never advance, skip, or strand a waypoint. Orders,
+    // holds, departures, pursuits, and stuns all return above and never see
+    // the tangent: arcing is strictly a patrol-leg/detour maneuver.
+    const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush, tangent ?? undefined);
     if (driven.skipped) {
+      const point = skipDetourPoint(driven.mover);
+      if (point) return { ...point, leg: nextLeg, stuck: 0 };
       return { ...driven.mover, leg: (nextLeg + 1) % route.length, stuck: 0 };
     }
     return { ...driven.mover, leg: nextLeg };
   }
-  const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush);
+  const driven = driveToward(kind, calm, target, dt, spacing, terrain, undefined, crush, tangent ?? undefined);
   if (driven.skipped) {
+    const point = skipDetourPoint(driven.mover);
+    if (point) return { ...point, leg, stuck: 0 };
     return { ...driven.mover, leg: (leg + 1) % route.length, stuck: 0 };
   }
   return { ...driven.mover, leg };
+}
+
+/**
+ * Skip past an unreachable detour point (see `advanceMover`): when a patrol
+ * hull pins against a detour steering point it can never capture (shoved
+ * off the route mid-detour with the return blocked), abandoning the leg
+ * republishes the same detour and churns legs forever — driving back and
+ * forth while neighbours bounce off it. Advancing the route past the missed
+ * point instead keeps progress monotone (the cursor only moves forward, and
+ * the last point consumes back to homing, which skips the leg in turn), so
+ * the hull rounds what it can and moves on. Returns the mover with the
+ * advanced route, or null when no detour point is active (leg skip as
+ * before). Pure.
+ */
+function skipDetourPoint(mover: Mover): Mover | null {
+  const detour = mover.detour;
+  if (!detour || detour.at < 0 || detour.at >= detour.points.length) return null;
+  const at = detour.at + 1;
+  if (at >= detour.points.length) {
+    const { detour: _consumed, ...rest } = mover;
+    return rest;
+  }
+  return { ...mover, detour: { ...detour, at } };
 }
 
 /**
@@ -1212,6 +1332,7 @@ function driveToward(
   terrain?: SeatField | null,
   order?: MoveOrder,
   crush?: CrushContext | null,
+  tangent?: RoutePoint | null,
 ): { mover: Mover; skipped: boolean } {
   let detour = mover.detour;
   // Small live-target motion must not flip the chosen side of an obstacle.
@@ -1221,7 +1342,13 @@ function driveToward(
     while (at < detour.points.length && Math.hypot(detour.points[at]!.x - mover.x, detour.points[at]!.z - mover.z) <= 4) at++;
     detour = at < detour.points.length ? { ...detour, at } : undefined;
   }
-  const steering = detour?.points[detour.at] ?? target;
+  // A pair-tangent override (see `advanceMovers`) steers around the single
+  // close neighbour instead of homing through them: the detour is preserved
+  // (frozen — proximity above still advances it when physically reached) and
+  // resumes once the pair opens, so rounding a rock is interrupted, never
+  // lost. Arrival is still judged on the leg by the caller: the tangent is
+  // a passing maneuver, not a destination.
+  const steering = tangent ?? detour?.points[detour.at] ?? target;
   const desired = yawToTarget(mover, steering);
   // Group cohesion: orders issued together cap faster members at the
   // slowest member's base speed, so the column moves as a group. Single
@@ -1250,9 +1377,13 @@ function driveToward(
     const grip = Math.max(GRIP_FLOOR, Math.cos(wrapAngle(want - mover.hull)));
     // Recovery corners need a pivot before rolling: the usual grip floor
     // can orbit a nearby via point forever, or cut back into the obstacle.
-    const recoveryGrip = detour && Math.cos(wrapAngle(want - mover.hull)) < 0.7 ? 0 : grip;
+    // A pair tangent crawls the arc instead of pivoting: the 1u carrot is
+    // pure pursuit (stable tracking, no via to orbit), and pivoting would
+    // pin the hull static inside the radius — the exact standstill the
+    // tangent exists to break out of.
+    const recoveryGrip = detour && !tangent && Math.cos(wrapAngle(want - mover.hull)) < 0.7 ? 0 : grip;
     const stride = Math.min(top * Math.max(spacing, 0) * recoveryGrip * dt,
-      detour ? Math.hypot(steering.x - mover.x, steering.z - mover.z) : Infinity);
+      detour && !tangent ? Math.hypot(steering.x - mover.x, steering.z - mover.z) : Infinity);
     const rough = terrain ? terrainSpeedScale(terrain, mover.x, mover.z, mover.x + Math.sin(mover.hull) * stride, mover.z + Math.cos(mover.hull) * stride) : 1;
     const probeX = mover.x + Math.sin(mover.hull) * stride * rough;
     const probeZ = mover.z + Math.cos(mover.hull) * stride * rough;
@@ -1391,6 +1522,28 @@ export function advanceMovers(
   // is acyclic (a total index order), so it can never cycle.
   const mutual = movers.map((_, i) => spacingScale(i, movers));
   const contacts = movers.map((_, i) => slowContacts(i, movers));
+  // Pair-tangent arcing: an unordered hull with motion-pure intent (a patrol
+  // leg or detour — no order, hold, live threat, or departure, which all
+  // keep their pre-existing drive) and exactly one close neighbour inside
+  // the stop zone arcs AROUND them at a floor crawl instead of stopping
+  // dead and waiting for separation to unstack it. Holding still while the
+  // homing drive aims straight through the neighbour is what jitters: the
+  // coast shoves the hull back out and the drive pulls it straight back in,
+  // every ~40 ticks forever, with zero net progress — while a tangent arc
+  // is gap-neutral (perpendicular motion never closes the gap), so each
+  // encounter makes lateral progress and pairs spiral past instead of
+  // bouncing. The arc uses the same fixed rotational sense as the
+  // separation sidestep, so drive and push lean the same way and the pair
+  // always counter-arcs (no per-tick decision, nothing to flap). Crowds
+  // (two or more slow contacts) keep holding and parting radially — the
+  // leader drain relies on the part, and orbiting would feed the pinwheel —
+  // and coincident hulls keep the deterministic split (no pair axis, no
+  // tangent). The mode engages on a live stop-zone neighbour and stays
+  // engaged while the armed coast commits the exit (see `pairTangent`):
+  // the boundary hover sits just outside the radius, so a strict live gate
+  // alone would never open, while the 16-tick glide commits each exit and
+  // crossings settle into encounter-length phases instead of flapping.
+  const tangents = movers.map((_, i) => pairTangent(i, movers, contacts[i] ?? 0, routes));
   // Retain priority through a crowd's final pair while its velocity response
   // is active. Dropping leadership at one remaining contact let the last
   // two convergers fall back into a mutual orbit and never reach the leg.
@@ -1413,7 +1566,12 @@ export function advanceMovers(
   const scales = movers.map((m, i) => {
     const scale = mutual[i] ?? 1;
     // Ordered hulls never fully stop for spacing: see ORDER_SPACING_FLOOR.
-    if (hasOrder(m)) return Math.max(scale, ORDER_SPACING_FLOOR);
+    // Pair-tangent hulls likewise keep the floor and skip the coast pause:
+    // the arc is gap-neutral (perpendicular motion never re-enters the
+    // radius), so unlike a homing drive it cannot fight the glide mid-exit
+    // — pausing it would pin the hull static inside the radius, which is
+    // exactly the standstill the arc exists to break out of.
+    if (hasOrder(m) || tangents[i] != null) return Math.max(scale, ORDER_SPACING_FLOOR);
     // A coasting hull lets the glide carry it instead of driving back into
     // the crowd it just left: without the pause the homing drive re-enters
     // the radius mid-glide (faster than any fixed coast rate once the pair
@@ -1437,7 +1595,7 @@ export function advanceMovers(
   const driven = movers.map((m, i) =>
     advanceMover(
       kinds[i] ?? "flash", m, routes[i] ?? [], dt, scales[i] ?? 1, terrain, deferredCrush, movers,
-      tactics ? { ...tactics, self: i } : null,
+      tactics ? { ...tactics, self: i } : null, tangents[i] ?? null,
     ),
   );
   // Separation-coast state rides the tick, not the drive: `driveToward`
@@ -1457,7 +1615,7 @@ export function advanceMovers(
     }
     return d;
   });
-  const resolved = resolveSeparation(coasted, kinds, dt, terrain, leaders);
+  const resolved = resolveSeparation(coasted, kinds, dt, terrain, leaders, routes);
   return resolved.map((requested, i) => {
     const previous = movers[i]!;
     const kind = kinds[i] ?? "flash";
@@ -1629,10 +1787,12 @@ export function predictDrivenPath(
  * at `SLOW_SCALE`) is a convoy, not a collision, and shoving cruising hulls
  * apart fights their homing drive into a wider, measurably slower weave.
  * Ordered hulls additionally never take the radial half of a push that
- * points back away from their goal (the sidestep circulation is always
- * kept): a trailer following a leader sidesteps off the line instead of
- * losing ground, so files and crossings move faster while arrival still
- * closes. Unordered crowd leaders take no push at all (their priority
+ * points back away from where they are driving (see `steerGoalDir` — the
+ * detour point while detouring, else the order cursor, departure, pursuit,
+ * or patrol leg; the sidestep circulation is always kept): a trailer
+ * following a leader sidesteps off the line instead of losing ground, so
+ * files and crossings move faster while arrival still closes. Unordered
+ * crowd leaders take no push at all (their priority
  * creep walks them through the parting crowd instead). Computed from one
  * snapshot so the resolve is symmetric and deterministic (no
  * order-of-application bias), then gated by `stepBlocked`
@@ -1709,20 +1869,62 @@ function separationComponents(
 }
 
 /**
- * Unit direction from a mover to its live order target (the cursor
- * waypoint), or null when it has no order — or sits on the cursor, where no
- * direction is meaningful. Used to keep separation from fighting player
- * intent (see `resolveSeparation`).
+ * Unit direction from a mover to its live steering intent — the point the
+ * drive is actually steering at — or null when it has none. Priority
+ * mirrors the drive (`driveToward` steers the detour point whenever one is
+ * active; `advanceMover` then prefers the order cursor, the departure
+ * lead-in, the pursuit (walking a carried sidestep first, else the threat),
+ * and finally the patrol leg): judging separation against anything else
+ * fights the hull — an ordered hull rounding a rock steers at its detour
+ * point, not its order cursor, and a patrol hull steers at its leg, so a
+ * push "toward the goal" that opposes the steering point still backs the
+ * hull up. Holders (who never drive) and hulls sitting on their target
+ * (where no direction is meaningful) read null and keep the full push.
+ * Used to keep separation from fighting drive intent (see
+ * `resolveSeparation`). Pure.
  */
-function orderGoalDir(mover: Mover): { x: number; z: number } | null {
-  const order = mover.order;
-  if (!order || order.at < 0 || order.at >= order.points.length) return null;
-  const target = order.points[order.at]!;
+export function steerGoalDir(
+  mover: Mover,
+  route?: readonly RoutePoint[],
+): { x: number; z: number } | null {
+  if (mover.hold === true) return null;
+  const target = pickSteerTarget(mover, route);
+  if (!target) return null;
   const dx = target.x - mover.x;
   const dz = target.z - mover.z;
   const d = Math.hypot(dx, dz);
   if (!(d > 1e-6)) return null;
   return { x: dx / d, z: dz / d };
+}
+
+/** First live steering point in drive priority order (see `steerGoalDir`). */
+function pickSteerTarget(mover: Mover, route?: readonly RoutePoint[]): RoutePoint | null {
+  const live = (p: { x: number; z: number } | undefined): p is RoutePoint =>
+    !!p && Number.isFinite(p.x) && Number.isFinite(p.z);
+  const detour = mover.detour;
+  if (detour && detour.at >= 0 && detour.at < detour.points.length) {
+    const pt = detour.points[detour.at];
+    if (live(pt)) return pt;
+  }
+  const order = mover.order;
+  if (order && order.at >= 0 && order.at < order.points.length) {
+    const pt = order.points[order.at];
+    if (live(pt)) return pt;
+  }
+  if (live(mover.leadIn)) return mover.leadIn;
+  const threat = mover.threat;
+  if (threat && threat.ttl > 0) {
+    if (live(threat.sidestep)) return threat.sidestep;
+    if (Number.isFinite(threat.x) && Number.isFinite(threat.z)) {
+      return { x: threat.x, z: threat.z };
+    }
+  }
+  if (route && route.length >= 2) {
+    const leg = ((mover.leg % route.length) + route.length) % route.length;
+    const pt = route[leg];
+    if (live(pt)) return pt;
+  }
+  return null;
 }
 
 function resolveSeparation(
@@ -1731,6 +1933,7 @@ function resolveSeparation(
   dt: number,
   terrain: SeatField | null | undefined,
   leaders: readonly boolean[],
+  routes: readonly (readonly RoutePoint[])[],
 ): Mover[] {
   const step = SEPARATION_SPEED * dt;
   const unstacked = movers.map((mover, i) => {
@@ -1749,18 +1952,22 @@ function resolveSeparation(
       pushX = 0;
       pushZ = 0;
     }
+    const goal = coincident ? null : steerGoalDir(mover, routes[i]);
     if (pushX !== 0 || pushZ !== 0) {
       // Ordered hulls keep the lane-opening shove but never the radial part
-      // that pushes them back away from their goal: a trailer following a
-      // leader still sidesteps off the line (the circulation half is always
-      // kept - it is what staggers pairs instead of letting them mirror in
-      // lockstep), it just never loses ground. Coincident splits are exempt:
-      // with no pair axis "away from the goal" is meaningless, so the
-      // deterministic split stays whole and drive still opens the pair.
-      // Arrival still closes, and the full-weight inner radial still opens
-      // ordered deadlocks.
-      const goal = coincident ? null : orderGoalDir(mover);
-      if (goal) {
+      // of the immediate push that points back away from their goal: a
+      // trailer following a leader still sidesteps off the line (the
+      // circulation half is always kept - it is what staggers pairs instead
+      // of letting them mirror in lockstep), it just never loses ground.
+      // The strip judges the live steering point (see `steerGoalDir`), so
+      // a detour round a rock steers the strip, not the far order cursor.
+      // Unordered hulls keep the full divergent push: stopped inside the
+      // radius with no floor drive, the immediate shove is their only
+      // in-radius motion, and stripping it would neuter wall-slides and
+      // unstacking. Coincident splits are exempt: with no pair axis "away
+      // from the goal" is meaningless, so the deterministic split stays
+      // whole and drive still opens the pair. Arrival still closes.
+      if (goal && hasOrder(mover)) {
         const along = radial.x * goal.x + radial.z * goal.z;
         if (along < 0) {
           pushX -= along * goal.x;
@@ -1773,11 +1980,11 @@ function resolveSeparation(
       // finite-time exit, terrain-gated with axis-slide fallback) — and a
       // move also re-arms the coast budget along the applied heading, so the
       // eventual exit glides instead of stopping dead on the radius. A push
-      // walled off on every axis arms nothing: a hull that never moved has
-      // no exit to smooth, and stays bit-identical to before. Explicit holds
-      // never arm either: a held hull has no drive to chatter against, so it
-      // exits to the radius and stops exactly there instead of gliding on
-      // past its parking spot.
+      // walled off on every axis arms nothing (a hull that never moved has
+      // no exit to smooth) but still drains any stale budget below instead
+      // of freezing it. Explicit holds never arm either: a held hull has no
+      // drive to chatter against, so it exits to the radius and stops
+      // exactly there instead of gliding on past its parking spot.
       const arm = mover.hold !== true;
       const nx = mover.x + pushX * step;
       const nz = mover.z + pushZ * step;
@@ -1796,12 +2003,18 @@ function resolveSeparation(
       // Blocked push: try sliding along one axis rather than clipping.
       if (slideX) return arm ? { ...mover, x: nx, sep: freshCoast(pushX, pushZ) } : { ...mover, x: nx };
       if (slideZ) return arm ? { ...mover, z: nz, sep: freshCoast(pushX, pushZ) } : { ...mover, z: nz };
-      return mover;
+      // Walled off on every axis: arm nothing — but still fall through to
+      // the drain below instead of returning with the stale budget intact.
+      // Returning here freezes the re-attached coast (it never drains while
+      // fresh pushes keep firing into the wall) and the frozen budget pauses
+      // an unordered hull's drive forever — a pause-lock on top of the pin.
+      // Falling through only ever drains an existing budget, never arms.
     }
-    // No fresh push: drain the armed coast, if any, along its stored heading
-    // — the frozen direction is what kills the chatter, since the applied
-    // step stays continuous across boundary crossings instead of toggling
-    // 0↔full every other tick. The glide ends exactly (the last tick takes
+    // No fresh push (or a fresh push walled off on every axis): drain the
+    // armed coast, if any, along its stored heading — the frozen direction
+    // is what kills the chatter, since the applied step stays continuous
+    // across boundary crossings instead of toggling 0↔full every other
+    // tick. The glide ends exactly (the last tick takes
     // only what remains), degrades to axis slides against terrain like a
     // fresh push, and absorbs against a wall instead of banking motion.
     // Explicit holds drain nothing (they never arm, so this only strips a
