@@ -177,7 +177,7 @@ export class HqFx {
     return this.destroyed[index] ?? false;
   }
 
-  /** Reinforcements released by an HQ so far (pop-cap readout for the HUD). */
+  /** Reinforcements released by an HQ so far (running total for the HUD). */
   spawnedAt(index: number): number {
     return this.spawns[index]?.spawned ?? 0;
   }

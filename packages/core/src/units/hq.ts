@@ -24,14 +24,14 @@ import type { AttackMode, TeamId, UnitKind } from "./types.js";
  * outside the hall door where each reinforcement appears facing the map
  * center, then walks the hall out of the mouth into the normal movement
  * pipeline. Deviations are deliberate
- * simplifications: fixed interval + per-team cap instead of build queues and
+ * simplifications: continuous per-kind build times instead of build queues and
  * metal/energy costs, and a weighted-random spawn roster instead of player choice.
+ * A live HQ produces indefinitely — only destruction stops the clock — so a
+ * late battle never stalls with a lone survivor and silent factories.
  */
 
 /** Seconds from battle start to the first reinforcement (also the unknown-kind fallback). */
 export const HQ_SPAWN_INTERVAL = 20;
-/** Reinforcements one HQ may ever release (per-team pop cap). */
-export const HQ_MAX_SPAWNS = 4;
 /** Kinds an HQ may release, weakest first (no commanders — factories build line units). */
 export const HQ_SPAWN_ROSTER: UnitKind[] = ["peewee", "flash", "stump", "hammer"];
 
@@ -712,7 +712,7 @@ export function spawnIntervalScale(share: number): number {
 export interface HqSpawnState {
   /** Seconds until the next reinforcement (counts only while the HQ lives). */
   timer: number;
-  /** Reinforcements released so far (caps at `HQ_MAX_SPAWNS`). */
+  /** Reinforcements released so far (running total — a live HQ never caps out). */
   spawned: number;
 }
 
@@ -723,8 +723,9 @@ export function createHqSpawns(): HqSpawnState[] {
 
 /**
  * Tick one HQ's spawn clock by `dt` seconds. Returns the released kind
- * exactly on the tick a reinforcement is due — the HQ lives, its cap is
- * unreached, and the countdown crossed zero — else null. The kind is a
+ * exactly on the tick a reinforcement is due — the HQ lives and the
+ * countdown crossed zero — else null. Production is indefinite while the
+ * HQ stands: only destruction stops the clock. The kind is a
  * weighted random draw (`pickNextSpawnUnit`: weaker units more often) and
  * the clock rearms for that kind's own build time (`spawnIntervalFor`: the
  * stronger the unit, the longer the wait), scaled by the side's territory
@@ -740,7 +741,7 @@ export function tickHqSpawn(
   rng: () => number = Math.random,
   share = 0.5,
 ): UnitKind | null {
-  if (!hqAlive || state.spawned >= HQ_MAX_SPAWNS) return null;
+  if (!hqAlive) return null;
   state.timer -= dt;
   if (state.timer > 0) return null;
   const kind = pickNextSpawnUnit(rng);

@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
-  HQ_MAX_SPAWNS,
   HQ_SPAWN_INTERVAL,
   HQ_SPAWN_ROSTER,
   mulberry32,
@@ -116,7 +115,9 @@ describe("HqFx", () => {
     hq.dispose();
   });
 
-  it("caps releases per team with a seeded, reproducible roster", () => {
+  it("produces indefinitely with a seeded, reproducible roster", () => {
+    // Regression: a 4-release lifetime cap stalled late battles (lone
+    // survivor, silent live HQ). A live HQ now releases indefinitely.
     const scene = new THREE.Scene();
     const seed = 7;
     const kinds: string[] = [];
@@ -125,10 +126,14 @@ describe("HqFx", () => {
       rng: mulberry32(seed),
       onSpawn: (_team, kind) => kinds.push(kind),
     });
-    for (let n = 0; n < 3 * (HQ_MAX_SPAWNS + 2); n++) {
+    for (let n = 0; n < 3 * (8 + 2); n++) {
       hq.update(HQ_SPAWN_INTERVAL + HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
     }
-    expect(kinds).toHaveLength(HQ_MAX_SPAWNS);
+    // Drain any release still sliding the door: `spawned` counts the clock
+    // draw while `onSpawn` lands at full-open, and a small tick completes
+    // the delivery without firing the next clock (rearm ≥ 20 s).
+    hq.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
+    expect(kinds.length).toBeGreaterThan(4);
     for (const kind of kinds) expect(HQ_SPAWN_ROSTER).toContain(kind);
     // Same seed, same war: a twin HQ draws the identical sequence.
     const twin: string[] = [];
@@ -137,11 +142,12 @@ describe("HqFx", () => {
       rng: mulberry32(seed),
       onSpawn: (_team, kind) => twin.push(kind),
     });
-    for (let n = 0; n < 3 * (HQ_MAX_SPAWNS + 2); n++) {
+    for (let n = 0; n < 3 * (8 + 2); n++) {
       hq2.update(HQ_SPAWN_INTERVAL + HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
     }
+    hq2.update(HQ_DOOR_OPEN_T + HQ_DOOR_HOLD_T + HQ_DOOR_CLOSE_T);
     expect(twin).toEqual(kinds);
-    expect(hq.spawnedAt(0)).toBe(HQ_MAX_SPAWNS);
+    expect(hq.spawnedAt(0)).toBe(kinds.length);
     hq.dispose();
     hq2.dispose();
   });
@@ -155,12 +161,12 @@ describe("HqFx", () => {
       rng: mulberry32(99),
       onSpawn: (_team, kind) => releases.push({ kind, at: clock }),
     });
-    // Step 1 s at a time until the cap releases (worst case 4 × 46⅔ s).
-    for (let n = 0; n < 400 && releases.length < HQ_MAX_SPAWNS; n++) {
+    // Step 1 s at a time until 4 releases (worst case 4 × 46⅔ s).
+    for (let n = 0; n < 400 && releases.length < 4; n++) {
       hq.update(1);
       clock += 1;
     }
-    expect(releases).toHaveLength(HQ_MAX_SPAWNS);
+    expect(releases).toHaveLength(4);
     // The spawn clock pauses while the door slides (2.6 s against ≥20 s
     // build times), so the gap between two releases is the previous kind's
     // build time plus the door overhead (±1 step of 1 s granularity).

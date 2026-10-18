@@ -13,7 +13,6 @@ import {
   HQ_HIGH_BASELINE,
   HQ_HIGH_FRACTION,
   HQ_MAX_SLOPE,
-  HQ_MAX_SPAWNS,
   HQ_PAD_FRONT_EXTRA,
   HQ_PAD_HALF_WIDTH,
   HQ_PAD_REAR,
@@ -346,15 +345,31 @@ describe("tickHqSpawn", () => {
     expect(ka).toBe(kb);
   });
 
-  it("stays quiet for dead HQs and past the cap, drawing no rng", () => {
+  it("stays quiet for dead HQs, drawing no rng", () => {
     const [state] = createHqSpawns();
     const throwing = (): number => {
       throw new Error("rng must not be drawn while silent");
     };
     expect(tickHqSpawn(state!, 1000, false, throwing)).toBeNull();
     expect(state!.spawned).toBe(0);
-    state!.spawned = HQ_MAX_SPAWNS;
-    expect(tickHqSpawn(state!, 1000, true, throwing)).toBeNull();
+  });
+
+  it("keeps producing past the old lifetime cap while the HQ lives", () => {
+    // Regression: a 4-release lifetime cap stalled late battles — a lone
+    // peewee with a live but silent HQ and a destroyed opponent. A live HQ
+    // now produces indefinitely; `spawned` is a running total, not a cap.
+    const [state] = createHqSpawns();
+    const rng = mulberry32(7);
+    let releases = 0;
+    for (let n = 0; n < 2000 && releases < 8; n++) {
+      if (tickHqSpawn(state!, 1, true, rng) !== null) releases++;
+    }
+    expect(releases).toBe(8);
+    expect(state!.spawned).toBe(8);
+    // And still armed: the clock rearms after every release, never parks.
+    expect(state!.timer).toBeGreaterThan(0);
+    expect(tickHqSpawn(state!, state!.timer, true, rng)).not.toBeNull();
+    expect(state!.spawned).toBe(9);
   });
 
   it("fields the line roster but never commanders", () => {
@@ -456,21 +471,23 @@ describe("production cadence", () => {
     }
   });
 
-  it("fields the full cap within the rescaled worst case", () => {
-    // Old pacing needed up to 20 + 3 × 35 = 125 s for all 4 releases;
-    // the rescaled cadence caps at 20 + 3 × 140/3 = 160 s for every seed.
+  it("sustains production within the rescaled worst case", () => {
+    // Old pacing needed up to 20 + 3 × 35 = 125 s for 4 releases; the
+    // rescaled cadence paces every release at 20–140/3 s, so 8 sustained
+    // releases land within 20 + 7 × 140/3 s for every seed — production
+    // never stalls while the HQ lives.
     for (const seed of [1, 7, 42, 99, 1234]) {
       const [state] = createHqSpawns();
       const rng = mulberry32(seed);
       let clock = 0;
       let lastRelease = -1;
-      for (let n = 0; n < 400 && state!.spawned < HQ_MAX_SPAWNS; n++) {
+      for (let n = 0; n < 600 && state!.spawned < 8; n++) {
         if (tickHqSpawn(state!, 1, true, rng) !== null) lastRelease = clock + 1;
         clock += 1;
       }
-      expect(state!.spawned).toBe(HQ_MAX_SPAWNS);
+      expect(state!.spawned).toBe(8);
       expect(lastRelease).toBeGreaterThan(0);
-      expect(lastRelease).toBeLessThanOrEqual(HQ_SPAWN_INTERVAL + 3 * HQ_SPAWN_MAX_INTERVAL);
+      expect(lastRelease).toBeLessThanOrEqual(HQ_SPAWN_INTERVAL + 7 * HQ_SPAWN_MAX_INTERVAL);
     }
   });
 });
